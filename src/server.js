@@ -35,6 +35,17 @@ app.use((req, res, next) => {
   next();
 });
 
+// a request that takes this long is the difference between "the panel is slow"
+// and "the panel is broken"; without it a stall leaves no trace anywhere
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  res.on('finish', () => {
+    const ms = Date.now() - startedAt;
+    if (ms >= 1000) console.warn(`[http] slow ${req.method} ${req.path} -> ${res.statusCode} in ${ms}ms`);
+  });
+  next();
+});
+
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'same-origin');
@@ -122,6 +133,8 @@ app.use(express.static(WEB_DIR, { index: false, maxAge: '1h' }));
  * the page waits forever on a request that can never succeed.
  */
 const pageCache = new Map();
+const ASSET_VERSION = require('../package.json').version;
+
 function renderPage(file, base) {
   const key = `${file}|${base}`;
   const cached = pageCache.get(key);
@@ -129,10 +142,14 @@ function renderPage(file, base) {
   if (cached && cached.mtime === stat.mtimeMs) return cached.html;
 
   const prefix = `${base}/`;
-  const html = fs.readFileSync(path.join(WEB_DIR, file), 'utf8').replace(
-    '</head>',
-    `<base href="${prefix}">\n<script>window.__NEXV_BASE__=${JSON.stringify(prefix)};</script>\n</head>`
-  );
+  const html = fs.readFileSync(path.join(WEB_DIR, file), 'utf8')
+    // static assets are cached for an hour, so an update has to change the URL
+    // or browsers keep running the previous panel against the new server
+    .replace(/(href|src)="(app\.js|style\.css)"/g, `$1="$2?v=${ASSET_VERSION}"`)
+    .replace(
+      '</head>',
+      `<base href="${prefix}">\n<script>window.__NEXV_BASE__=${JSON.stringify(prefix)};</script>\n</head>`
+    );
   pageCache.set(key, { mtime: stat.mtimeMs, html });
   return html;
 }

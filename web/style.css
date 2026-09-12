@@ -47,7 +47,7 @@ body {
     radial-gradient(900px 520px at 96% 4%, rgba(155,108,255,.13), transparent 62%),
     var(--bg);
   color: var(--text);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Vazirmatn", sans-serif;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   font-size: 14px;
   line-height: 1.65;
   -webkit-font-smoothing: antialiased;
@@ -352,5 +352,8 @@ td .row-actions { display: flex; gap: 6px; }
   .form-grid { grid-template-columns: 1fr; }
   .grid.stats { grid-template-columns: 1fr; }
   .qr-box img { width: min(230px, 68vw); height: auto; }
+  /* the topbar fits on one line once the button keeps only its icon */
+  #restartXray span:last-child { display: none; }
+  #restartXray { padding: 9px 11px; }
   .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 35; }
 }

@@ -7,6 +7,18 @@
 const BASE = window.__NEXV_BASE__ || './';
 const REQUEST_TIMEOUT = 20000;
 
+/* localStorage throws outright when the browser blocks site data - Safari with
+   "Block All Cookies", private windows, some in-app browsers. It only ever
+   holds the theme preference, so every access degrades to a no-op. */
+const store = {
+  get(key) {
+    try { return localStorage.getItem(key); } catch (_) { return null; }
+  },
+  set(key, value) {
+    try { localStorage.setItem(key, value); } catch (_) { /* preference is not persisted */ }
+  }
+};
+
 /* ------------------------------- helpers -------------------------------- */
 
 const api = {
@@ -274,14 +286,20 @@ function render() {
     account: renderAccount
   }[state.page] || renderDashboard;
 
+  // shown until the painter settles, so a slow page is never a blank screen
+  const loading = el('div', { class: 'card' }, [el('div', { class: 'skeleton', style: 'height:96px' })]);
+  view.append(loading);
+
   // a page that throws must say so rather than leaving an empty screen behind
-  Promise.resolve(painter(view)).catch((err) => {
-    view.innerHTML = '';
-    view.append(el('div', { class: 'card empty' }, [
-      el('div', { text: `Could not load this page: ${err.message}` }),
-      el('button', { class: 'btn', style: 'margin-top:14px', text: 'Try again', onclick: render })
-    ]));
-  });
+  Promise.resolve(painter(view))
+    .then(() => loading.remove())
+    .catch((err) => {
+      view.innerHTML = '';
+      view.append(el('div', { class: 'card empty' }, [
+        el('div', { text: `Could not load this page: ${err.message}` }),
+        el('button', { class: 'btn', style: 'margin-top:14px', text: 'Try again', onclick: render })
+      ]));
+    });
 }
 
 /* ----------------------------- page: dashboard --------------------------- */
@@ -1311,33 +1329,60 @@ async function renderAccount(view) {
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
-  localStorage.setItem('nexv-theme', theme);
+  store.set('nexv-theme', theme);
 }
 
-document.getElementById('themeToggle').addEventListener('click', () => {
-  applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+/** Last resort: show what went wrong instead of an empty shell. */
+function bootFailure(message) {
+  const view = document.getElementById('view');
+  if (!view) return;
+  view.innerHTML = '';
+  view.append(el('div', { class: 'card' }, [
+    el('strong', { text: 'The panel could not start' }),
+    el('p', { class: 'muted', text: message }),
+    el('button', { class: 'btn primary', text: 'Reload', onclick: () => location.reload() })
+  ]));
+}
+
+window.addEventListener('error', (event) => {
+  if (!document.getElementById('nav').children.length) bootFailure(event.message || 'unexpected script error');
 });
 
-document.getElementById('logoutBtn').addEventListener('click', async () => {
-  try { await api.post('/logout'); } catch (_) { /* sign out locally anyway */ }
-  location.href = `${BASE}login`;
-});
+function boot() {
+  document.getElementById('themeToggle').addEventListener('click', () => {
+    applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+  });
 
-document.getElementById('menuBtn').addEventListener('click', () => {
-  document.getElementById('sidebar').classList.toggle('open');
-});
+  document.getElementById('logoutBtn').addEventListener('click', async () => {
+    try { await api.post('/logout'); } catch (_) { /* sign out locally anyway */ }
+    location.href = `${BASE}login`;
+  });
 
-document.getElementById('restartXray').addEventListener('click', async function () {
-  this.disabled = true;
-  await xrayAction('restart');
-  this.disabled = false;
-});
+  document.getElementById('menuBtn').addEventListener('click', () => {
+    document.getElementById('sidebar').classList.toggle('open');
+  });
 
-window.addEventListener('hashchange', () => {
-  const page = location.hash.slice(1);
-  if (page && page !== state.page) navigate(page);
-});
+  document.getElementById('restartXray').addEventListener('click', async function () {
+    this.disabled = true;
+    await xrayAction('restart');
+    this.disabled = false;
+  });
 
-applyTheme(localStorage.getItem('nexv-theme') || 'dark');
-hydrateIcons();
-navigate(location.hash.slice(1) || 'dashboard');
+  window.addEventListener('hashchange', () => {
+    const page = location.hash.slice(1);
+    if (page && page !== state.page) navigate(page);
+  });
+
+  applyTheme(store.get('nexv-theme') || 'dark');
+  hydrateIcons();
+  navigate(location.hash.slice(1) || 'dashboard');
+}
+
+try {
+  boot();
+} catch (err) {
+  // the navigation bar and icons are drawn by boot(); without this the page
+  // would sit there as an empty shell with no hint of what happened
+  bootFailure(err.message);
+  throw err;
+}
