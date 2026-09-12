@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ورود | NexV Panel</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%236c8cff'/><text x='50' y='71' font-size='62' font-family='sans-serif' font-weight='bold' fill='white' text-anchor='middle'>N</text></svg>">
+<link rel="stylesheet" href="assets/fonts.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body dir="rtl">
+<div class="login-wrap">
+  <form class="login-card" id="loginForm" autocomplete="on">
+    <div class="brand">
+      <div class="brand-mark">N</div>
+      <div>
+        <div class="brand-name">NexV Panel</div>
+        <div class="brand-sub">Xray-core management</div>
+      </div>
+    </div>
+    <div class="login-title">خوش آمدید</div>
+    <div class="login-sub">برای ورود به پنل، اطلاعات حساب خود را وارد کنید</div>
+
+    <div class="field">
+      <label for="username">نام کاربری</label>
+      <input id="username" name="username" autocomplete="username" required autofocus>
+    </div>
+    <div class="field">
+      <label for="password">رمز عبور</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+    </div>
+
+    <div id="error" class="chip danger hidden" style="width:100%;justify-content:center;margin-bottom:14px"></div>
+    <button class="btn primary" type="submit" style="width:100%" id="submitBtn">ورود به پنل</button>
+  </form>
+</div>
+
+<script>
+const form = document.getElementById('loginForm');
+const errorBox = document.getElementById('error');
+const submitBtn = document.getElementById('submitBtn');
+
+form.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  errorBox.classList.add('hidden');
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'در حال ورود…';
+  try {
+    // relative URL + a timeout so a stalled request cannot hang the button forever
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 20000);
+    let res;
+    try {
+      res = await fetch('api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: document.getElementById('username').value,
+          password: document.getElementById('password').value
+        }),
+        signal: abort.signal
+      });
+    } catch (netErr) {
+      throw new Error(netErr.name === 'AbortError'
+        ? 'سرور پاسخ نداد؛ دوباره تلاش کنید'
+        : 'اتصال به سرور برقرار نشد');
+    } finally {
+      clearTimeout(timer);
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error === 'invalid credentials' ? 'نام کاربری یا رمز عبور اشتباه است' : (data.error || 'خطا در ورود'));
+    submitBtn.textContent = 'در حال باز کردن پنل…';
+    location.href = './';
+  } catch (err) {
+    errorBox.textContent = err.message;
+    errorBox.classList.remove('hidden');
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'ورود به پنل';
+  }
+});
+</script>
+</body>
+</html>

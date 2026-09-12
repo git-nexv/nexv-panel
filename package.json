@@ -1,0 +1,17 @@
+{
+  "name": "nexv-vpanel",
+  "version": "1.0.0",
+  "description": "NexV Panel - a complete Xray-core management panel with a modern UI",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.19.2",
+    "qrcode": "^1.5.3"
+  },
+  "license": "MIT"
+}

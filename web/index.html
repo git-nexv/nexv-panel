@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>NexV Panel</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%236c8cff'/><text x='50' y='71' font-size='62' font-family='sans-serif' font-weight='bold' fill='white' text-anchor='middle'>N</text></svg>">
+<link rel="stylesheet" href="assets/fonts.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body dir="rtl">
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-mark">N</div>
+      <div>
+        <div class="brand-name">NexV Panel</div>
+        <div class="brand-sub" id="xrayVersion">Xray-core</div>
+      </div>
+    </div>
+    <nav id="nav"></nav>
+    <div class="nav-spacer"></div>
+    <div class="nav-item" id="themeToggle"><span data-icon="theme"></span><span data-t="theme">تم روشن/تاریک</span></div>
+    <div class="nav-item" id="logoutBtn"><span data-icon="logout"></span><span data-t="logout">خروج</span></div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <button class="btn icon ghost menu-btn" id="menuBtn"><span data-icon="menu"></span></button>
+      <h1 id="pageTitle">داشبورد</h1>
+      <div class="spacer"></div>
+      <span class="chip" id="xrayChip"><i></i><span>—</span></span>
+      <button class="btn ghost" id="restartXray"><span data-icon="refresh"></span><span data-t="restartXray">ری‌استارت Xray</span></button>
+    </header>
+    <div class="content" id="view"></div>
+  </main>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<div id="modalRoot"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

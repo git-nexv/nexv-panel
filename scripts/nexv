@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# nexv — management CLI for NexV Panel
+set -euo pipefail
+
+INSTALL_DIR="/opt/nexv-vpanel"
+DATA_DIR="/etc/nexv/data"
+SERVICE="nexv"
+GREEN=$'\e[32m'; RED=$'\e[31m'; YELLOW=$'\e[33m'; BOLD=$'\e[1m'; RESET=$'\e[0m'
+
+need_root() { [[ $EUID -eq 0 ]] || { echo "${RED}با sudo اجرا کنید${RESET}"; exit 1; }; }
+
+case "${1:-help}" in
+  status)
+    systemctl status "$SERVICE" --no-pager -l || true
+    echo
+    systemctl status xray --no-pager -l || true
+    ;;
+  start|stop|restart)
+    need_root
+    systemctl "$1" "$SERVICE"
+    echo "${GREEN}پنل: $1 انجام شد${RESET}"
+    ;;
+  logs)
+    journalctl -u "$SERVICE" -n "${2:-100}" -f --no-pager
+    ;;
+  xray-logs)
+    journalctl -u xray -n "${2:-100}" -f --no-pager
+    ;;
+  update)
+    need_root
+    echo "دریافت آخرین نسخه…"
+    git -C "$INSTALL_DIR" fetch --depth 1 origin main -q
+    git -C "$INSTALL_DIR" reset --hard origin/main -q
+    ( cd "$INSTALL_DIR" && npm install --omit=dev --no-audit --no-fund --loglevel=error )
+    install -m 755 "$INSTALL_DIR/scripts/nexv" /usr/local/bin/nexv
+    systemctl restart "$SERVICE"
+    echo "${GREEN}پنل به‌روزرسانی شد${RESET}"
+    # a fresh install generates a secret web path; never let the admin lose it
+    sleep 2
+    "$0" url
+    ;;
+  backup)
+    need_root
+    out="${2:-/root/nexv-backup-$(date +%Y%m%d-%H%M%S).json}"
+    cp "$DATA_DIR/db.json" "$out"
+    chmod 600 "$out"
+    echo "${GREEN}پشتیبان ذخیره شد: $out${RESET}"
+    ;;
+  restore)
+    need_root
+    [[ -f ${2:-} ]] || { echo "${RED}مسیر فایل پشتیبان را بدهید: nexv restore <file>${RESET}"; exit 1; }
+    cp "$DATA_DIR/db.json" "$DATA_DIR/db.json.before-restore" 2>/dev/null || true
+    cp "$2" "$DATA_DIR/db.json"
+    chmod 600 "$DATA_DIR/db.json"
+    systemctl restart "$SERVICE"
+    echo "${GREEN}بازیابی انجام شد${RESET}"
+    ;;
+  url|path)
+    need_root
+    NEW_PATH="${2:-}" DATA_DIR="$DATA_DIR" node -e '
+      const fs = require("fs"), path = require("path"), crypto = require("crypto");
+      const file = path.join(process.env.DATA_DIR, "db.json");
+      const db = JSON.parse(fs.readFileSync(file, "utf8"));
+      db.settings = db.settings || {};
+      const arg = (process.env.NEW_PATH || "").trim();
+      if (arg === "random") {
+        db.settings.webBasePath = "/" + crypto.randomBytes(9).toString("base64url");
+      } else if (arg === "none") {
+        db.settings.webBasePath = "";
+      } else if (arg) {
+        const clean = arg.replace(/^\/+|\/+$/g, "");
+        if (!/^[A-Za-z0-9_\-\/]{1,64}$/.test(clean)) {
+          console.error("invalid path: use letters, digits, - _ / only");
+          process.exit(1);
+        }
+        db.settings.webBasePath = "/" + clean;
+      }
+      if (arg) fs.writeFileSync(file, JSON.stringify(db, null, 2), { mode: 0o600 });
+      const port = db.settings.panelPort || 2087;
+      const host = db.settings.domain || db.settings.serverIP || "SERVER-IP";
+      console.log("");
+      console.log("  آدرس پنل:  http://" + host + ":" + port + (db.settings.webBasePath || "") + "/");
+      console.log("");
+    ' || exit 1
+    [[ -n ${2:-} ]] && { systemctl restart "$SERVICE"; echo "${GREEN}مسیر جدید اعمال شد${RESET}"; }
+    ;;
+  cert)
+    need_root
+    domain="${2:-}"
+    [[ -n $domain ]] || { echo "${RED}دامنه را وارد کنید: nexv cert example.com${RESET}"; exit 1; }
+    command -v certbot >/dev/null || { echo "certbot نصب نیست"; exit 1; }
+    systemctl stop nginx 2>/dev/null || true
+    certbot certonly --standalone --non-interactive --agree-tos \
+      --register-unsafely-without-email -d "$domain"
+    echo "${GREEN}گواهی صادر شد:${RESET}"
+    echo "  /etc/letsencrypt/live/$domain/fullchain.pem"
+    echo "  /etc/letsencrypt/live/$domain/privkey.pem"
+    echo "${YELLOW}این مسیرها را در تنظیمات پنل ثبت کنید.${RESET}"
+    ;;
+  reset-password)
+    need_root
+    newpass="${2:-$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-14)}"
+    NEW_PASS="$newpass" DATA_DIR="$DATA_DIR" node -e '
+      const fs = require("fs"), path = require("path");
+      const bcrypt = require("'"$INSTALL_DIR"'/node_modules/bcryptjs");
+      const file = path.join(process.env.DATA_DIR, "db.json");
+      const db = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (!db.users || !db.users.length) { console.error("no admin user found"); process.exit(1); }
+      db.users[0].password = bcrypt.hashSync(process.env.NEW_PASS, 10);
+      db.sessions = [];
+      fs.writeFileSync(file, JSON.stringify(db, null, 2), { mode: 0o600 });
+    '
+    systemctl restart "$SERVICE"
+    echo "${GREEN}رمز جدید مدیر: ${BOLD}$newpass${RESET}"
+    ;;
+  uninstall)
+    need_root
+    read -rp "پنل و اطلاعات آن حذف شود؟ (yes/no): " confirm
+    [[ $confirm == yes ]] || { echo "لغو شد"; exit 0; }
+    systemctl disable --now "$SERVICE" 2>/dev/null || true
+    rm -f /etc/systemd/system/${SERVICE}.service /etc/cron.d/nexv-cert-renew
+    systemctl daemon-reload
+    rm -rf "$INSTALL_DIR"
+    read -rp "داده‌ها (کاربران و کانفیگ‌ها) هم حذف شود؟ (yes/no): " purge
+    [[ $purge == yes ]] && rm -rf /etc/nexv
+    rm -f /usr/local/bin/nexv
+    echo "${GREEN}پنل حذف شد${RESET}"
+    ;;
+  *)
+    cat <<HELP
+${BOLD}nexv${RESET} — مدیریت NexV Panel
+
+  nexv status              وضعیت پنل و Xray
+  nexv start|stop|restart  کنترل سرویس پنل
+  nexv logs [n]            لاگ زنده پنل
+  nexv xray-logs [n]       لاگ زنده Xray
+  nexv update              به‌روزرسانی از مخزن
+  nexv backup [file]       تهیه پشتیبان
+  nexv restore <file>      بازیابی پشتیبان
+  nexv url                 نمایش آدرس کامل پنل (همراه مسیر مخفی)
+  nexv path <p|random|none> تغییر مسیر مخفی پنل
+  nexv cert <domain>       دریافت گواهی Let's Encrypt
+  nexv reset-password [pw] بازنشانی رمز مدیر
+  nexv uninstall           حذف کامل
+HELP
+    ;;
+esac
