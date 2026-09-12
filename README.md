@@ -71,6 +71,7 @@ Every entry is also a direct command:
 | `nexv firewall` | open the panel ports in ufw or firewalld |
 | `nexv bbr` | enable BBR congestion control |
 | `nexv geo` | update geoip.dat and geosite.dat |
+| `nexv doctor` | diagnose why the panel is not answering |
 | `nexv uninstall` | remove the panel |
 
 ## Panel sections
@@ -110,6 +111,11 @@ nexv cert panel.example.com
 Point the domain's DNS at the server first, and leave port 80 free while the
 command runs. Afterwards `nexv url` prints an `https://` address.
 
+A panel sitting on port 80 is moved to 443, because a TLS listener on port 80
+is unreachable either way: plain HTTP hits a socket that only speaks TLS, and
+HTTPS goes to 443 where nothing is listening. Once TLS is on, port 80 serves a
+redirect to the panel, so an old `http://` bookmark keeps working.
+
 To use a certificate you already have, set **Panel TLS certificate** and
 **Panel TLS private key** under Settings and run `nexv restart`. Leaving them
 empty reuses the certificate configured for Xray inbounds. If the files cannot
@@ -128,11 +134,29 @@ http://your-server:2096/sub/<subId>
 
 Append `?plain=1` to read the raw links instead.
 
+## Page weight
+
+HTML, CSS and JS are gzipped, and the script and stylesheet are served from a
+pre-compressed in-memory copy under versioned URLs cached for a year. A first
+load is about 25 KB over the wire; a repeat visit re-fetches only the pages.
+
 ## Traffic and limits
 
 Usage counters are pulled from the Xray stats API every 30 seconds. A client
 that runs past its quota or expiry date is disabled automatically and the Xray
 config is rewritten without it.
+
+## When the panel does not answer
+
+```bash
+nexv doctor
+```
+
+It reports the service state, the port, whether anything is listening on it,
+the certificate and its expiry, whether the panel answers on its own URL, and
+whether port 80 redirects — and prints the last 20 log lines when it does not
+answer. `nexv logs 50` shows more; requests slower than a second are logged
+there too.
 
 ## Paths
 

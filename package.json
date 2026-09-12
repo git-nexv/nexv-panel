@@ -1,6 +1,6 @@
 {
   "name": "nexv-panel",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "NexV Panel - a complete Xray-core management panel with a modern UI",
   "main": "src/server.js",
   "type": "commonjs",

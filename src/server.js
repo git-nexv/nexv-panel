@@ -1,6 +1,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 const express = require('express');
 
 const db = require('./db');
@@ -15,6 +16,25 @@ app.disable('x-powered-by');
 app.set('trust proxy', true);
 app.use(express.json({ limit: '8mb' }));
 app.use(express.urlencoded({ extended: false }));
+
+/**
+ * Compress buffered responses. The panel is mostly text - 74 KB of HTML, CSS
+ * and JS uncompressed, under 20 KB gzipped - and it is usually reached over a
+ * phone connection, where that difference is most of the load time.
+ * Responses below a KB cost more in headers than they save.
+ */
+app.use((req, res, next) => {
+  if (!/\bgzip\b/.test(req.headers['accept-encoding'] || '')) return next();
+  const send = res.send.bind(res);
+  res.send = (body) => {
+    const buf = Buffer.isBuffer(body) ? body : (typeof body === 'string' ? Buffer.from(body) : null);
+    if (!buf || buf.length < 1024 || res.getHeader('Content-Encoding')) return send(body);
+    res.setHeader('Content-Encoding', 'gzip');
+    res.setHeader('Vary', 'Accept-Encoding');
+    return send(zlib.gzipSync(buf));
+  };
+  next();
+});
 
 /* --- minimal cookie helper so we don't pull in cookie-parser --- */
 app.use((req, res, next) => {
@@ -122,6 +142,41 @@ app.use('/api', api);
 
 /* ---------------------------- static frontend --------------------------- */
 const WEB_DIR = path.join(__dirname, '..', 'web');
+
+/**
+ * Script and stylesheet are served from a gzipped in-memory copy: they are the
+ * two largest files by far, they never change while the process runs, and
+ * express.static streams from disk without compressing. Their URLs carry the
+ * panel version, so they can be cached hard.
+ */
+const assetCache = new Map();
+const ASSET_TYPES = { '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
+
+app.get(/^\/[\w.-]+\.(js|css)$/, (req, res, next) => {
+  const file = path.join(WEB_DIR, path.basename(req.path));
+  let entry = assetCache.get(file);
+  try {
+    const stat = fs.statSync(file);
+    if (!entry || entry.mtime !== stat.mtimeMs) {
+      const raw = fs.readFileSync(file);
+      entry = { mtime: stat.mtimeMs, raw, gzip: zlib.gzipSync(raw, { level: 9 }) };
+      assetCache.set(file, entry);
+    }
+  } catch (_) {
+    return next();
+  }
+
+  res.setHeader('Content-Type', ASSET_TYPES[path.extname(file)]);
+  res.setHeader('Vary', 'Accept-Encoding');
+  // versioned URLs, so a long cache never serves a stale build
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  if (/\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
+    res.setHeader('Content-Encoding', 'gzip');
+    return res.end(entry.gzip);
+  }
+  return res.end(entry.raw);
+});
+
 app.use(express.static(WEB_DIR, { index: false, maxAge: '1h' }));
 
 /**
@@ -267,6 +322,24 @@ if (require.main === module) {
       if (!tls) console.log('[nexv] TLS is off - set a certificate in Settings, or run: nexv cert <domain>');
       startJobs();
     });
+
+    /*
+     * With TLS on, a bookmarked http:// address hits a socket that only speaks
+     * TLS and simply fails to connect - the panel looks dead. A redirector on
+     * port 80 turns that into a working link. Port 80 being taken (a web
+     * server, or certbot mid-renewal) is not an error worth failing over.
+     */
+    if (tls && port !== 80) {
+      require('http')
+        .createServer((req, res) => {
+          const host = (req.headers.host || '').split(':')[0];
+          const target = `https://${host}${port === 443 ? '' : `:${port}`}${req.url}`;
+          res.writeHead(301, { Location: target });
+          res.end();
+        })
+        .listen(80, host, () => console.log(`[nexv] redirecting http://${host}:80 to the panel`))
+        .on('error', (err) => console.warn(`[nexv] no http redirect on port 80: ${err.message}`));
+    }
 
     // subscription links advertise their own port, so serve them there too
     const subPort = Number(db.settings.subPort || 0);
