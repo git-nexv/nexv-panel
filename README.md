@@ -65,7 +65,7 @@ Every entry is also a direct command:
 | `nexv port <number>` | change the panel port |
 | `nexv settings` | print the current settings |
 | `nexv backup [file]` / `restore <file>` | back up or restore the data file |
-| `nexv cert <domain>` | request a Let's Encrypt certificate |
+| `nexv cert <domain>` | issue a certificate and turn on HTTPS |
 | `nexv reset-password [pw]` | reset the admin password |
 | `nexv reset-username <name>` | change the admin username |
 | `nexv firewall` | open the panel ports in ufw or firewalld |
@@ -96,6 +96,25 @@ SOCKS5, HTTP, WireGuard.
 REALITY where the protocol supports it.
 
 Share links are generated for VLESS, VMess, Trojan, Shadowsocks and SOCKS5.
+
+## HTTPS
+
+The panel serves itself over TLS as soon as it has a certificate. On a domain,
+one command does everything — request the certificate, install unattended
+renewal, write the paths into the settings and restart the panel:
+
+```bash
+nexv cert panel.example.com
+```
+
+Point the domain's DNS at the server first, and leave port 80 free while the
+command runs. Afterwards `nexv url` prints an `https://` address.
+
+To use a certificate you already have, set **Panel TLS certificate** and
+**Panel TLS private key** under Settings and run `nexv restart`. Leaving them
+empty reuses the certificate configured for Xray inbounds. If the files cannot
+be read the panel logs a warning and stays on HTTP rather than refusing to
+start, so a wrong path never locks you out.
 
 ## Subscriptions
 
@@ -135,9 +154,9 @@ command and restarts the service. Your data file is untouched.
 
 ## Security notes
 
-- The panel speaks plain HTTP. Put it behind a reverse proxy with TLS, or reach
-  it over the secret path only, and keep the port closed to the public where you
-  can.
+- Enable HTTPS (`nexv cert <domain>`). Without it the session cookie travels in
+  clear text and browsers mark the panel "Not Secure"; some of them also refuse
+  browser storage on insecure origins.
 - Sessions are signed cookies, stored server-side and pruned on expiry. Changing
   a password invalidates every other session of that admin.
 - Clients cannot reach the server's own LAN: RFC1918 and loopback ranges are

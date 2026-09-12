@@ -1186,8 +1186,16 @@ async function renderSettings(view) {
   add('subPort', 'Subscription port', s.subPort, { type: 'number' });
   add('subPath', 'Subscription path', s.subPath);
   add('subTitle', 'Subscription title', s.subTitle || 'NexV');
-  add('certFile', 'Default TLS certificate', s.certFile, { full: true, placeholder: '/etc/letsencrypt/live/example.com/fullchain.pem' });
-  add('keyFile', 'Default TLS private key', s.keyFile, { full: true, placeholder: '/etc/letsencrypt/live/example.com/privkey.pem' });
+  add('certFile', 'Default TLS certificate (Xray inbounds)', s.certFile, { full: true, placeholder: '/etc/letsencrypt/live/example.com/fullchain.pem' });
+  add('keyFile', 'Default TLS private key (Xray inbounds)', s.keyFile, { full: true, placeholder: '/etc/letsencrypt/live/example.com/privkey.pem' });
+  add('panelCertFile', 'Panel TLS certificate', s.panelCertFile, {
+    full: true,
+    placeholder: 'leave empty to reuse the certificate above',
+    hint: 'Set this to serve the panel itself over HTTPS. Restart the panel afterwards (nexv restart).'
+  });
+  add('panelKeyFile', 'Panel TLS private key', s.panelKeyFile, {
+    full: true, placeholder: 'leave empty to reuse the key above'
+  });
 
   const logLevel = selectOf(['none', 'error', 'warning', 'info', 'debug'], s.xrayLogLevel || 'warning');
   grid.append(el('div', { class: 'field' }, [el('label', { text: 'Xray log level' }), logLevel]));
@@ -1222,7 +1230,9 @@ async function renderSettings(view) {
             });
             return;
           }
-          toast(result.restartNeeded ? 'Saved — run "nexv restart" to apply the new panel port' : 'Settings saved');
+          toast(result.restartNeeded
+            ? 'Saved — run "nexv restart" on the server to apply the port and TLS changes'
+            : 'Settings saved');
         } catch (err) { toast(err.message, 'err'); }
       }
     })

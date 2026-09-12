@@ -689,7 +689,9 @@ router.put('/settings', async (req, res) => {
   const allowed = ['panelPort', 'webBasePath', 'domain', 'subDomain', 'subPort', 'subPath',
     'tgBotToken', 'tgAdminId', 'theme', 'lang', 'certFile', 'keyFile', 'xrayLogLevel',
     'blockTorrent', 'serverIP', 'trafficResetDay', 'defaultOutbound', 'domainStrategy',
-    'subTitle'];
+    'subTitle', 'panelCertFile', 'panelKeyFile'];
+  // TLS material is read once when the listener is created
+  const restartKeys = ['panelPort', 'panelCertFile', 'panelKeyFile', 'certFile', 'keyFile'];
   const s = db.settings;
   let restartNeeded = false;
 
@@ -707,7 +709,7 @@ router.put('/settings', async (req, res) => {
 
   for (const key of allowed) {
     if (req.body[key] === undefined) continue;
-    if (key === 'panelPort' && Number(req.body[key]) !== Number(s[key])) restartNeeded = true;
+    if (restartKeys.includes(key) && String(req.body[key]) !== String(s[key] ?? '')) restartNeeded = true;
     s[key] = req.body[key];
   }
   if (s.subPath && !s.subPath.startsWith('/')) s.subPath = `/${s.subPath}`;

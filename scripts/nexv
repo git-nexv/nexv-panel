@@ -98,8 +98,12 @@ act_url() {
     if (arg) fs.writeFileSync(file, JSON.stringify(db, null, 2), { mode: 0o600 });
     const port = db.settings.panelPort || 2087;
     const host = db.settings.domain || db.settings.serverIP || "SERVER-IP";
+    const cert = db.settings.panelCertFile || db.settings.certFile || "";
+    const key = db.settings.panelKeyFile || db.settings.keyFile || "";
+    const secure = !!(cert && key && fs.existsSync(cert) && fs.existsSync(key));
     console.log("");
-    console.log("  Panel URL:  http://" + host + ":" + port + (db.settings.webBasePath || "") + "/");
+    console.log("  Panel URL:  " + (secure ? "https" : "http") + "://" + host + ":" + port + (db.settings.webBasePath || "") + "/");
+    if (!secure) console.log("  TLS is off. Enable it with: nexv cert <domain>");
     console.log("");
   ' || return 1
   [[ -n ${1:-} ]] && { systemctl restart "$SERVICE"; ok "New path applied"; }
@@ -138,6 +142,9 @@ act_settings() {
     row("Subscription path", s.subPath);
     row("TLS certificate", s.certFile);
     row("TLS private key", s.keyFile);
+    const cert = s.panelCertFile || s.certFile || "";
+    const key = s.panelKeyFile || s.keyFile || "";
+    row("Panel HTTPS", (cert && key && fs.existsSync(cert) && fs.existsSync(key)) ? "on" : "off");
     row("Xray log level", s.xrayLogLevel || "warning");
     row("Default outbound", s.defaultOutbound || "direct");
     row("Domain strategy", s.domainStrategy || "AsIs");
@@ -155,14 +162,53 @@ act_cert() {
   need_root
   local domain="${1:-}"
   [[ -n $domain ]] || { err "Give a domain: nexv cert example.com"; return 1; }
-  command -v certbot >/dev/null || { err "certbot is not installed"; return 1; }
+  if ! command -v certbot >/dev/null; then
+    err "certbot is not installed"
+    echo "  Install it with: apt-get install -y certbot   (or: dnf install -y certbot)"
+    return 1
+  fi
+
+  # port 80 must be free for the standalone challenge
   systemctl stop nginx 2>/dev/null || true
   certbot certonly --standalone --non-interactive --agree-tos \
     --register-unsafely-without-email -d "$domain" || { err "Certificate request failed"; return 1; }
-  ok "Certificate issued:"
-  echo "  /etc/letsencrypt/live/$domain/fullchain.pem"
-  echo "  /etc/letsencrypt/live/$domain/privkey.pem"
-  warn "Enter these paths in the panel settings."
+
+  local cert="/etc/letsencrypt/live/$domain/fullchain.pem"
+  local key="/etc/letsencrypt/live/$domain/privkey.pem"
+  [[ -f $cert && -f $key ]] || { err "certbot reported success but $cert is missing"; return 1; }
+  ok "Certificate ready:"
+  echo "  $cert"
+  echo "  $key"
+
+  # renew unattended, and restart both services so they pick up the new files
+  cat > /etc/cron.d/nexv-cert-renew <<EOF
+0 3 * * * root certbot renew --quiet --deploy-hook "systemctl restart xray nexv"
+EOF
+  ok "Automatic renewal installed (daily check at 03:00)"
+
+  # wire the paths into the panel so it actually serves HTTPS
+  DOMAIN="$domain" CERT="$cert" KEY="$key" DATA_DIR="$DATA_DIR" node -e '
+    const fs = require("fs"), path = require("path");
+    const file = path.join(process.env.DATA_DIR, "db.json");
+    const db = JSON.parse(fs.readFileSync(file, "utf8"));
+    db.settings = db.settings || {};
+    db.settings.domain = db.settings.domain || process.env.DOMAIN;
+    db.settings.certFile = process.env.CERT;
+    db.settings.keyFile = process.env.KEY;
+    db.settings.panelCertFile = process.env.CERT;
+    db.settings.panelKeyFile = process.env.KEY;
+    fs.writeFileSync(file, JSON.stringify(db, null, 2), { mode: 0o600 });
+  ' || { err "Could not write the certificate paths into the panel settings"; return 1; }
+
+  systemctl restart "$SERVICE"
+  sleep 2
+  if systemctl is-active --quiet "$SERVICE"; then
+    ok "Panel restarted with HTTPS enabled"
+    act_url
+  else
+    err "The panel did not come back up. Check: nexv logs 50"
+    return 1
+  fi
 }
 
 act_reset_password() {

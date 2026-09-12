@@ -173,7 +173,10 @@ seed_settings() {
       panelPort: Number(process.env.PANEL_PORT),
       domain: process.env.DOMAIN,
       certFile: process.env.CERT_FILE,
-      keyFile: process.env.KEY_FILE
+      keyFile: process.env.KEY_FILE,
+      // the panel serves itself over HTTPS with the same certificate
+      panelCertFile: process.env.CERT_FILE,
+      panelKeyFile: process.env.KEY_FILE
     });
     for (const key of ["users","inbounds","clients","outbounds","routing","sessions","traffic","logs"]) {
       if (!Array.isArray(db[key])) db[key] = [];
@@ -232,9 +235,11 @@ open_firewall() {
 }
 
 summary() {
-  local ip host
+  local ip host scheme
   ip="$(curl -4 -s --max-time 4 https://api.ipify.org || hostname -I | awk '{print $1}')"
   host="${DOMAIN:-$ip}"
+  scheme="http"
+  [[ -n ${CERT_FILE:-} ]] && scheme="https"
 
   # the panel generates a secret path on first boot; read it back for the summary
   local web_path=""
@@ -247,13 +252,14 @@ summary() {
 
   echo
   echo "${GREEN}${BOLD}=============== Installation complete ===============${RESET}"
-  echo "  Panel URL : ${BOLD}http://${host}:${PANEL_PORT}${web_path}/${RESET}"
+  echo "  Panel URL : ${BOLD}${scheme}://${host}:${PANEL_PORT}${web_path}/${RESET}"
   echo "  Username  : ${BOLD}${ADMIN_USER}${RESET}"
   echo "  Password  : ${BOLD}${ADMIN_PASS}${RESET}"
   echo "  Data dir  : $DATA_DIR"
   echo
   echo "${YELLOW}  The panel only answers on the secret path above."
   echo "  Run 'nexv url' any time to print it again.${RESET}"
+  [[ $scheme == http ]] && echo "${YELLOW}  Served over plain HTTP. Enable HTTPS with: nexv cert <domain>${RESET}"
   echo
   echo "  Type ${BOLD}nexv${RESET} for the management menu."
   echo "${GREEN}${BOLD}=====================================================${RESET}"

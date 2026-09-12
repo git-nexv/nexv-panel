@@ -226,15 +226,45 @@ async function bootstrap() {
   try { xray.writeConfig(); } catch (err) { console.error('[xray] cannot write config:', err.message); }
 }
 
+/**
+ * TLS material for the panel's own listener.
+ *
+ * Falls back to the certificate configured for Xray inbounds, which is what a
+ * Let's Encrypt run leaves behind, so a panel on a domain is served over HTTPS
+ * without a second copy of the same paths. A missing or unreadable file is a
+ * warning, never a failure to start: an unreachable panel is worse than one
+ * served over plain HTTP.
+ */
+function tlsOptions() {
+  const s = db.settings;
+  const certFile = s.panelCertFile || s.certFile || '';
+  const keyFile = s.panelKeyFile || s.keyFile || '';
+  if (!certFile || !keyFile) return null;
+  try {
+    return { cert: fs.readFileSync(certFile), key: fs.readFileSync(keyFile) };
+  } catch (err) {
+    console.warn(`[nexv] TLS disabled, cannot read certificate: ${err.message}`);
+    return null;
+  }
+}
+
+function createServer(handler, tls) {
+  return tls ? require('https').createServer(tls, handler) : require('http').createServer(handler);
+}
+
 if (require.main === module) {
   bootstrap().then(() => {
     const port = Number(process.env.NEXV_PORT || db.settings.panelPort || 2087);
     const host = process.env.NEXV_HOST || '0.0.0.0';
-    app.listen(port, host, () => {
+    const tls = process.env.NEXV_NO_TLS ? null : tlsOptions();
+    const scheme = tls ? 'https' : 'http';
+
+    createServer(app, tls).listen(port, host, () => {
       const base = normalizeBasePath(db.settings.webBasePath);
-      console.log(`[nexv] panel listening on http://${host}:${port}${base}/`);
+      console.log(`[nexv] panel listening on ${scheme}://${host}:${port}${base}/`);
       // printed every start: without the path the panel cannot be reached
       console.log(`[nexv] web path: ${base || '/'}`);
+      if (!tls) console.log('[nexv] TLS is off - set a certificate in Settings, or run: nexv cert <domain>');
       startJobs();
     });
 
@@ -245,7 +275,8 @@ if (require.main === module) {
       subApp.disable('x-powered-by');
       subApp.set('trust proxy', true);
       subApp.get(/.*/, serveSubscription);
-      subApp.listen(subPort, host, () => console.log(`[nexv] subscriptions listening on http://${host}:${subPort}`))
+      createServer(subApp, tls)
+        .listen(subPort, host, () => console.log(`[nexv] subscriptions listening on ${scheme}://${host}:${subPort}`))
         .on('error', (err) => console.error(`[nexv] subscription port ${subPort} unavailable:`, err.message));
     }
   });
