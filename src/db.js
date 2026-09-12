@@ -22,12 +22,14 @@ const DEFAULTS = () => ({
     tgBotToken: '',
     tgAdminId: '',
     theme: 'dark',
-    lang: 'fa',
+    lang: 'en',
     trafficResetDay: 1
   },
   users: [],        // panel admins
   inbounds: [],     // xray inbounds
   clients: [],      // per-inbound clients
+  outbounds: [],    // xray outbounds beyond the built-in direct/blocked pair
+  routing: [],      // routing rules, evaluated in order
   sessions: [],
   traffic: [],      // { clientId, up, down, at }
   logs: []

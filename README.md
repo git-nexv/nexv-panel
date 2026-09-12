@@ -1,155 +1,149 @@
-<div align="center">
-
 # NexV Panel
 
-**پنل مدیریت Xray-core با رابط کاربری فارسی، نصب یک‌خطی و پشتیبانی از دامنه و TLS**
+A complete Xray-core management panel: a modern web UI, per-client traffic and
+quota accounting, subscription links, and a `nexv` management menu on the
+server. No database server and no build step — Node.js and a JSON store.
 
-</div>
-
----
-
-## نصب سریع
-
-روی سرور (Ubuntu / Debian / CentOS / Rocky / Alma) با کاربر **root**:
+## Install
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/git-nexv/nexv-panel/main/install.sh)
 ```
 
-نصب‌کننده به‌صورت خودکار این کارها را انجام می‌دهد:
+The installer sets up Node.js 20, Xray-core, the panel itself and a systemd
+service, then prints the panel URL, username and password. Supported on Ubuntu,
+Debian, CentOS, Rocky and AlmaLinux.
 
-1. نصب پیش‌نیازها (curl، git، openssl و …)
-2. نصب **Node.js 20 LTS**
-3. نصب **Xray-core** با اسکریپت رسمی XTLS
-4. دریافت پنل و نصب وابستگی‌ها
-5. پرسیدن پورت پنل، نام کاربری و رمز مدیر، و دامنه
-6. گرفتن گواهی رایگان **Let's Encrypt** برای دامنه (اختیاری) + تمدید خودکار
-7. ساخت سرویس `systemd` و باز کردن پورت‌ها در فایروال
-
-در پایان، آدرس پنل و نام کاربری و رمز عبور نمایش داده می‌شود.
-
----
-
-## امکانات
-
-| بخش | توضیح |
-|---|---|
-| **داشبورد** | CPU، رم، دیسک، سرعت لحظه‌ای شبکه، آپ‌تایم، وضعیت Xray — به‌روزرسانی زنده |
-| **ورودی‌ها** | ساخت inbound با VLESS / VMess / Trojan / Shadowsocks |
-| **ترنسپورت** | TCP، WebSocket، gRPC، HTTPUpgrade، XHTTP |
-| **امنیت** | TLS و **REALITY** (تولید خودکار کلیدها) |
-| **کاربران** | محدودیت حجم، تاریخ انقضا، محدودیت IP، فعال/غیرفعال، ریست ترافیک |
-| **اشتراک** | لینک Subscription استاندارد + QR Code برای هر کاربر |
-| **حسابداری ترافیک** | خواندن مصرف واقعی از Stats API هر ۳۰ ثانیه |
-| **اعمال خودکار محدودیت** | قطع خودکار کاربرِ منقضی یا اتمام‌حجم |
-| **پشتیبان‌گیری** | دانلود/بازیابی کامل پیکربندی از داخل پنل |
-| **رابط کاربری** | فارسی و راست‌چین، تم تاریک و روشن، کاملاً واکنش‌گرا (موبایل) |
-| **مسیر مخفی** | پنل زیر یک Web Path تصادفی سرو می‌شود؛ بقیه مسیرها ۴۰۴ می‌گیرند |
-| **بدون درخواست خارجی** | فونت و همه دارایی‌ها روی خود سرور میزبانی می‌شوند |
-
----
-
-## مدیریت با دستور `nexv`
+To install a branch other than `main`:
 
 ```bash
-nexv status              # وضعیت پنل و Xray
-nexv restart             # ری‌استارت پنل
-nexv logs                # لاگ زنده پنل
-nexv xray-logs           # لاگ زنده Xray
-nexv update              # به‌روزرسانی به آخرین نسخه
-nexv backup [file]       # تهیه پشتیبان
-nexv restore <file>      # بازیابی پشتیبان
-nexv url                 # نمایش آدرس کامل پنل (همراه مسیر مخفی)
-nexv path <p|random|none># تغییر مسیر مخفی پنل
-nexv cert <domain>       # گرفتن گواهی Let's Encrypt
-nexv reset-password [pw] # بازنشانی رمز مدیر
-nexv uninstall           # حذف کامل
+NEXV_BRANCH=my-branch bash <(curl -fsSL https://raw.githubusercontent.com/git-nexv/nexv-panel/my-branch/install.sh)
 ```
 
----
+## The secret web path
 
-## اتصال دامنه
-
-1. یک رکورد **A** از دامنه‌تان به IP سرور بسازید (مثلاً `panel.example.com`).
-2. هنگام نصب، دامنه را وارد کنید و گزینه گواهی را تأیید کنید.
-   اگر بعداً می‌خواهید: `nexv cert panel.example.com`
-3. در **تنظیمات پنل**، دامنه و مسیر گواهی را ثبت کنید:
-   - گواهی: `/etc/letsencrypt/live/<domain>/fullchain.pem`
-   - کلید: `/etc/letsencrypt/live/<domain>/privkey.pem`
-4. حالا در ورودی‌ها می‌توانید `security = tls` را انتخاب کنید و لینک‌های
-   اشتراک هم روی دامنه ساخته می‌شوند.
-
-> گواهی هر شب ساعت ۳ به‌صورت خودکار بررسی و تمدید می‌شود
-> (`/etc/cron.d/nexv-cert-renew`).
-
----
-
-## مسیر مخفی پنل (Web Path)
-
-پنل در اولین اجرا یک مسیر تصادفی برای خودش می‌سازد، مثلاً:
-
-```
-http://SERVER-IP:2087/ZdD1HbAyEhS_/
-```
-
-هر درخواستی خارج از این مسیر **۴۰۴** می‌گیرد (نه ریدایرکت)، تا اسکن پورت
-لو ندهد که اینجا پنل هست.
+On first boot the panel generates a random path, for example
+`http://your-server:2087/kZ8fQ2r1xVaP/`. Requests outside it get a plain 404, so
+a port scan cannot tell the panel is there. If you lose the path:
 
 ```bash
-nexv url                    # آدرس فعلی را نشان بده
-nexv path myPanel           # مسیر دلخواه
-nexv path random            # مسیر تصادفی جدید
-nexv path none              # حذف مسیر مخفی
+nexv url
 ```
 
-از داخل پنل هم در **تنظیمات → مسیر مخفی پنل** قابل تغییر است؛ بعد از ذخیره،
-آدرس جدید نمایش داده می‌شود.
+## Management menu
 
-> اگر مسیر را فراموش کردید، روی سرور `nexv url` بزنید. مسیر در لاگ سرویس
-> هم در هر بار استارت چاپ می‌شود.
-
-> لینک‌های **اشتراک** عمداً بیرون از مسیر مخفی هستند (`/sub/...`) تا کلاینت‌های
-> کاربران بدون دانستن مسیر پنل کار کنند.
-
----
-
-## نکات امنیتی
-
-- بعد از اولین ورود، **رمز عبور مدیر را تغییر دهید** (بخش «حساب مدیر»).
-- پورت پنل را روی مقدار پیش‌فرض رها نکنید؛ از تنظیمات قابل تغییر است.
-- فایل داده‌ها در `/etc/nexv/data/db.json` با دسترسی `600` نگهداری می‌شود؛
-  رمزها با bcrypt هش می‌شوند و نشست‌ها با کوکی امضاشده (HMAC) مدیریت می‌شوند.
-- ترافیک به شبکه‌های خصوصی (RFC1918 و …) به‌صورت پیش‌فرض بلاک است.
-
----
-
-## معماری
+Run `nexv` on the server for the full menu:
 
 ```
-src/server.js        وب‌سرور، مسیر اشتراک، کارهای زمان‌بندی‌شده
-src/routes/api.js    REST API پنل
-src/xray.js          ساخت config.json، کنترل سرویس، خواندن آمار مصرف
-src/links.js         ساخت لینک vless/vmess/trojan/ss و subscription
-src/db.js            دیتابیس JSON با نوشتن اتمیک (بدون وابستگی native)
-src/auth.js          احراز هویت، نشست‌ها، bcrypt
-src/system.js        متریک‌های سرور
-web/                 رابط کاربری (بدون build step)
-install.sh           نصب‌کننده خودکار
-scripts/nexv         ابزار خط فرمان
+  ┌──────────────────────────────────────────┐
+  │  NexV Panel Management Script            │
+  │   0. Exit                                │
+  ├──────────────────────────────────────────┤
+  │   1. Update panel                        │
+  │   2. Uninstall                           │
+  ├──────────────────────────────────────────┤
+  │   3. Reset admin password                │
+  │   4. Reset admin username                │
+  │   5. Reset web base path                 │
+  │   6. Change panel port                   │
+  │   7. Show current settings               │
+  │   8. Show panel URL                      │
+  └──────────────────────────────────────────┘
 ```
 
-**مسیرها:** پنل در `/opt/nexv-vpanel`، داده‌ها در `/etc/nexv/data`،
-کانفیگ Xray در `/usr/local/etc/xray/config.json`.
+Every entry is also a direct command:
 
----
+| Command | What it does |
+| --- | --- |
+| `nexv status` | panel and Xray service status |
+| `nexv start` / `stop` / `restart` | control the panel service |
+| `nexv logs [n]` | follow the panel log |
+| `nexv xray-logs [n]` | follow the Xray log |
+| `nexv update` | update from the repository |
+| `nexv url` | print the full panel URL |
+| `nexv path <p\|random\|none>` | change the secret web path |
+| `nexv port <number>` | change the panel port |
+| `nexv settings` | print the current settings |
+| `nexv backup [file]` / `restore <file>` | back up or restore the data file |
+| `nexv cert <domain>` | request a Let's Encrypt certificate |
+| `nexv reset-password [pw]` | reset the admin password |
+| `nexv reset-username <name>` | change the admin username |
+| `nexv firewall` | open the panel ports in ufw or firewalld |
+| `nexv bbr` | enable BBR congestion control |
+| `nexv geo` | update geoip.dat and geosite.dat |
+| `nexv uninstall` | remove the panel |
 
-## توسعه محلی
+## Panel sections
+
+- **Dashboard** — CPU, memory, disk, live network speed, Xray state, totals.
+- **Inbounds** — one port and protocol per inbound, with transport and security.
+- **Clients** — accounts per inbound, with quota, expiry, QR codes and links.
+- **Outbounds** — where traffic leaves: direct, blocked, or your own proxies.
+- **Routing** — ordered rules that pick an outbound per domain, IP, port or user.
+- **Settings** — domain, ports, secret path, TLS files, backup and restore.
+- **Logs** — panel events.
+- **Account** — change your own username and password.
+
+## Protocols
+
+**Inbounds:** VLESS, VMess, Trojan, Shadowsocks, SOCKS5, HTTP, Dokodemo-door,
+WireGuard.
+
+**Outbounds:** Freedom, Blackhole, DNS, VLESS, VMess, Trojan, Shadowsocks,
+SOCKS5, HTTP, WireGuard.
+
+**Transports:** TCP, WebSocket, gRPC, HTTPUpgrade, XHTTP, mKCP — with TLS or
+REALITY where the protocol supports it.
+
+Share links are generated for VLESS, VMess, Trojan, Shadowsocks and SOCKS5.
+
+## Subscriptions
+
+Every client gets a subscription id. The subscription endpoint is served on its
+own port (2096 by default) and returns the base64 list clients expect, along
+with the usage and expiry headers:
+
+```
+http://your-server:2096/sub/<subId>
+```
+
+Append `?plain=1` to read the raw links instead.
+
+## Traffic and limits
+
+Usage counters are pulled from the Xray stats API every 30 seconds. A client
+that runs past its quota or expiry date is disabled automatically and the Xray
+config is rewritten without it.
+
+## Paths
+
+| What | Where |
+| --- | --- |
+| Panel code | `/opt/nexv-panel` |
+| Data (admins, inbounds, clients) | `/etc/nexv/data/db.json` |
+| Xray config | `/usr/local/etc/xray/config.json` |
+| systemd units | `nexv` and `xray` |
+
+## Updating
 
 ```bash
-npm install
-NEXV_DATA_DIR=./data NEXV_PORT=2087 npm start
+nexv update
 ```
 
-## مجوز
+This pulls the latest code, reinstalls dependencies, refreshes the `nexv`
+command and restarts the service. Your data file is untouched.
+
+## Security notes
+
+- The panel speaks plain HTTP. Put it behind a reverse proxy with TLS, or reach
+  it over the secret path only, and keep the port closed to the public where you
+  can.
+- Sessions are signed cookies, stored server-side and pruned on expiry. Changing
+  a password invalidates every other session of that admin.
+- Clients cannot reach the server's own LAN: RFC1918 and loopback ranges are
+  routed to the blackhole outbound by a rule the panel always writes.
+- Keep backups: `nexv backup` writes a single JSON file you can restore later.
+
+## License
 
 MIT

@@ -1,147 +1,409 @@
 #!/usr/bin/env bash
-# nexv — management CLI for NexV Panel
-set -euo pipefail
+# nexv - management script for NexV Panel
+set -uo pipefail
 
-INSTALL_DIR="/opt/nexv-vpanel"
+INSTALL_DIR="/opt/nexv-panel"
 DATA_DIR="/etc/nexv/data"
 SERVICE="nexv"
-GREEN=$'\e[32m'; RED=$'\e[31m'; YELLOW=$'\e[33m'; BOLD=$'\e[1m'; RESET=$'\e[0m'
+BRANCH="${NEXV_BRANCH:-main}"
 
-need_root() { [[ $EUID -eq 0 ]] || { echo "${RED}با sudo اجرا کنید${RESET}"; exit 1; }; }
+GREEN=$'\e[32m'; RED=$'\e[31m'; YELLOW=$'\e[33m'; CYAN=$'\e[36m'; BOLD=$'\e[1m'; RESET=$'\e[0m'
 
-case "${1:-help}" in
-  status)
-    systemctl status "$SERVICE" --no-pager -l || true
-    echo
-    systemctl status xray --no-pager -l || true
-    ;;
-  start|stop|restart)
-    need_root
-    systemctl "$1" "$SERVICE"
-    echo "${GREEN}پنل: $1 انجام شد${RESET}"
-    ;;
-  logs)
-    journalctl -u "$SERVICE" -n "${2:-100}" -f --no-pager
-    ;;
-  xray-logs)
-    journalctl -u xray -n "${2:-100}" -f --no-pager
-    ;;
-  update)
-    need_root
-    echo "دریافت آخرین نسخه…"
-    git -C "$INSTALL_DIR" fetch --depth 1 origin main -q
-    git -C "$INSTALL_DIR" reset --hard origin/main -q
-    ( cd "$INSTALL_DIR" && npm install --omit=dev --no-audit --no-fund --loglevel=error )
-    install -m 755 "$INSTALL_DIR/scripts/nexv" /usr/local/bin/nexv
-    systemctl restart "$SERVICE"
-    echo "${GREEN}پنل به‌روزرسانی شد${RESET}"
-    # a fresh install generates a secret web path; never let the admin lose it
-    sleep 2
-    "$0" url
-    ;;
-  backup)
-    need_root
-    out="${2:-/root/nexv-backup-$(date +%Y%m%d-%H%M%S).json}"
-    cp "$DATA_DIR/db.json" "$out"
-    chmod 600 "$out"
-    echo "${GREEN}پشتیبان ذخیره شد: $out${RESET}"
-    ;;
-  restore)
-    need_root
-    [[ -f ${2:-} ]] || { echo "${RED}مسیر فایل پشتیبان را بدهید: nexv restore <file>${RESET}"; exit 1; }
-    cp "$DATA_DIR/db.json" "$DATA_DIR/db.json.before-restore" 2>/dev/null || true
-    cp "$2" "$DATA_DIR/db.json"
-    chmod 600 "$DATA_DIR/db.json"
-    systemctl restart "$SERVICE"
-    echo "${GREEN}بازیابی انجام شد${RESET}"
-    ;;
-  url|path)
-    need_root
-    NEW_PATH="${2:-}" DATA_DIR="$DATA_DIR" node -e '
-      const fs = require("fs"), path = require("path"), crypto = require("crypto");
-      const file = path.join(process.env.DATA_DIR, "db.json");
-      const db = JSON.parse(fs.readFileSync(file, "utf8"));
-      db.settings = db.settings || {};
-      const arg = (process.env.NEW_PATH || "").trim();
-      if (arg === "random") {
-        db.settings.webBasePath = "/" + crypto.randomBytes(9).toString("base64url");
-      } else if (arg === "none") {
-        db.settings.webBasePath = "";
-      } else if (arg) {
-        const clean = arg.replace(/^\/+|\/+$/g, "");
-        if (!/^[A-Za-z0-9_\-\/]{1,64}$/.test(clean)) {
-          console.error("invalid path: use letters, digits, - _ / only");
-          process.exit(1);
-        }
-        db.settings.webBasePath = "/" + clean;
+# Installs before v2 lived in /opt/nexv-vpanel; keep working if one is still there.
+[[ -d $INSTALL_DIR || ! -d /opt/nexv-vpanel ]] || INSTALL_DIR="/opt/nexv-vpanel"
+
+need_root() { [[ $EUID -eq 0 ]] || { echo "${RED}This command needs root. Run it with sudo.${RESET}"; exit 1; }; }
+ok()   { echo "${GREEN}[+]${RESET} $*"; }
+err()  { echo "${RED}[x]${RESET} $*"; }
+warn() { echo "${YELLOW}[!]${RESET} $*"; }
+
+confirm() {
+  local answer
+  read -rp "$1 [y/N]: " answer
+  [[ ${answer,,} == y || ${answer,,} == yes ]]
+}
+
+pause() {
+  echo
+  read -rp "Press Enter to return to the menu..." _
+}
+
+# ----------------------------------------------------------------- actions --
+
+act_status() {
+  systemctl status "$SERVICE" --no-pager -l || true
+  echo
+  systemctl status xray --no-pager -l || true
+}
+
+act_service() {
+  need_root
+  systemctl "$1" "$SERVICE" && ok "Panel: $1 done" || err "Panel: $1 failed"
+}
+
+act_logs()      { journalctl -u "$SERVICE" -n "${1:-100}" -f --no-pager; }
+act_xray_logs() { journalctl -u xray -n "${1:-100}" -f --no-pager; }
+
+act_update() {
+  need_root
+  echo "Fetching the latest version..."
+  git -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH" -q || { err "Could not reach the repository"; return 1; }
+  git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH" -q
+  ( cd "$INSTALL_DIR" && npm install --omit=dev --no-audit --no-fund --loglevel=error ) || { err "npm install failed"; return 1; }
+  install -m 755 "$INSTALL_DIR/scripts/nexv" /usr/local/bin/nexv
+  systemctl restart "$SERVICE"
+  ok "Panel updated"
+  # a fresh install generates a secret web path; never let the admin lose it
+  sleep 2
+  act_url
+}
+
+act_backup() {
+  need_root
+  local out="${1:-/root/nexv-backup-$(date +%Y%m%d-%H%M%S).json}"
+  cp "$DATA_DIR/db.json" "$out" && chmod 600 "$out" && ok "Backup saved: $out"
+}
+
+act_restore() {
+  need_root
+  local file="${1:-}"
+  [[ -f $file ]] || { err "Give the path to a backup file: nexv restore <file>"; return 1; }
+  cp "$DATA_DIR/db.json" "$DATA_DIR/db.json.before-restore" 2>/dev/null || true
+  cp "$file" "$DATA_DIR/db.json"
+  chmod 600 "$DATA_DIR/db.json"
+  systemctl restart "$SERVICE"
+  ok "Restored from $file"
+}
+
+act_url() {
+  need_root
+  NEW_PATH="${1:-}" DATA_DIR="$DATA_DIR" node -e '
+    const fs = require("fs"), path = require("path"), crypto = require("crypto");
+    const file = path.join(process.env.DATA_DIR, "db.json");
+    const db = JSON.parse(fs.readFileSync(file, "utf8"));
+    db.settings = db.settings || {};
+    const arg = (process.env.NEW_PATH || "").trim();
+    if (arg === "random") {
+      db.settings.webBasePath = "/" + crypto.randomBytes(9).toString("base64url");
+    } else if (arg === "none") {
+      db.settings.webBasePath = "";
+    } else if (arg) {
+      const clean = arg.replace(/^\/+|\/+$/g, "");
+      if (!/^[A-Za-z0-9_\-\/]{1,64}$/.test(clean)) {
+        console.error("invalid path: use letters, digits, - _ / only");
+        process.exit(1);
       }
-      if (arg) fs.writeFileSync(file, JSON.stringify(db, null, 2), { mode: 0o600 });
-      const port = db.settings.panelPort || 2087;
-      const host = db.settings.domain || db.settings.serverIP || "SERVER-IP";
-      console.log("");
-      console.log("  آدرس پنل:  http://" + host + ":" + port + (db.settings.webBasePath || "") + "/");
-      console.log("");
-    ' || exit 1
-    [[ -n ${2:-} ]] && { systemctl restart "$SERVICE"; echo "${GREEN}مسیر جدید اعمال شد${RESET}"; }
-    ;;
-  cert)
-    need_root
-    domain="${2:-}"
-    [[ -n $domain ]] || { echo "${RED}دامنه را وارد کنید: nexv cert example.com${RESET}"; exit 1; }
-    command -v certbot >/dev/null || { echo "certbot نصب نیست"; exit 1; }
-    systemctl stop nginx 2>/dev/null || true
-    certbot certonly --standalone --non-interactive --agree-tos \
-      --register-unsafely-without-email -d "$domain"
-    echo "${GREEN}گواهی صادر شد:${RESET}"
-    echo "  /etc/letsencrypt/live/$domain/fullchain.pem"
-    echo "  /etc/letsencrypt/live/$domain/privkey.pem"
-    echo "${YELLOW}این مسیرها را در تنظیمات پنل ثبت کنید.${RESET}"
-    ;;
-  reset-password)
-    need_root
-    newpass="${2:-$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-14)}"
-    NEW_PASS="$newpass" DATA_DIR="$DATA_DIR" node -e '
-      const fs = require("fs"), path = require("path");
-      const bcrypt = require("'"$INSTALL_DIR"'/node_modules/bcryptjs");
-      const file = path.join(process.env.DATA_DIR, "db.json");
-      const db = JSON.parse(fs.readFileSync(file, "utf8"));
-      if (!db.users || !db.users.length) { console.error("no admin user found"); process.exit(1); }
-      db.users[0].password = bcrypt.hashSync(process.env.NEW_PASS, 10);
-      db.sessions = [];
-      fs.writeFileSync(file, JSON.stringify(db, null, 2), { mode: 0o600 });
-    '
-    systemctl restart "$SERVICE"
-    echo "${GREEN}رمز جدید مدیر: ${BOLD}$newpass${RESET}"
-    ;;
-  uninstall)
-    need_root
-    read -rp "پنل و اطلاعات آن حذف شود؟ (yes/no): " confirm
-    [[ $confirm == yes ]] || { echo "لغو شد"; exit 0; }
-    systemctl disable --now "$SERVICE" 2>/dev/null || true
-    rm -f /etc/systemd/system/${SERVICE}.service /etc/cron.d/nexv-cert-renew
-    systemctl daemon-reload
-    rm -rf "$INSTALL_DIR"
-    read -rp "داده‌ها (کاربران و کانفیگ‌ها) هم حذف شود؟ (yes/no): " purge
-    [[ $purge == yes ]] && rm -rf /etc/nexv
-    rm -f /usr/local/bin/nexv
-    echo "${GREEN}پنل حذف شد${RESET}"
-    ;;
-  *)
-    cat <<HELP
-${BOLD}nexv${RESET} — مدیریت NexV Panel
+      db.settings.webBasePath = "/" + clean;
+    }
+    if (arg) fs.writeFileSync(file, JSON.stringify(db, null, 2), { mode: 0o600 });
+    const port = db.settings.panelPort || 2087;
+    const host = db.settings.domain || db.settings.serverIP || "SERVER-IP";
+    console.log("");
+    console.log("  Panel URL:  http://" + host + ":" + port + (db.settings.webBasePath || "") + "/");
+    console.log("");
+  ' || return 1
+  [[ -n ${1:-} ]] && { systemctl restart "$SERVICE"; ok "New path applied"; }
+  return 0
+}
 
-  nexv status              وضعیت پنل و Xray
-  nexv start|stop|restart  کنترل سرویس پنل
-  nexv logs [n]            لاگ زنده پنل
-  nexv xray-logs [n]       لاگ زنده Xray
-  nexv update              به‌روزرسانی از مخزن
-  nexv backup [file]       تهیه پشتیبان
-  nexv restore <file>      بازیابی پشتیبان
-  nexv url                 نمایش آدرس کامل پنل (همراه مسیر مخفی)
-  nexv path <p|random|none> تغییر مسیر مخفی پنل
-  nexv cert <domain>       دریافت گواهی Let's Encrypt
-  nexv reset-password [pw] بازنشانی رمز مدیر
-  nexv uninstall           حذف کامل
+act_port() {
+  need_root
+  local port="${1:-}"
+  [[ $port =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )) || { err "Give a port number between 1 and 65535"; return 1; }
+  PORT="$port" DATA_DIR="$DATA_DIR" node -e '
+    const fs = require("fs"), path = require("path");
+    const file = path.join(process.env.DATA_DIR, "db.json");
+    const db = JSON.parse(fs.readFileSync(file, "utf8"));
+    db.settings = db.settings || {};
+    db.settings.panelPort = Number(process.env.PORT);
+    fs.writeFileSync(file, JSON.stringify(db, null, 2), { mode: 0o600 });
+  ' || return 1
+  systemctl restart "$SERVICE"
+  ok "Panel port changed to $port"
+  act_url
+}
+
+act_settings() {
+  need_root
+  DATA_DIR="$DATA_DIR" node -e '
+    const fs = require("fs"), path = require("path");
+    const db = JSON.parse(fs.readFileSync(path.join(process.env.DATA_DIR, "db.json"), "utf8"));
+    const s = db.settings || {};
+    const row = (k, v) => console.log("  " + k.padEnd(22) + (v === "" || v === undefined ? "-" : v));
+    console.log("");
+    row("Panel port", s.panelPort || 2087);
+    row("Web base path", s.webBasePath || "(none)");
+    row("Domain", s.domain);
+    row("Subscription port", s.subPort);
+    row("Subscription path", s.subPath);
+    row("TLS certificate", s.certFile);
+    row("TLS private key", s.keyFile);
+    row("Xray log level", s.xrayLogLevel || "warning");
+    row("Default outbound", s.defaultOutbound || "direct");
+    row("Domain strategy", s.domainStrategy || "AsIs");
+    row("Block BitTorrent", s.blockTorrent ? "yes" : "no");
+    row("Admins", (db.users || []).map((u) => u.username).join(", "));
+    row("Inbounds", (db.inbounds || []).length);
+    row("Clients", (db.clients || []).length);
+    row("Outbounds", (db.outbounds || []).length);
+    row("Routing rules", (db.routing || []).length);
+    console.log("");
+  '
+}
+
+act_cert() {
+  need_root
+  local domain="${1:-}"
+  [[ -n $domain ]] || { err "Give a domain: nexv cert example.com"; return 1; }
+  command -v certbot >/dev/null || { err "certbot is not installed"; return 1; }
+  systemctl stop nginx 2>/dev/null || true
+  certbot certonly --standalone --non-interactive --agree-tos \
+    --register-unsafely-without-email -d "$domain" || { err "Certificate request failed"; return 1; }
+  ok "Certificate issued:"
+  echo "  /etc/letsencrypt/live/$domain/fullchain.pem"
+  echo "  /etc/letsencrypt/live/$domain/privkey.pem"
+  warn "Enter these paths in the panel settings."
+}
+
+act_reset_password() {
+  need_root
+  local newpass="${1:-$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-14)}"
+  NEW_PASS="$newpass" DATA_DIR="$DATA_DIR" node -e '
+    const fs = require("fs"), path = require("path");
+    const bcrypt = require("'"$INSTALL_DIR"'/node_modules/bcryptjs");
+    const file = path.join(process.env.DATA_DIR, "db.json");
+    const db = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (!db.users || !db.users.length) { console.error("no admin user found"); process.exit(1); }
+    db.users[0].password = bcrypt.hashSync(process.env.NEW_PASS, 10);
+    db.sessions = [];
+    fs.writeFileSync(file, JSON.stringify(db, null, 2), { mode: 0o600 });
+  ' || return 1
+  systemctl restart "$SERVICE"
+  ok "New admin password: ${BOLD}$newpass${RESET}"
+}
+
+act_reset_username() {
+  need_root
+  local name="${1:-}"
+  [[ -n $name ]] || { err "Give a username: nexv reset-username <name>"; return 1; }
+  NEW_USER="$name" DATA_DIR="$DATA_DIR" node -e '
+    const fs = require("fs"), path = require("path");
+    const file = path.join(process.env.DATA_DIR, "db.json");
+    const db = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (!db.users || !db.users.length) { console.error("no admin user found"); process.exit(1); }
+    db.users[0].username = process.env.NEW_USER.trim();
+    db.sessions = [];
+    fs.writeFileSync(file, JSON.stringify(db, null, 2), { mode: 0o600 });
+  ' || return 1
+  systemctl restart "$SERVICE"
+  ok "Admin username changed to $name"
+}
+
+act_firewall() {
+  need_root
+  local port
+  port="$(DATA_DIR=$DATA_DIR node -e '
+    const db = require(process.env.DATA_DIR + "/db.json");
+    process.stdout.write(String((db.settings && db.settings.panelPort) || 2087));
+  ' 2>/dev/null || echo 2087)"
+  local ports=("$port" 80 443 2096)
+  if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
+    for p in "${ports[@]}"; do ufw allow "$p"/tcp >/dev/null 2>&1 || true; done
+    ok "Opened ${ports[*]} in ufw"
+  elif command -v firewall-cmd >/dev/null && systemctl is-active --quiet firewalld; then
+    for p in "${ports[@]}"; do firewall-cmd --permanent --add-port="$p"/tcp >/dev/null 2>&1 || true; done
+    firewall-cmd --reload >/dev/null 2>&1 || true
+    ok "Opened ${ports[*]} in firewalld"
+  else
+    warn "No active ufw or firewalld found; nothing to do."
+  fi
+}
+
+act_bbr() {
+  need_root
+  if sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q bbr; then
+    ok "BBR is already enabled"
+    return 0
+  fi
+  cat >> /etc/sysctl.conf <<'EOF'
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+EOF
+  sysctl -p >/dev/null 2>&1
+  sysctl net.ipv4.tcp_congestion_control | grep -q bbr && ok "BBR enabled" || err "BBR could not be enabled (kernel may be too old)"
+}
+
+act_geo() {
+  need_root
+  local dir="/usr/local/share/xray"
+  mkdir -p "$dir"
+  local base="https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download"
+  curl -fsSL "$base/geoip.dat" -o "$dir/geoip.dat.new" && mv "$dir/geoip.dat.new" "$dir/geoip.dat" \
+    && curl -fsSL "$base/geosite.dat" -o "$dir/geosite.dat.new" && mv "$dir/geosite.dat.new" "$dir/geosite.dat" \
+    || { err "Could not download the geo files"; rm -f "$dir"/*.new; return 1; }
+  systemctl restart xray
+  ok "geoip.dat and geosite.dat updated"
+}
+
+act_uninstall() {
+  need_root
+  confirm "Remove the panel from this server?" || { echo "Cancelled"; return 0; }
+  systemctl disable --now "$SERVICE" 2>/dev/null || true
+  rm -f /etc/systemd/system/${SERVICE}.service /etc/cron.d/nexv-cert-renew
+  systemctl daemon-reload
+  rm -rf "$INSTALL_DIR"
+  if confirm "Also delete all data (admins, inbounds, clients)?"; then
+    rm -rf /etc/nexv
+  fi
+  rm -f /usr/local/bin/nexv
+  ok "Panel removed"
+  exit 0
+}
+
+# -------------------------------------------------------------------- menu --
+
+state_of() {
+  systemctl is-active --quiet "$1" 2>/dev/null && echo "${GREEN}Running${RESET}" || echo "${RED}Stopped${RESET}"
+}
+
+enabled_of() {
+  systemctl is-enabled --quiet "$1" 2>/dev/null && echo "${GREEN}Yes${RESET}" || echo "${RED}No${RESET}"
+}
+
+# The box is drawn at a fixed inner width of 42 columns. Colour codes sit
+# outside the printf field widths so they do not count towards the padding.
+menu_top()  { printf "  ${CYAN}┌──────────────────────────────────────────┐${RESET}\\n"; }
+menu_rule() { printf "  ${CYAN}├──────────────────────────────────────────┤${RESET}\\n"; }
+menu_end()  { printf "  ${CYAN}└──────────────────────────────────────────┘${RESET}\\n"; }
+menu_head() { printf "  ${CYAN}│${RESET}  ${BOLD}%-40s${RESET}${CYAN}│${RESET}\\n" "$1"; }
+menu_row()  { printf "  ${CYAN}│${RESET}  ${CYAN}%2s${RESET}. %-36s${CYAN}│${RESET}\\n" "$1" "$2"; }
+
+show_menu() {
+  clear 2>/dev/null || true
+  echo
+  menu_top
+  menu_head "NexV Panel Management Script"
+  menu_row 0 "Exit"
+  menu_rule
+  menu_row 1 "Update panel"
+  menu_row 2 "Uninstall"
+  menu_rule
+  menu_row 3 "Reset admin password"
+  menu_row 4 "Reset admin username"
+  menu_row 5 "Reset web base path"
+  menu_row 6 "Change panel port"
+  menu_row 7 "Show current settings"
+  menu_row 8 "Show panel URL"
+  menu_rule
+  menu_row 9 "Start panel"
+  menu_row 10 "Stop panel"
+  menu_row 11 "Restart panel"
+  menu_row 12 "Restart Xray"
+  menu_row 13 "Check status"
+  menu_row 14 "Panel logs"
+  menu_row 15 "Xray logs"
+  menu_rule
+  menu_row 16 "Enable autostart"
+  menu_row 17 "Disable autostart"
+  menu_rule
+  menu_row 18 "SSL certificate (Let's Encrypt)"
+  menu_row 19 "Open firewall ports"
+  menu_row 20 "Backup configuration"
+  menu_row 21 "Restore configuration"
+  menu_rule
+  menu_row 22 "Enable BBR"
+  menu_row 23 "Update geo files"
+  menu_end
+  echo
+  printf "  Panel state        : %s\n" "$(state_of "$SERVICE")"
+  printf "  Start automatically: %s\n" "$(enabled_of "$SERVICE")"
+  printf "  Xray state         : %s\n" "$(state_of xray)"
+  echo
+}
+
+run_menu() {
+  while true; do
+    show_menu
+    local choice domain file port name
+    read -rp "  Please enter your selection [0-23]: " choice
+    echo
+    case "$choice" in
+      0) exit 0 ;;
+      1) act_update; pause ;;
+      2) act_uninstall; pause ;;
+      3) act_reset_password; pause ;;
+      4) read -rp "New admin username: " name; act_reset_username "$name"; pause ;;
+      5) echo "Enter a path, or 'random' for a generated one, or 'none' to disable."
+         read -rp "New web base path: " name; act_url "$name"; pause ;;
+      6) read -rp "New panel port: " port; act_port "$port"; pause ;;
+      7) act_settings; pause ;;
+      8) act_url; pause ;;
+      9) act_service start; pause ;;
+      10) act_service stop; pause ;;
+      11) act_service restart; pause ;;
+      12) need_root; systemctl restart xray && ok "Xray restarted" || err "Xray restart failed"; pause ;;
+      13) act_status; pause ;;
+      14) echo "${YELLOW}Press Ctrl+C to stop following the log.${RESET}"; act_logs 100 ;;
+      15) echo "${YELLOW}Press Ctrl+C to stop following the log.${RESET}"; act_xray_logs 100 ;;
+      16) need_root; systemctl enable "$SERVICE" >/dev/null 2>&1 && ok "Autostart enabled"; pause ;;
+      17) need_root; systemctl disable "$SERVICE" >/dev/null 2>&1 && ok "Autostart disabled"; pause ;;
+      18) read -rp "Domain: " domain; act_cert "$domain"; pause ;;
+      19) act_firewall; pause ;;
+      20) act_backup; pause ;;
+      21) read -rp "Path to the backup file: " file; act_restore "$file"; pause ;;
+      22) act_bbr; pause ;;
+      23) act_geo; pause ;;
+      *) err "Please choose a number between 0 and 23"; pause ;;
+    esac
+  done
+}
+
+usage() {
+  cat <<HELP
+${BOLD}nexv${RESET} - NexV Panel management
+
+  nexv                          open the management menu
+  nexv status                   panel and Xray service status
+  nexv start|stop|restart       control the panel service
+  nexv logs [n]                 follow the panel log
+  nexv xray-logs [n]            follow the Xray log
+  nexv update                   update from the repository
+  nexv backup [file]            write a backup
+  nexv restore <file>           restore from a backup
+  nexv url                      print the full panel URL
+  nexv path <p|random|none>     change the secret web path
+  nexv port <number>            change the panel port
+  nexv settings                 print the current settings
+  nexv cert <domain>            request a Let's Encrypt certificate
+  nexv reset-password [pw]      reset the admin password
+  nexv reset-username <name>    change the admin username
+  nexv firewall                 open the panel ports
+  nexv bbr                      enable BBR congestion control
+  nexv geo                      update geoip.dat and geosite.dat
+  nexv uninstall                remove the panel
 HELP
-    ;;
+}
+
+case "${1:-menu}" in
+  menu)            run_menu ;;
+  status)          act_status ;;
+  start|stop|restart) act_service "$1" ;;
+  logs)            act_logs "${2:-100}" ;;
+  xray-logs)       act_xray_logs "${2:-100}" ;;
+  update)          act_update ;;
+  backup)          act_backup "${2:-}" ;;
+  restore)         act_restore "${2:-}" ;;
+  url)             act_url ;;
+  path)            act_url "${2:-}" ;;
+  port)            act_port "${2:-}" ;;
+  settings)        act_settings ;;
+  cert)            act_cert "${2:-}" ;;
+  reset-password)  act_reset_password "${2:-}" ;;
+  reset-username)  act_reset_username "${2:-}" ;;
+  firewall)        act_firewall ;;
+  bbr)             act_bbr ;;
+  geo)             act_geo ;;
+  uninstall)       act_uninstall ;;
+  help|-h|--help)  usage ;;
+  *)               err "Unknown command: $1"; echo; usage; exit 1 ;;
 esac

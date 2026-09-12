@@ -1,4 +1,5 @@
 'use strict';
+const fs = require('fs');
 const path = require('path');
 const express = require('express');
 
@@ -112,15 +113,50 @@ app.use('/api', api);
 const WEB_DIR = path.join(__dirname, '..', 'web');
 app.use(express.static(WEB_DIR, { index: false, maxAge: '1h' }));
 
-app.get('/login', (req, res) => res.sendFile(path.join(WEB_DIR, 'login.html')));
-app.get('*', (req, res) => {
-  if (!auth.currentUser(req)) {
-    // redirect back through the base path, which was stripped from req.url
-    const base = normalizeBasePath(db.settings.webBasePath);
-    return res.redirect(`${base}/login`);
-  }
-  res.sendFile(path.join(WEB_DIR, 'index.html'));
+/**
+ * Pages are served with the panel's base path baked in.
+ *
+ * Without this the frontend has to guess its own prefix from the current URL,
+ * and a single trailing slash makes every relative fetch resolve one level too
+ * deep - where the catch-all would answer with index.html instead of JSON, so
+ * the page waits forever on a request that can never succeed.
+ */
+const pageCache = new Map();
+function renderPage(file, base) {
+  const key = `${file}|${base}`;
+  const cached = pageCache.get(key);
+  const stat = fs.statSync(path.join(WEB_DIR, file));
+  if (cached && cached.mtime === stat.mtimeMs) return cached.html;
+
+  const prefix = `${base}/`;
+  const html = fs.readFileSync(path.join(WEB_DIR, file), 'utf8').replace(
+    '</head>',
+    `<base href="${prefix}">\n<script>window.__NEXV_BASE__=${JSON.stringify(prefix)};</script>\n</head>`
+  );
+  pageCache.set(key, { mtime: stat.mtimeMs, html });
+  return html;
+}
+
+function sendPage(res, file, base) {
+  res.setHeader('Cache-Control', 'no-store');
+  res.type('html').send(renderPage(file, base));
+}
+
+app.get('/login', (req, res) => {
+  const base = normalizeBasePath(db.settings.webBasePath);
+  if (auth.currentUser(req)) return res.redirect(`${base}/`);
+  sendPage(res, 'login.html', base);
 });
+
+app.get('/', (req, res) => {
+  const base = normalizeBasePath(db.settings.webBasePath);
+  if (!auth.currentUser(req)) return res.redirect(`${base}/login`);
+  sendPage(res, 'index.html', base);
+});
+
+// anything else under the base path is a genuine 404. Serving index.html here
+// would hand HTML to fetches that expect JSON.
+app.use((req, res) => res.status(404).type('text/plain').send('404 Not Found'));
 
 app.use((err, req, res, next) => {
   console.error('[http]', err.message);

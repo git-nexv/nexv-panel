@@ -1,19 +1,44 @@
 'use strict';
 /* NexV Panel — single-page frontend, no build step. */
 
+/* The panel can live under a secret base path; the server injects it here.
+   Every request and redirect is built from it, so nothing depends on how the
+   current URL happens to be spelled. */
+const BASE = window.__NEXV_BASE__ || './';
+const REQUEST_TIMEOUT = 20000;
+
 /* ------------------------------- helpers -------------------------------- */
 
 const api = {
   async request(method, path, body) {
-    // relative URL: the panel may be served under a secret base path
-    const res = await fetch(`api${path}`, {
-      method,
-      headers: body ? { 'Content-Type': 'application/json' } : {},
-      body: body ? JSON.stringify(body) : undefined
-    });
-    if (res.status === 401) { location.href = 'login'; throw new Error('unauthorized'); }
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), REQUEST_TIMEOUT);
+    let res;
+    try {
+      res = await fetch(`${BASE}api${path}`, {
+        method,
+        headers: body ? { 'Content-Type': 'application/json' } : {},
+        body: body ? JSON.stringify(body) : undefined,
+        signal: abort.signal
+      });
+    } catch (err) {
+      throw new Error(err.name === 'AbortError'
+        ? 'The server did not respond in time'
+        : 'Could not reach the server');
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (res.status === 401) { location.href = `${BASE}login`; throw new Error('unauthorized'); }
     const text = await res.text();
-    const data = text ? JSON.parse(text) : {};
+    let data = {};
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch (_) {
+        throw new Error(`Unexpected reply from ${path} (HTTP ${res.status})`);
+      }
+    }
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     return data;
   },
@@ -39,10 +64,6 @@ const el = (tag, attrs = {}, children = []) => {
   return node;
 };
 
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
-  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-));
-
 function bytes(n) {
   n = Number(n) || 0;
   if (n < 1024) return `${n} B`;
@@ -56,15 +77,15 @@ function duration(seconds) {
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
   const m = Math.floor((seconds % 3600) / 60);
-  if (d) return `${d} روز و ${h} ساعت`;
-  if (h) return `${h} ساعت و ${m} دقیقه`;
-  return `${m} دقیقه`;
+  if (d) return `${d}d ${h}h`;
+  if (h) return `${h}h ${m}m`;
+  return `${m}m`;
 }
 
 function fmtDate(ts) {
-  if (!ts) return '∞';
+  if (!ts) return 'Never';
   try {
-    return new Intl.DateTimeFormat('fa-IR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(ts));
+    return new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(ts));
   } catch (_) { return new Date(ts).toLocaleString(); }
 }
 
@@ -87,7 +108,7 @@ function toast(message, kind = 'ok') {
 async function copy(text) {
   try {
     await navigator.clipboard.writeText(text);
-    toast('در کلیپ‌بورد کپی شد');
+    toast('Copied to clipboard');
   } catch (_) {
     const ta = el('textarea', { style: 'position:fixed;opacity:0' });
     ta.value = text;
@@ -95,7 +116,7 @@ async function copy(text) {
     ta.select();
     document.execCommand('copy');
     ta.remove();
-    toast('در کلیپ‌بورد کپی شد');
+    toast('Copied to clipboard');
   }
 }
 
@@ -104,6 +125,8 @@ async function copy(text) {
 const ICONS = {
   dashboard: '<path d="M3 13h8V3H3v10Zm0 8h8v-6H3v6Zm10 0h8V11h-8v10Zm0-18v6h8V3h-8Z"/>',
   inbounds: '<path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>',
+  outbounds: '<path d="M13 3v2h4.6l-8.3 8.3 1.4 1.4L19 6.4V11h2V3h-8ZM5 5h6v2H7v10h10v-4h2v6H5V5Z"/>',
+  routing: '<path d="M6 3a3 3 0 0 0-1 5.8V11a3 3 0 0 0 3 3h3v2.2a3 3 0 1 0 2 0V14h3a3 3 0 0 0 3-3V8.8A3 3 0 1 0 16 3a3 3 0 0 0-1 5.8V11a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V8.8A3 3 0 0 0 6 3Z"/>',
   clients: '<path d="M16 11a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm-8 1a3 3 0 1 0-3-3 3 3 0 0 0 3 3Zm0 2c-2.7 0-6 1.3-6 3.5V20h8v-2.5c0-1 .5-2 1.4-2.8A11 11 0 0 0 8 14Zm8 0c-3 0-8 1.5-8 4.2V20h16v-1.8C24 15.5 19 14 16 14Z"/>',
   settings: '<path d="M12 15.5A3.5 3.5 0 1 1 15.5 12 3.5 3.5 0 0 1 12 15.5Zm7.4-2.4.1-1.1-.1-1.1 2-1.5-2-3.4-2.3.9a7.6 7.6 0 0 0-1.9-1.1L14.8 3H9.2l-.4 2.4a7.6 7.6 0 0 0-1.9 1.1l-2.3-.9-2 3.4 2 1.5-.1 1.1.1 1.1-2 1.5 2 3.4 2.3-.9a7.6 7.6 0 0 0 1.9 1.1l.4 2.4h5.6l.4-2.4a7.6 7.6 0 0 0 1.9-1.1l2.3.9 2-3.4Z"/>',
   logs: '<path d="M4 4h16v2H4V4Zm0 5h16v2H4V9Zm0 5h11v2H4v-2Zm0 5h11v2H4v-2Z"/>',
@@ -118,6 +141,8 @@ const ICONS = {
   qr: '<path d="M3 3h8v8H3V3Zm2 2v4h4V5H5Zm8-2h8v8h-8V3Zm2 2v4h4V5h-4ZM3 13h8v8H3v-8Zm2 2v4h4v-4H5Zm10 0h2v2h-2v-2Zm4-2h2v2h-2v-2Zm-4 4h2v2h-2v-2Zm2 2h2v2h-2v-2Zm2-2h2v4h-2v-4Z"/>',
   copy: '<path d="M8 4h10a2 2 0 0 1 2 2v10h-2V6H8V4ZM5 8h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2Z"/>',
   power: '<path d="M11 3h2v10h-2V3Zm5.4 2.6 1.4-1.4A9 9 0 1 1 6.2 4.2l1.4 1.4a7 7 0 1 0 8.8 0Z"/>',
+  up: '<path d="m12 7 6 6-1.4 1.4L12 9.8l-4.6 4.6L6 13l6-6Z"/>',
+  down: '<path d="m12 17-6-6 1.4-1.4L12 14.2l4.6-4.6L18 11l-6 6Z"/>',
   empty: '<path d="M4 6h16v12H4V6Zm2 2v8h12V8H6Z" opacity=".7"/>'
 };
 
@@ -155,7 +180,7 @@ function modal({ title, subtitle, body, actions, width }) {
         onclick: () => action.onClick(close)
       }));
     }
-    bar.append(el('button', { class: 'btn ghost', text: 'بستن', onclick: close }));
+    bar.append(el('button', { class: 'btn ghost', text: 'Close', onclick: close }));
     box.append(bar);
   }
 
@@ -169,24 +194,47 @@ function modal({ title, subtitle, body, actions, width }) {
 
 function confirmDialog(message, onYes) {
   modal({
-    title: 'تأیید عملیات',
+    title: 'Please confirm',
     body: el('p', { class: 'muted', text: message }),
-    actions: [{ label: 'بله، انجام بده', kind: 'danger', onClick: (close) => { close(); onYes(); } }]
+    actions: [{ label: 'Yes, continue', kind: 'danger', onClick: (close) => { close(); onYes(); } }]
   });
+}
+
+/** Build one labelled form control and append it to a form grid. */
+function formField(form, label, control, opts = {}) {
+  const box = el('div', { class: `field ${opts.full ? 'full' : ''}` }, [el('label', { text: label }), control]);
+  if (opts.hint) box.append(el('div', { class: 'hint', text: opts.hint }));
+  form.append(box);
+  return control;
+}
+
+function selectOf(options, value) {
+  const control = el('select');
+  for (const opt of options) {
+    const o = typeof opt === 'string' ? { value: opt, label: opt } : opt;
+    control.append(el('option', { value: o.value, selected: String(value ?? '') === String(o.value) }, [o.label]));
+  }
+  return control;
 }
 
 /* ------------------------------ page: shell ------------------------------ */
 
 const PAGES = [
-  { id: 'dashboard', label: 'داشبورد', icon: 'dashboard' },
-  { id: 'inbounds', label: 'ورودی‌ها (Inbounds)', icon: 'inbounds' },
-  { id: 'clients', label: 'کاربران', icon: 'clients' },
-  { id: 'settings', label: 'تنظیمات پنل', icon: 'settings' },
-  { id: 'logs', label: 'رویدادها', icon: 'logs' },
-  { id: 'account', label: 'حساب مدیر', icon: 'account' }
+  { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
+  { id: 'inbounds', label: 'Inbounds', icon: 'inbounds' },
+  { id: 'clients', label: 'Clients', icon: 'clients' },
+  { id: 'outbounds', label: 'Outbounds', icon: 'outbounds' },
+  { id: 'routing', label: 'Routing', icon: 'routing' },
+  { id: 'settings', label: 'Settings', icon: 'settings' },
+  { id: 'logs', label: 'Logs', icon: 'logs' },
+  { id: 'account', label: 'Account', icon: 'account' }
 ];
 
-const state = { page: 'dashboard', inbounds: [], clients: [], settings: {}, timer: null };
+const state = {
+  page: 'dashboard',
+  inbounds: [], clients: [], outbounds: [], routing: [], settings: {},
+  protocols: null, timer: null
+};
 
 function renderNav() {
   const nav = document.getElementById('nav');
@@ -194,13 +242,14 @@ function renderNav() {
   for (const page of PAGES) {
     nav.append(el('div', {
       class: `nav-item ${state.page === page.id ? 'active' : ''}`,
-      html: `${icon(page.icon)}<span>${esc(page.label)}</span>`,
+      html: `${icon(page.icon)}<span>${page.label}</span>`,
       onclick: () => navigate(page.id)
     }));
   }
 }
 
 function navigate(page) {
+  if (!PAGES.some((p) => p.id === page)) page = 'dashboard';
   state.page = page;
   location.hash = page;
   document.getElementById('pageTitle').textContent = (PAGES.find((p) => p.id === page) || {}).label || '';
@@ -214,14 +263,25 @@ function render() {
   view.innerHTML = '';
   clearInterval(state.timer);
   state.timer = null;
-  ({
+  const painter = {
     dashboard: renderDashboard,
     inbounds: renderInbounds,
     clients: renderClients,
+    outbounds: renderOutbounds,
+    routing: renderRouting,
     settings: renderSettings,
     logs: renderLogs,
     account: renderAccount
-  }[state.page] || renderDashboard)(view);
+  }[state.page] || renderDashboard;
+
+  // a page that throws must say so rather than leaving an empty screen behind
+  Promise.resolve(painter(view)).catch((err) => {
+    view.innerHTML = '';
+    view.append(el('div', { class: 'card empty' }, [
+      el('div', { text: `Could not load this page: ${err.message}` }),
+      el('button', { class: 'btn', style: 'margin-top:14px', text: 'Try again', onclick: render })
+    ]));
+  });
 }
 
 /* ----------------------------- page: dashboard --------------------------- */
@@ -249,51 +309,52 @@ async function renderDashboard(view) {
 
     grid.innerHTML = '';
     grid.append(
-      statCard('پردازنده', `${s.cpu.percent}%`, `${s.cpu.cores} هسته`, s.cpu.percent,
+      statCard('CPU', `${s.cpu.percent}%`, `${s.cpu.cores} cores`, s.cpu.percent,
         s.cpu.percent > 85 ? 'danger' : s.cpu.percent > 60 ? 'warn' : ''),
-      statCard('حافظه', `${s.memory.percent}%`, `${bytes(s.memory.used)} از ${bytes(s.memory.total)}`,
+      statCard('Memory', `${s.memory.percent}%`, `${bytes(s.memory.used)} of ${bytes(s.memory.total)}`,
         s.memory.percent, s.memory.percent > 85 ? 'danger' : s.memory.percent > 60 ? 'warn' : ''),
-      statCard('دیسک', `${s.disk.percent}%`, `${bytes(s.disk.used)} از ${bytes(s.disk.total)}`,
+      statCard('Disk', `${s.disk.percent}%`, `${bytes(s.disk.used)} of ${bytes(s.disk.total)}`,
         s.disk.percent, s.disk.percent > 85 ? 'danger' : ''),
-      statCard('سرعت لحظه‌ای', `${bytes(s.network.speed.rx)}/s ↓`, `${bytes(s.network.speed.tx)}/s ↑`),
-      statCard('کاربران فعال', String(status.counts.clientsActive), `از ${status.counts.clients} کاربر`),
-      statCard('ورودی‌ها', String(status.counts.inboundsEnabled), `از ${status.counts.inbounds} ورودی`),
-      statCard('ترافیک کل', bytes(status.traffic.up + status.traffic.down),
+      statCard('Network', `${bytes(s.network.speed.rx)}/s ↓`, `${bytes(s.network.speed.tx)}/s ↑`),
+      statCard('Active clients', String(status.counts.clientsActive), `of ${status.counts.clients} total`),
+      statCard('Inbounds', String(status.counts.inboundsEnabled), `of ${status.counts.inbounds} total`),
+      statCard('Total traffic', bytes(status.traffic.up + status.traffic.down),
         `${bytes(status.traffic.down)} ↓ · ${bytes(status.traffic.up)} ↑`),
-      statCard('آپ‌تایم سرور', duration(s.uptime), s.platform)
+      statCard('Uptime', duration(s.uptime), s.platform)
     );
 
     info.innerHTML = '';
     info.append(
       el('div', { class: 'card' }, [
         el('div', { class: 'between', style: 'margin-bottom:14px' }, [
-          el('strong', { text: 'وضعیت Xray-core' }),
+          el('strong', { text: 'Xray-core' }),
           el('span', {
             class: `chip ${status.xray.running ? 'ok' : 'danger'}`,
-            html: `<i></i>${status.xray.running ? 'در حال اجرا' : 'متوقف'}`
+            html: `<i></i>${status.xray.running ? 'Running' : 'Stopped'}`
           })
         ]),
-        el('div', { class: 'muted', text: status.xray.version || 'نسخه نامشخص' }),
+        el('div', { class: 'muted', text: status.xray.version || 'version unknown' }),
         el('div', { class: 'row', style: 'margin-top:16px' }, [
-          el('button', { class: 'btn', html: `${icon('refresh')} ری‌استارت`, onclick: () => xrayAction('restart') }),
-          el('button', { class: 'btn', html: `${icon('power')} توقف`, onclick: () => xrayAction('stop') }),
-          el('button', { class: 'btn', html: `${icon('power')} شروع`, onclick: () => xrayAction('start') })
+          el('button', { class: 'btn', html: `${icon('refresh')} Restart`, onclick: () => xrayAction('restart') }),
+          el('button', { class: 'btn', html: `${icon('power')} Stop`, onclick: () => xrayAction('stop') }),
+          el('button', { class: 'btn', html: `${icon('power')} Start`, onclick: () => xrayAction('start') })
         ])
       ]),
       el('div', { class: 'card' }, [
-        el('strong', { text: 'اطلاعات سرور' }),
+        el('strong', { text: 'Server' }),
         el('div', { class: 'muted', style: 'margin-top:12px;line-height:2' }, [
-          el('div', { text: `نام میزبان: ${s.hostname}` }),
-          el('div', { text: `دامنه پنل: ${status.settings.domain || 'تنظیم نشده'}` }),
-          el('div', { text: `بار سیستم: ${s.loadavg.map((n) => n.toFixed(2)).join(' / ')}` }),
-          el('div', { text: `کاربران منقضی: ${status.counts.clientsExpired} · اتمام حجم: ${status.counts.clientsDepleted}` })
+          el('div', { text: `Hostname: ${s.hostname}` }),
+          el('div', { text: `Panel domain: ${status.settings.domain || 'not set'}` }),
+          el('div', { text: `Load average: ${s.loadavg.map((n) => n.toFixed(2)).join(' / ')}` }),
+          el('div', { text: `Outbounds: ${status.counts.outbounds} · Routing rules: ${status.counts.routingRules}` }),
+          el('div', { text: `Expired: ${status.counts.clientsExpired} · Out of quota: ${status.counts.clientsDepleted}` })
         ])
       ])
     );
 
     const chip = document.getElementById('xrayChip');
     chip.className = `chip ${status.xray.running ? 'ok' : 'danger'}`;
-    chip.innerHTML = `<i></i><span>Xray ${status.xray.running ? 'فعال' : 'خاموش'}</span>`;
+    chip.innerHTML = `<i></i><span>Xray ${status.xray.running ? 'up' : 'down'}</span>`;
     // keep just "Xray x.y.z"; the full build string overflows the sidebar
     const shortVersion = (status.xray.version || '').split('(')[0].trim();
     document.getElementById('xrayVersion').textContent = shortVersion || 'Xray-core';
@@ -302,40 +363,57 @@ async function renderDashboard(view) {
   await paint();
   // a hidden tab must not keep polling: it wakes the server for nothing
   state.timer = setInterval(() => { if (!document.hidden) paint(); }, 8000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) paint(); }, { once: false });
 }
 
 async function xrayAction(action) {
   try {
     await api.post(`/xray/${action}`);
-    toast('عملیات با موفقیت انجام شد');
+    toast('Done');
   } catch (err) {
     toast(err.message, 'err');
   }
 }
 
+/** Shared table scaffolding: header row, loading state, empty state. */
+function tableShell(view, { intro, addLabel, onAdd }) {
+  view.append(el('div', { class: 'between', style: 'margin-bottom:16px' }, [
+    el('div', { class: 'muted', text: intro }),
+    onAdd ? el('button', { class: 'btn primary', html: `${icon('plus')} ${addLabel}`, onclick: onAdd }) : null
+  ]));
+  const wrap = el('div', { class: 'table-wrap' });
+  wrap.innerHTML = '<div class="empty"><div class="skeleton" style="height:120px"></div></div>';
+  view.append(wrap);
+  return wrap;
+}
+
+function emptyState(wrap, message) {
+  wrap.innerHTML = `<div class="empty">${icon('empty', 42)}<div>${message}</div></div>`;
+}
+
 /* ----------------------------- page: inbounds ---------------------------- */
 
+async function loadProtocols() {
+  if (!state.protocols) state.protocols = await api.get('/protocols');
+  return state.protocols;
+}
+
 async function renderInbounds(view) {
-  view.append(el('div', { class: 'between', style: 'margin-bottom:16px' }, [
-    el('div', { class: 'muted', text: 'ورودی‌های Xray؛ هر ورودی یک پورت و پروتکل مستقل است.' }),
-    el('button', { class: 'btn primary', html: `${icon('plus')} ورودی جدید`, onclick: () => inboundForm(null) })
-  ]));
+  const wrap = tableShell(view, {
+    intro: 'Each inbound is one port and one protocol that clients connect to.',
+    addLabel: 'New inbound',
+    onAdd: () => inboundForm(null)
+  });
 
-  const wrap = el('div', { class: 'table-wrap' });
-  view.append(wrap);
-  wrap.innerHTML = '<div class="empty"><div class="skeleton" style="height:120px"></div></div>';
-
+  await loadProtocols();
   state.inbounds = await api.get('/inbounds');
   if (!state.inbounds.length) {
-    wrap.innerHTML = `<div class="empty">${icon('empty', 42)}<div>هنوز ورودی‌ای نساخته‌اید. با دکمه «ورودی جدید» شروع کنید.</div></div>`;
-    return;
+    return emptyState(wrap, 'No inbounds yet. Create one to start accepting connections.');
   }
 
   const table = el('table');
   table.innerHTML = `<thead><tr>
-    <th>نام</th><th>پروتکل</th><th>پورت</th><th>ترنسپورت</th>
-    <th>کاربران</th><th>ترافیک</th><th>وضعیت</th><th></th>
+    <th>Name</th><th>Protocol</th><th>Port</th><th>Transport</th>
+    <th>Clients</th><th>Traffic</th><th>Status</th><th></th>
   </tr></thead>`;
   const tbody = el('tbody');
 
@@ -349,20 +427,22 @@ async function renderInbounds(view) {
       el('td', { class: 'muted num', text: bytes(inb.up + inb.down) }),
       el('td', {}, [el('span', {
         class: `chip ${inb.enable === false ? '' : 'ok'}`,
-        html: `<i></i>${inb.enable === false ? 'غیرفعال' : 'فعال'}`
+        html: `<i></i>${inb.enable === false ? 'Disabled' : 'Enabled'}`
       })]),
       el('td', {}, [el('div', { class: 'row-actions' }, [
-        el('button', { class: 'btn icon ghost', title: 'ویرایش', html: icon('edit'), onclick: () => inboundForm(inb) }),
+        el('button', { class: 'btn icon ghost', title: 'Edit', html: icon('edit'), onclick: () => inboundForm(inb) }),
         el('button', {
-          class: 'btn icon ghost', title: 'فعال/غیرفعال', html: icon('power'),
-          onclick: async () => { await api.post(`/inbounds/${inb.id}/toggle`); toast('انجام شد'); render(); }
+          class: 'btn icon ghost', title: 'Enable / disable', html: icon('power'),
+          onclick: async () => { await api.post(`/inbounds/${inb.id}/toggle`); render(); }
         }),
         el('button', {
-          class: 'btn icon danger', title: 'حذف', html: icon('trash'),
-          onclick: () => confirmDialog(`ورودی «${inb.remark}» و همه کاربرانش حذف شود؟`, async () => {
-            await api.del(`/inbounds/${inb.id}`);
-            toast('ورودی حذف شد');
-            render();
+          class: 'btn icon danger', title: 'Delete', html: icon('trash'),
+          onclick: () => confirmDialog(`Delete inbound "${inb.remark}" and all of its clients?`, async () => {
+            try {
+              await api.del(`/inbounds/${inb.id}`);
+              toast('Inbound deleted');
+              render();
+            } catch (err) { toast(err.message, 'err'); }
           })
         })
       ])])
@@ -373,89 +453,108 @@ async function renderInbounds(view) {
   wrap.append(table);
 }
 
+const PROTOCOL_LABELS = {
+  vless: 'VLESS', vmess: 'VMess', trojan: 'Trojan', shadowsocks: 'Shadowsocks',
+  socks: 'SOCKS5', http: 'HTTP', 'dokodemo-door': 'Dokodemo-door', wireguard: 'WireGuard',
+  freedom: 'Freedom (direct)', blackhole: 'Blackhole (block)', dns: 'DNS'
+};
+
+const SS_METHODS = [
+  '2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm', '2022-blake3-chacha20-poly1305',
+  'aes-128-gcm', 'aes-256-gcm', 'chacha20-ietf-poly1305'
+];
+
 function inboundForm(existing) {
   const v = existing || {};
   const form = el('div', { class: 'form-grid' });
+  const protocols = (state.protocols && state.protocols.inbound) || ['vless'];
 
-  const input = (name, label, value, opts = {}) => {
-    const field = el('div', { class: `field ${opts.full ? 'full' : ''}` });
-    field.append(el('label', { text: label }));
-    let control;
-    if (opts.options) {
-      control = el('select', { name });
-      for (const opt of opts.options) {
-        control.append(el('option', { value: opt.value, selected: String(value) === String(opt.value) }, [opt.label]));
-      }
-    } else {
-      control = el('input', { name, type: opts.type || 'text', value: value ?? '', placeholder: opts.placeholder || '' });
-    }
-    field.append(control);
-    if (opts.hint) field.append(el('div', { class: 'hint', text: opts.hint }));
-    form.append(field);
-    return control;
+  const input = (label, value, opts = {}) => {
+    const control = opts.options
+      ? selectOf(opts.options, value)
+      : el('input', { type: opts.type || 'text', value: value ?? '', placeholder: opts.placeholder || '' });
+    return formField(form, label, control, opts);
   };
 
-  const remark = input('remark', 'نام ورودی', v.remark || 'inbound-1');
-  const port = input('port', 'پورت', v.port || Math.floor(20000 + Math.random() * 40000), { type: 'number' });
-  const protocol = input('protocol', 'پروتکل', v.protocol || 'vless', {
-    options: [
-      { value: 'vless', label: 'VLESS' }, { value: 'vmess', label: 'VMess' },
-      { value: 'trojan', label: 'Trojan' }, { value: 'shadowsocks', label: 'Shadowsocks' }
-    ]
+  const remark = input('Name', v.remark || 'inbound-1');
+  const port = input('Port', v.port || Math.floor(20000 + Math.random() * 40000), { type: 'number' });
+  const protocol = input('Protocol', v.protocol || 'vless', {
+    options: protocols.map((p) => ({ value: p, label: PROTOCOL_LABELS[p] || p }))
   });
-  const network = input('network', 'ترنسپورت', v.network || 'tcp', {
+  const network = input('Transport', v.network || 'tcp', {
     options: [
       { value: 'tcp', label: 'TCP' }, { value: 'ws', label: 'WebSocket' },
       { value: 'grpc', label: 'gRPC' }, { value: 'httpupgrade', label: 'HTTPUpgrade' },
-      { value: 'xhttp', label: 'XHTTP' }
+      { value: 'xhttp', label: 'XHTTP' }, { value: 'kcp', label: 'mKCP' }
     ]
   });
-  const security = input('security', 'امنیت', v.security || 'none', {
+  const security = input('Security', v.security || 'none', {
     options: [{ value: 'none', label: 'None' }, { value: 'tls', label: 'TLS' }, { value: 'reality', label: 'REALITY' }]
   });
-  const address = input('address', 'آدرس اتصال (اختیاری)', v.address || '', {
-    hint: 'اگر خالی باشد از دامنه یا IP سرور استفاده می‌شود'
+  const address = input('Connect address (optional)', v.address || '', {
+    hint: 'Used in share links. Defaults to the panel domain or server IP.'
   });
 
-  // conditional groups
-  const wsPath = input('wsPath', 'مسیر (Path)', v.wsPath || '/nexv', {});
-  const wsHost = input('wsHost', 'هدر Host', v.wsHost || '', {});
-  const grpcService = input('grpcServiceName', 'نام سرویس gRPC', v.grpcServiceName || 'nexv-grpc', {});
-  const sni = input('sni', 'SNI', v.sni || '', {});
-  const certFile = input('certFile', 'مسیر گواهی TLS', v.certFile || '', { full: true, placeholder: '/etc/letsencrypt/live/example.com/fullchain.pem' });
-  const keyFile = input('keyFile', 'مسیر کلید TLS', v.keyFile || '', { full: true, placeholder: '/etc/letsencrypt/live/example.com/privkey.pem' });
-  const rDest = input('rdest', 'مقصد REALITY', (v.reality && v.reality.dest) || 'www.cloudflare.com:443', {});
-  const rNames = input('rnames', 'Server Names', (v.reality && (v.reality.serverNames || []).join(',')) || 'www.cloudflare.com', {});
-  const rPriv = input('rpriv', 'Private Key', (v.reality && v.reality.privateKey) || '', { full: true, hint: 'خالی بگذارید تا خودکار ساخته شود' });
-  const rPub = input('rpub', 'Public Key', (v.reality && v.reality.publicKey) || '', { full: true });
-  const rShort = input('rshort', 'Short IDs', (v.reality && (v.reality.shortIds || []).join(',')) || '', {});
-  const ssMethod = input('method', 'روش رمزنگاری', v.method || '2022-blake3-aes-128-gcm', {
-    options: ['2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm', 'aes-128-gcm', 'chacha20-ietf-poly1305']
-      .map((m) => ({ value: m, label: m }))
+  const wsPath = input('Path', v.wsPath || '/nexv');
+  const wsHost = input('Host header', v.wsHost || '');
+  const grpcService = input('gRPC service name', v.grpcServiceName || 'nexv-grpc');
+  const kcpSeed = input('mKCP seed', v.kcpSeed || '');
+  const kcpHeader = input('mKCP header', v.kcpHeader || 'none', {
+    options: ['none', 'srtp', 'utp', 'wechat-video', 'dtls', 'wireguard']
   });
+  const sni = input('SNI', v.sni || '');
+  const certFile = input('TLS certificate', v.certFile || '', { full: true, placeholder: '/etc/letsencrypt/live/example.com/fullchain.pem' });
+  const keyFile = input('TLS private key', v.keyFile || '', { full: true, placeholder: '/etc/letsencrypt/live/example.com/privkey.pem' });
+  const rDest = input('REALITY dest', (v.reality && v.reality.dest) || 'www.cloudflare.com:443');
+  const rNames = input('Server names', (v.reality && (v.reality.serverNames || []).join(',')) || 'www.cloudflare.com');
+  const rPriv = input('Private key', (v.reality && v.reality.privateKey) || '', { full: true, hint: 'Leave empty to generate a new key pair' });
+  const rPub = input('Public key', (v.reality && v.reality.publicKey) || '', { full: true });
+  const rShort = input('Short IDs', (v.reality && (v.reality.shortIds || []).join(',')) || '');
+  const ssMethod = input('Cipher', v.method || '2022-blake3-aes-128-gcm', { options: SS_METHODS });
+  const targetAddress = input('Forward to address', v.targetAddress || '127.0.0.1');
+  const targetPort = input('Forward to port', v.targetPort || 0, { type: 'number' });
+  const targetNetwork = input('Forwarded networks', v.targetNetwork || 'tcp,udp', {
+    options: ['tcp,udp', 'tcp', 'udp']
+  });
+  const wgPrivateKey = input('WireGuard private key', v.wgPrivateKey || '', { full: true });
+  const wgMtu = input('MTU', v.wgMtu || 1420, { type: 'number' });
 
   const fieldOf = (control) => control.closest('.field');
   const groups = {
+    stream: [fieldOf(network), fieldOf(security), fieldOf(address)],
     ws: [fieldOf(wsPath), fieldOf(wsHost)],
     grpc: [fieldOf(grpcService)],
+    kcp: [fieldOf(kcpSeed), fieldOf(kcpHeader)],
     tls: [fieldOf(sni), fieldOf(certFile), fieldOf(keyFile)],
     reality: [fieldOf(rDest), fieldOf(rNames), fieldOf(rPriv), fieldOf(rPub), fieldOf(rShort)],
-    ss: [fieldOf(ssMethod)]
+    ss: [fieldOf(ssMethod)],
+    doko: [fieldOf(targetAddress), fieldOf(targetPort), fieldOf(targetNetwork)],
+    wg: [fieldOf(wgPrivateKey), fieldOf(wgMtu)]
   };
 
+  const show = (nodes, on) => nodes.forEach((n) => n.classList.toggle('hidden', !on));
+
   const sync = () => {
+    const proto = protocol.value;
+    // wireguard and dokodemo-door carry no xray transport of their own
+    const hasStream = proto !== 'wireguard' && proto !== 'dokodemo-door';
     const net = network.value;
     const sec = security.value;
-    const show = (nodes, on) => nodes.forEach((n) => n.classList.toggle('hidden', !on));
-    show(groups.ws, net === 'ws' || net === 'httpupgrade' || net === 'xhttp');
-    show(groups.grpc, net === 'grpc');
-    show(groups.tls, sec === 'tls');
-    show(groups.reality, sec === 'reality');
-    show(groups.ss, protocol.value === 'shadowsocks');
+
+    show(groups.stream, hasStream);
+    show(groups.ws, hasStream && (net === 'ws' || net === 'httpupgrade' || net === 'xhttp'));
+    show(groups.grpc, hasStream && net === 'grpc');
+    show(groups.kcp, hasStream && net === 'kcp');
+    show(groups.tls, hasStream && sec === 'tls');
+    show(groups.reality, hasStream && sec === 'reality');
+    show(groups.ss, proto === 'shadowsocks');
+    show(groups.doko, proto === 'dokodemo-door');
+    show(groups.wg, proto === 'wireguard');
+
     // REALITY only works over raw TCP or gRPC/xhttp; keep the pairing sane
-    if (sec === 'reality' && (net === 'ws' || net === 'httpupgrade')) {
+    if (hasStream && sec === 'reality' && (net === 'ws' || net === 'httpupgrade')) {
       security.value = 'none';
-      toast('REALITY با WebSocket سازگار نیست', 'err');
+      toast('REALITY cannot be combined with WebSocket', 'err');
       sync();
     }
   };
@@ -463,12 +562,12 @@ function inboundForm(existing) {
   sync();
 
   modal({
-    title: existing ? 'ویرایش ورودی' : 'ورودی جدید',
-    subtitle: 'پس از ذخیره، تنظیمات روی Xray اعمال و سرویس ری‌استارت می‌شود.',
+    title: existing ? 'Edit inbound' : 'New inbound',
+    subtitle: 'Saving writes the Xray config and restarts the service.',
     body: form,
     width: 680,
     actions: [{
-      label: existing ? 'ذخیره تغییرات' : 'ایجاد ورودی',
+      label: existing ? 'Save changes' : 'Create inbound',
       kind: 'primary',
       onClick: async (close) => {
         const payload = {
@@ -481,10 +580,17 @@ function inboundForm(existing) {
           wsPath: wsPath.value,
           wsHost: wsHost.value,
           grpcServiceName: grpcService.value,
+          kcpSeed: kcpSeed.value,
+          kcpHeader: kcpHeader.value,
           sni: sni.value,
           certFile: certFile.value,
           keyFile: keyFile.value,
           method: ssMethod.value,
+          targetAddress: targetAddress.value,
+          targetPort: Number(targetPort.value),
+          targetNetwork: targetNetwork.value,
+          wgPrivateKey: wgPrivateKey.value,
+          wgMtu: Number(wgMtu.value),
           reality: {
             dest: rDest.value,
             serverNames: rNames.value.split(',').map((s) => s.trim()).filter(Boolean),
@@ -497,7 +603,7 @@ function inboundForm(existing) {
           if (existing) await api.put(`/inbounds/${existing.id}`, payload);
           else await api.post('/inbounds', payload);
           close();
-          toast('ورودی ذخیره شد');
+          toast('Inbound saved');
           render();
         } catch (err) {
           toast(err.message, 'err');
@@ -510,31 +616,25 @@ function inboundForm(existing) {
 /* ------------------------------ page: clients ---------------------------- */
 
 async function renderClients(view) {
-  view.append(el('div', { class: 'between', style: 'margin-bottom:16px' }, [
-    el('div', { class: 'muted', text: 'کاربران هر ورودی، همراه با محدودیت حجم و تاریخ انقضا.' }),
-    el('button', { class: 'btn primary', html: `${icon('plus')} کاربر جدید`, onclick: () => clientForm(null) })
-  ]));
+  const wrap = tableShell(view, {
+    intro: 'Clients of each inbound, with their quota and expiry.',
+    addLabel: 'New client',
+    onAdd: () => clientForm(null)
+  });
 
-  const wrap = el('div', { class: 'table-wrap' });
-  view.append(wrap);
-
+  await loadProtocols();
   const [inbounds, clients] = await Promise.all([api.get('/inbounds'), api.get('/clients')]);
   state.inbounds = inbounds;
   state.clients = clients;
 
-  if (!inbounds.length) {
-    wrap.innerHTML = `<div class="empty">${icon('empty', 42)}<div>ابتدا یک ورودی بسازید، سپس کاربر اضافه کنید.</div></div>`;
-    return;
-  }
-  if (!clients.length) {
-    wrap.innerHTML = `<div class="empty">${icon('empty', 42)}<div>هنوز کاربری اضافه نشده است.</div></div>`;
-    return;
-  }
+  if (!inbounds.length) return emptyState(wrap, 'Create an inbound first, then add clients to it.');
+  if (!clients.length) return emptyState(wrap, 'No clients yet.');
 
+  const withLinks = (state.protocols && state.protocols.withLinks) || [];
   const table = el('table');
   table.innerHTML = `<thead><tr>
-    <th>نام کاربر</th><th>ورودی</th><th>مصرف</th><th>حجم</th>
-    <th>انقضا</th><th>وضعیت</th><th></th>
+    <th>Client</th><th>Inbound</th><th>Used</th><th>Quota</th>
+    <th>Expires</th><th>Status</th><th></th>
   </tr></thead>`;
   const tbody = el('tbody');
 
@@ -543,12 +643,13 @@ async function renderClients(view) {
     const quota = (c.totalGB || 0) * 1024 ** 3;
     const percent = quota ? (used / quota) * 100 : 0;
     const left = daysLeft(c.expiryTime);
+    const shareable = withLinks.includes(c.protocol) && !!c.link;
 
     let statusChip;
-    if (c.enable === false) statusChip = el('span', { class: 'chip', html: '<i></i>غیرفعال' });
-    else if (c.expired) statusChip = el('span', { class: 'chip danger', html: '<i></i>منقضی' });
-    else if (c.depleted) statusChip = el('span', { class: 'chip danger', html: '<i></i>اتمام حجم' });
-    else statusChip = el('span', { class: 'chip ok', html: '<i></i>فعال' });
+    if (c.enable === false) statusChip = el('span', { class: 'chip', html: '<i></i>Disabled' });
+    else if (c.expired) statusChip = el('span', { class: 'chip danger', html: '<i></i>Expired' });
+    else if (c.depleted) statusChip = el('span', { class: 'chip danger', html: '<i></i>Out of quota' });
+    else statusChip = el('span', { class: 'chip ok', html: '<i></i>Active' });
 
     tbody.append(el('tr', {}, [
       el('td', {}, [
@@ -560,26 +661,28 @@ async function renderClients(view) {
         el('div', { class: 'num', text: bytes(used) }),
         quota ? el('div', { class: `bar ${percent > 90 ? 'danger' : percent > 70 ? 'warn' : ''}`, style: 'width:110px', html: `<i style="width:${Math.min(100, percent)}%"></i>` }) : null
       ]),
-      el('td', { class: 'muted num', text: c.totalGB ? `${c.totalGB} GB` : 'نامحدود' }),
+      el('td', { class: 'muted num', text: c.totalGB ? `${c.totalGB} GB` : 'Unlimited' }),
       el('td', { class: 'muted' }, [
         el('div', { text: fmtDate(c.expiryTime) }),
-        left !== null ? el('div', { class: 'faint', style: 'font-size:11px', text: left > 0 ? `${left} روز مانده` : 'گذشته' }) : null
+        left !== null ? el('div', { class: 'faint', style: 'font-size:11px', text: left > 0 ? `${left} days left` : 'past due' }) : null
       ]),
       el('td', {}, [statusChip]),
       el('td', {}, [el('div', { class: 'row-actions' }, [
-        el('button', { class: 'btn icon ghost', title: 'QR و لینک', html: icon('qr'), onclick: () => showClientLink(c) }),
-        el('button', { class: 'btn icon ghost', title: 'کپی لینک', html: icon('copy'), onclick: () => copy(c.link) }),
-        el('button', { class: 'btn icon ghost', title: 'ویرایش', html: icon('edit'), onclick: () => clientForm(c) }),
+        shareable ? el('button', { class: 'btn icon ghost', title: 'QR code and links', html: icon('qr'), onclick: () => showClientLink(c) }) : null,
+        shareable ? el('button', { class: 'btn icon ghost', title: 'Copy config link', html: icon('copy'), onclick: () => copy(c.link) }) : null,
+        el('button', { class: 'btn icon ghost', title: 'Edit', html: icon('edit'), onclick: () => clientForm(c) }),
         el('button', {
-          class: 'btn icon ghost', title: 'فعال/غیرفعال', html: icon('power'),
+          class: 'btn icon ghost', title: 'Enable / disable', html: icon('power'),
           onclick: async () => { await api.post(`/clients/${c.id}/toggle`); render(); }
         }),
         el('button', {
-          class: 'btn icon danger', title: 'حذف', html: icon('trash'),
-          onclick: () => confirmDialog(`کاربر «${c.email}» حذف شود؟`, async () => {
-            await api.del(`/clients/${c.id}`);
-            toast('کاربر حذف شد');
-            render();
+          class: 'btn icon danger', title: 'Delete', html: icon('trash'),
+          onclick: () => confirmDialog(`Delete client "${c.email}"?`, async () => {
+            try {
+              await api.del(`/clients/${c.id}`);
+              toast('Client deleted');
+              render();
+            } catch (err) { toast(err.message, 'err'); }
           })
         })
       ])])
@@ -596,55 +699,58 @@ async function showClientLink(client) {
     api.get(`/clients/${client.id}/sub-url`)
   ]);
   const body = el('div', { class: 'qr-box' }, [
-    el('img', { src: qr.dataUrl, alt: 'QR' }),
+    el('img', { src: qr.dataUrl, alt: 'QR code' }),
     el('div', { class: 'link-box', text: qr.content }),
     el('div', { class: 'row' }, [
-      el('button', { class: 'btn', html: `${icon('copy')} کپی لینک کانفیگ`, onclick: () => copy(qr.content) }),
-      el('button', { class: 'btn', html: `${icon('copy')} کپی لینک اشتراک`, onclick: () => copy(sub.url) })
+      el('button', { class: 'btn', html: `${icon('copy')} Copy config link`, onclick: () => copy(qr.content) }),
+      el('button', { class: 'btn', html: `${icon('copy')} Copy subscription`, onclick: () => copy(sub.url) })
     ]),
     el('div', { class: 'link-box', text: sub.url })
   ]);
-  modal({ title: `کانفیگ ${client.email}`, subtitle: 'با اسکن QR یا کپی لینک، کانفیگ را به کلاینت اضافه کنید.', body, width: 440 });
+  modal({ title: `Config for ${client.email}`, subtitle: 'Scan the code or copy a link into your client app.', body, width: 440 });
 }
 
 function clientForm(existing) {
   const v = existing || {};
   const form = el('div', { class: 'form-grid' });
 
-  const field = (label, control, opts = {}) => {
-    const box = el('div', { class: `field ${opts.full ? 'full' : ''}` }, [el('label', { text: label }), control]);
-    if (opts.hint) box.append(el('div', { class: 'hint', text: opts.hint }));
-    form.append(box);
-    return control;
-  };
-
-  const email = field('نام کاربر', el('input', { value: v.email || '', placeholder: 'user-01' }));
+  const email = formField(form, 'Client name', el('input', { value: v.email || '', placeholder: 'user-01' }));
   const inboundSel = el('select');
   for (const inb of state.inbounds) {
     inboundSel.append(el('option', { value: inb.id, selected: v.inboundId === inb.id }, [`${inb.remark} · ${inb.protocol}:${inb.port}`]));
   }
-  field('ورودی', inboundSel);
+  formField(form, 'Inbound', inboundSel);
 
-  const uuid = field('UUID', el('input', { value: v.uuid || '', placeholder: 'خالی = ساخت خودکار' }), { full: true });
-  const totalGB = field('محدودیت حجم (GB)', el('input', { type: 'number', min: '0', value: v.totalGB || 0 }), { hint: '۰ یعنی نامحدود' });
+  const uuid = formField(form, 'UUID', el('input', { value: v.uuid || '', placeholder: 'leave empty to generate' }), { full: true });
+  const password = formField(form, 'Password / key', el('input', { value: v.password || '', placeholder: 'leave empty to generate' }),
+    { full: true, hint: 'Used by Trojan, Shadowsocks, SOCKS and HTTP inbounds' });
+  const totalGB = formField(form, 'Quota (GB)', el('input', { type: 'number', min: '0', value: v.totalGB || 0 }), { hint: '0 means unlimited' });
 
   const days = el('input', { type: 'number', min: '0', value: v.expiryTime ? Math.max(0, daysLeft(v.expiryTime)) : 30 });
-  field('اعتبار (روز)', days, { hint: '۰ یعنی بدون انقضا' });
+  formField(form, 'Valid for (days)', days, { hint: '0 means no expiry' });
 
-  const limitIp = field('محدودیت IP همزمان', el('input', { type: 'number', min: '0', value: v.limitIp || 0 }));
-  const flowSel = el('select');
-  for (const opt of [{ value: '', label: 'بدون flow' }, { value: 'xtls-rprx-vision', label: 'xtls-rprx-vision' }]) {
-    flowSel.append(el('option', { value: opt.value, selected: (v.flow || '') === opt.value }, [opt.label]));
-  }
-  field('Flow (فقط VLESS + TCP)', flowSel);
-  const comment = field('یادداشت', el('input', { value: v.comment || '' }), { full: true });
+  const limitIp = formField(form, 'Concurrent IP limit', el('input', { type: 'number', min: '0', value: v.limitIp || 0 }));
+  const flowSel = selectOf([{ value: '', label: 'No flow' }, { value: 'xtls-rprx-vision', label: 'xtls-rprx-vision' }], v.flow || '');
+  formField(form, 'Flow (VLESS over TCP only)', flowSel);
+  const wgPublicKey = formField(form, 'WireGuard peer public key', el('input', { value: v.wgPublicKey || '' }), { full: true });
+  const wgAllowedIPs = formField(form, 'WireGuard allowed IPs', el('input', { value: (v.wgAllowedIPs || []).join(',') , placeholder: '10.0.0.2/32' }), { full: true });
+  const comment = formField(form, 'Note', el('input', { value: v.comment || '' }), { full: true });
+
+  // only show the WireGuard peer fields when the selected inbound needs them
+  const syncProtocol = () => {
+    const inb = state.inbounds.find((i) => i.id === inboundSel.value);
+    const isWg = inb && inb.protocol === 'wireguard';
+    for (const control of [wgPublicKey, wgAllowedIPs]) control.closest('.field').classList.toggle('hidden', !isWg);
+  };
+  inboundSel.addEventListener('change', syncProtocol);
+  syncProtocol();
 
   modal({
-    title: existing ? 'ویرایش کاربر' : 'کاربر جدید',
+    title: existing ? 'Edit client' : 'New client',
     body: form,
     width: 640,
     actions: [{
-      label: 'ذخیره',
+      label: 'Save',
       kind: 'primary',
       onClick: async (close) => {
         const dayCount = Number(days.value);
@@ -652,17 +758,381 @@ function clientForm(existing) {
           email: email.value.trim(),
           inboundId: inboundSel.value,
           uuid: uuid.value.trim() || undefined,
+          password: password.value.trim() || undefined,
           totalGB: Number(totalGB.value),
           expiryTime: dayCount > 0 ? Date.now() + dayCount * 86400000 : 0,
           limitIp: Number(limitIp.value),
           flow: flowSel.value,
+          wgPublicKey: wgPublicKey.value.trim(),
+          wgAllowedIPs: wgAllowedIPs.value,
           comment: comment.value
         };
         try {
           if (existing) await api.put(`/clients/${existing.id}`, payload);
           else await api.post('/clients', payload);
           close();
-          toast('کاربر ذخیره شد');
+          toast('Client saved');
+          render();
+        } catch (err) {
+          toast(err.message, 'err');
+        }
+      }
+    }]
+  });
+}
+
+/* ----------------------------- page: outbounds --------------------------- */
+
+async function renderOutbounds(view) {
+  const wrap = tableShell(view, {
+    intro: 'Where traffic leaves the server. "direct" and "blocked" are always available.',
+    addLabel: 'New outbound',
+    onAdd: () => outboundForm(null)
+  });
+
+  await loadProtocols();
+  state.outbounds = await api.get('/outbounds');
+  state.settings = await api.get('/settings');
+
+  if (!state.outbounds.length) {
+    return emptyState(wrap, 'No custom outbounds. Traffic leaves directly through the server.');
+  }
+
+  const table = el('table');
+  table.innerHTML = `<thead><tr>
+    <th>Tag</th><th>Protocol</th><th>Server</th><th>Transport</th><th>Status</th><th></th>
+  </tr></thead>`;
+  const tbody = el('tbody');
+
+  for (const out of state.outbounds) {
+    const isDefault = (state.settings.defaultOutbound || 'direct') === out.tag;
+    tbody.append(el('tr', {}, [
+      el('td', {}, [
+        el('strong', { text: out.tag }),
+        isDefault ? el('div', { class: 'faint', style: 'font-size:11px', text: 'default route' }) : null
+      ]),
+      el('td', {}, [el('span', { class: 'chip brand', text: out.protocol })]),
+      el('td', { class: 'mono', text: out.address ? `${out.address}:${out.port}` : '—' }),
+      el('td', { class: 'muted', text: `${out.network || 'tcp'}${out.security && out.security !== 'none' ? ` · ${out.security}` : ''}` }),
+      el('td', {}, [el('span', {
+        class: `chip ${out.enable === false ? '' : 'ok'}`,
+        html: `<i></i>${out.enable === false ? 'Disabled' : 'Enabled'}`
+      })]),
+      el('td', {}, [el('div', { class: 'row-actions' }, [
+        el('button', { class: 'btn icon ghost', title: 'Edit', html: icon('edit'), onclick: () => outboundForm(out) }),
+        el('button', {
+          class: 'btn icon ghost', title: 'Enable / disable', html: icon('power'),
+          onclick: async () => { await api.post(`/outbounds/${out.id}/toggle`); render(); }
+        }),
+        el('button', {
+          class: 'btn icon danger', title: 'Delete', html: icon('trash'),
+          onclick: () => confirmDialog(`Delete outbound "${out.tag}"?`, async () => {
+            try {
+              await api.del(`/outbounds/${out.id}`);
+              toast('Outbound deleted');
+              render();
+            } catch (err) { toast(err.message, 'err'); }
+          })
+        })
+      ])])
+    ]));
+  }
+  table.append(tbody);
+  wrap.innerHTML = '';
+  wrap.append(table);
+}
+
+function outboundForm(existing) {
+  const v = existing || {};
+  const form = el('div', { class: 'form-grid' });
+  const protocols = (state.protocols && state.protocols.outbound) || ['freedom'];
+
+  const input = (label, value, opts = {}) => {
+    const control = opts.options
+      ? selectOf(opts.options, value)
+      : el('input', { type: opts.type || 'text', value: value ?? '', placeholder: opts.placeholder || '' });
+    return formField(form, label, control, opts);
+  };
+
+  const tag = input('Tag', v.tag || 'proxy', { hint: 'Referenced by routing rules' });
+  const protocol = input('Protocol', v.protocol || 'freedom', {
+    options: protocols.map((p) => ({ value: p, label: PROTOCOL_LABELS[p] || p }))
+  });
+  const address = input('Server address', v.address || '');
+  const port = input('Server port', v.port || 443, { type: 'number' });
+  const uuid = input('UUID', v.uuid || '', { full: true });
+  const username = input('Username', v.username || '');
+  const password = input('Password', v.password || '');
+  const method = input('Cipher', v.method || 'aes-256-gcm', {
+    options: ['aes-128-gcm', 'aes-256-gcm', 'chacha20-ietf-poly1305', '2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm']
+  });
+  const flow = input('Flow', v.flow || '', { options: [{ value: '', label: 'No flow' }, { value: 'xtls-rprx-vision', label: 'xtls-rprx-vision' }] });
+  const network = input('Transport', v.network || 'tcp', {
+    options: [
+      { value: 'tcp', label: 'TCP' }, { value: 'ws', label: 'WebSocket' },
+      { value: 'grpc', label: 'gRPC' }, { value: 'httpupgrade', label: 'HTTPUpgrade' }
+    ]
+  });
+  const security = input('Security', v.security || 'none', {
+    options: [{ value: 'none', label: 'None' }, { value: 'tls', label: 'TLS' }]
+  });
+  const wsPath = input('Path', v.wsPath || '/');
+  const wsHost = input('Host header', v.wsHost || '');
+  const grpcService = input('gRPC service name', v.grpcServiceName || '');
+  const sni = input('SNI', v.sni || '');
+  const domainStrategy = input('Domain strategy', v.domainStrategy || 'AsIs', {
+    options: ['AsIs', 'UseIP', 'UseIPv4', 'UseIPv6']
+  });
+  const blackholeResponse = input('Blackhole response', v.blackholeResponse || 'none', {
+    options: ['none', 'http']
+  });
+  const wgPrivateKey = input('WireGuard private key', v.wgPrivateKey || '', { full: true });
+  const wgPeerPublicKey = input('Peer public key', v.wgPeerPublicKey || '', { full: true });
+  const wgAddress = input('Local addresses', (v.wgAddress || ['10.0.0.2/32']).join(','), { full: true });
+  const wgMtu = input('MTU', v.wgMtu || 1420, { type: 'number' });
+
+  const fieldOf = (control) => control.closest('.field');
+  const show = (nodes, on) => nodes.forEach((n) => n.classList.toggle('hidden', !on));
+  const groups = {
+    server: [fieldOf(address), fieldOf(port)],
+    uuid: [fieldOf(uuid)],
+    userpass: [fieldOf(username), fieldOf(password)],
+    passwordOnly: [fieldOf(password)],
+    ss: [fieldOf(method)],
+    flow: [fieldOf(flow)],
+    stream: [fieldOf(network), fieldOf(security)],
+    ws: [fieldOf(wsPath), fieldOf(wsHost)],
+    grpc: [fieldOf(grpcService)],
+    tls: [fieldOf(sni)],
+    freedom: [fieldOf(domainStrategy)],
+    blackhole: [fieldOf(blackholeResponse)],
+    wg: [fieldOf(wgPrivateKey), fieldOf(wgPeerPublicKey), fieldOf(wgAddress), fieldOf(wgMtu)]
+  };
+
+  const sync = () => {
+    const p = protocol.value;
+    const proxyLike = ['vless', 'vmess', 'trojan', 'shadowsocks', 'socks', 'http'].includes(p);
+    const net = network.value;
+
+    show(groups.server, proxyLike || p === 'wireguard');
+    show(groups.uuid, p === 'vless' || p === 'vmess');
+    show(groups.userpass, p === 'socks' || p === 'http');
+    show(groups.passwordOnly, p === 'trojan' || p === 'shadowsocks' || p === 'socks' || p === 'http');
+    show(groups.ss, p === 'shadowsocks');
+    show(groups.flow, p === 'vless');
+    show(groups.stream, proxyLike);
+    show(groups.ws, proxyLike && (net === 'ws' || net === 'httpupgrade'));
+    show(groups.grpc, proxyLike && net === 'grpc');
+    show(groups.tls, proxyLike && security.value === 'tls');
+    show(groups.freedom, p === 'freedom');
+    show(groups.blackhole, p === 'blackhole');
+    show(groups.wg, p === 'wireguard');
+  };
+  [protocol, network, security].forEach((c) => c.addEventListener('change', sync));
+  sync();
+
+  modal({
+    title: existing ? 'Edit outbound' : 'New outbound',
+    subtitle: 'Outbounds are selected by routing rules, by tag.',
+    body: form,
+    width: 680,
+    actions: [{
+      label: existing ? 'Save changes' : 'Create outbound',
+      kind: 'primary',
+      onClick: async (close) => {
+        const payload = {
+          tag: tag.value.trim(),
+          protocol: protocol.value,
+          address: address.value.trim(),
+          port: Number(port.value),
+          uuid: uuid.value.trim(),
+          username: username.value.trim(),
+          password: password.value,
+          method: method.value,
+          flow: flow.value,
+          network: network.value,
+          security: security.value,
+          wsPath: wsPath.value,
+          wsHost: wsHost.value,
+          grpcServiceName: grpcService.value,
+          sni: sni.value,
+          domainStrategy: domainStrategy.value,
+          blackholeResponse: blackholeResponse.value,
+          wgPrivateKey: wgPrivateKey.value.trim(),
+          wgPeerPublicKey: wgPeerPublicKey.value.trim(),
+          wgAddress: wgAddress.value,
+          wgMtu: Number(wgMtu.value)
+        };
+        try {
+          if (existing) await api.put(`/outbounds/${existing.id}`, payload);
+          else await api.post('/outbounds', payload);
+          close();
+          toast('Outbound saved');
+          render();
+        } catch (err) {
+          toast(err.message, 'err');
+        }
+      }
+    }]
+  });
+}
+
+/* ------------------------------ page: routing ---------------------------- */
+
+async function renderRouting(view) {
+  const wrap = tableShell(view, {
+    intro: 'Rules are evaluated top to bottom; the first match decides the outbound.',
+    addLabel: 'New rule',
+    onAdd: () => routingForm(null)
+  });
+
+  const data = await api.get('/routing');
+  state.routing = data.rules;
+
+  // default route / domain strategy sit above the rule list
+  const defaultSel = selectOf(data.outboundTags, data.defaultOutbound);
+  const strategySel = selectOf(['AsIs', 'IPIfNonMatch', 'IPOnDemand'], data.domainStrategy);
+  const controls = el('div', { class: 'card' }, [
+    el('div', { class: 'form-grid' }, [
+      el('div', { class: 'field' }, [
+        el('label', { text: 'Default outbound' }), defaultSel,
+        el('div', { class: 'hint', text: 'Used when no rule matches' })
+      ]),
+      el('div', { class: 'field' }, [
+        el('label', { text: 'Domain strategy' }), strategySel,
+        el('div', { class: 'hint', text: 'How domains are resolved before matching IP rules' })
+      ])
+    ]),
+    el('button', {
+      class: 'btn primary', text: 'Save routing options',
+      onclick: async () => {
+        try {
+          await api.put('/settings', { defaultOutbound: defaultSel.value, domainStrategy: strategySel.value });
+          toast('Routing options saved');
+          render();
+        } catch (err) { toast(err.message, 'err'); }
+      }
+    })
+  ]);
+  view.insertBefore(controls, wrap);
+  view.insertBefore(el('div', { class: 'section-title', text: 'Rules' }), wrap);
+
+  if (!state.routing.length) {
+    return emptyState(wrap, 'No routing rules. Everything follows the default outbound.');
+  }
+
+  const move = async (index, delta) => {
+    const order = state.routing.map((r) => r.id);
+    const target = index + delta;
+    if (target < 0 || target >= order.length) return;
+    [order[index], order[target]] = [order[target], order[index]];
+    try {
+      await api.post('/routing/reorder', { order });
+      render();
+    } catch (err) { toast(err.message, 'err'); }
+  };
+
+  const table = el('table');
+  table.innerHTML = `<thead><tr>
+    <th>#</th><th>Name</th><th>Match</th><th>Outbound</th><th>Status</th><th></th>
+  </tr></thead>`;
+  const tbody = el('tbody');
+
+  state.routing.forEach((rule, index) => {
+    const conditions = [
+      rule.domain && `domain: ${rule.domain}`,
+      rule.ip && `ip: ${rule.ip}`,
+      rule.port && `port: ${rule.port}`,
+      rule.source && `source: ${rule.source}`,
+      rule.network && `network: ${rule.network}`,
+      rule.protocol && `protocol: ${rule.protocol}`,
+      rule.inboundTag && `inbound: ${rule.inboundTag}`,
+      rule.user && `user: ${rule.user}`
+    ].filter(Boolean);
+
+    tbody.append(el('tr', {}, [
+      el('td', { class: 'muted mono', text: String(index + 1) }),
+      el('td', {}, [el('strong', { text: rule.name })]),
+      el('td', { class: 'muted', style: 'max-width:320px' }, [
+        el('div', { class: 'mono', style: 'white-space:normal', text: conditions.join('  ·  ') })
+      ]),
+      el('td', {}, [el('span', { class: 'chip brand', text: rule.outboundTag })]),
+      el('td', {}, [el('span', {
+        class: `chip ${rule.enable === false ? '' : 'ok'}`,
+        html: `<i></i>${rule.enable === false ? 'Disabled' : 'Enabled'}`
+      })]),
+      el('td', {}, [el('div', { class: 'row-actions' }, [
+        el('button', { class: 'btn icon ghost', title: 'Move up', html: icon('up'), onclick: () => move(index, -1) }),
+        el('button', { class: 'btn icon ghost', title: 'Move down', html: icon('down'), onclick: () => move(index, 1) }),
+        el('button', { class: 'btn icon ghost', title: 'Edit', html: icon('edit'), onclick: () => routingForm(rule, data.outboundTags) }),
+        el('button', {
+          class: 'btn icon ghost', title: 'Enable / disable', html: icon('power'),
+          onclick: async () => { await api.post(`/routing/${rule.id}/toggle`); render(); }
+        }),
+        el('button', {
+          class: 'btn icon danger', title: 'Delete', html: icon('trash'),
+          onclick: () => confirmDialog(`Delete rule "${rule.name}"?`, async () => {
+            try {
+              await api.del(`/routing/${rule.id}`);
+              toast('Rule deleted');
+              render();
+            } catch (err) { toast(err.message, 'err'); }
+          })
+        })
+      ])])
+    ]));
+  });
+  table.append(tbody);
+  wrap.innerHTML = '';
+  wrap.append(table);
+}
+
+async function routingForm(existing, tags) {
+  const v = existing || {};
+  const outboundTags = tags || (await api.get('/routing')).outboundTags;
+  const form = el('div', { class: 'form-grid' });
+
+  const name = formField(form, 'Rule name', el('input', { value: v.name || 'rule-1' }));
+  const outboundTag = formField(form, 'Send matching traffic to', selectOf(outboundTags, v.outboundTag || 'direct'));
+  const domain = formField(form, 'Domains', el('input', { value: v.domain || '', placeholder: 'geosite:category-ads-all, example.com' }),
+    { full: true, hint: 'Comma separated. Supports geosite:, domain:, full: and regexp: prefixes.' });
+  const ip = formField(form, 'IP ranges', el('input', { value: v.ip || '', placeholder: 'geoip:ir, 1.1.1.1/32' }),
+    { full: true, hint: 'Comma separated. Supports geoip: prefixes and CIDRs.' });
+  const port = formField(form, 'Destination ports', el('input', { value: v.port || '', placeholder: '443 or 1000-2000' }));
+  const sourcePort = formField(form, 'Source ports', el('input', { value: v.sourcePort || '' }));
+  const network = formField(form, 'Network', selectOf([{ value: '', label: 'Any' }, 'tcp', 'udp', 'tcp,udp'], v.network || ''));
+  const protocol = formField(form, 'Protocols', el('input', { value: v.protocol || '', placeholder: 'http, tls, bittorrent' }));
+  const source = formField(form, 'Source IPs', el('input', { value: v.source || '' }), { full: true });
+  const inboundTag = formField(form, 'Inbound tags', el('input', { value: v.inboundTag || '' }), { full: true });
+  const user = formField(form, 'Users', el('input', { value: v.user || '' }), { full: true, hint: 'Client emails as shown in the Xray config' });
+
+  modal({
+    title: existing ? 'Edit rule' : 'New routing rule',
+    subtitle: 'Fill in at least one condition. Empty fields are ignored.',
+    body: form,
+    width: 680,
+    actions: [{
+      label: existing ? 'Save changes' : 'Create rule',
+      kind: 'primary',
+      onClick: async (close) => {
+        const payload = {
+          name: name.value.trim(),
+          outboundTag: outboundTag.value,
+          domain: domain.value,
+          ip: ip.value,
+          port: port.value,
+          sourcePort: sourcePort.value,
+          network: network.value,
+          protocol: protocol.value,
+          source: source.value,
+          inboundTag: inboundTag.value,
+          user: user.value
+        };
+        try {
+          if (existing) await api.put(`/routing/${existing.id}`, payload);
+          else await api.post('/routing', payload);
+          close();
+          toast('Rule saved');
           render();
         } catch (err) {
           toast(err.message, 'err');
@@ -691,31 +1161,29 @@ async function renderSettings(view) {
     ]));
   };
 
-  add('domain', 'دامنه پنل', s.domain, { hint: 'برای لینک‌های اشتراک و TLS استفاده می‌شود' });
-  add('webBasePath', 'مسیر مخفی پنل (Web Path)', s.webBasePath || '',
-    { hint: 'مثلاً /myPanel — خالی یعنی بدون مسیر مخفی. بعد از ذخیره باید با آدرس جدید وارد شوید' });
-  add('panelPort', 'پورت پنل', s.panelPort, { type: 'number', hint: 'تغییر پورت نیازمند ری‌استارت سرویس پنل است' });
-  add('subPort', 'پورت لینک اشتراک', s.subPort, { type: 'number' });
-  add('subPath', 'مسیر اشتراک', s.subPath);
-  add('certFile', 'گواهی TLS پیش‌فرض', s.certFile, { full: true, placeholder: '/etc/letsencrypt/live/example.com/fullchain.pem' });
-  add('keyFile', 'کلید TLS پیش‌فرض', s.keyFile, { full: true, placeholder: '/etc/letsencrypt/live/example.com/privkey.pem' });
+  add('domain', 'Panel domain', s.domain, { hint: 'Used for share links and TLS' });
+  add('webBasePath', 'Secret web path', s.webBasePath || '',
+    { hint: 'For example /myPanel. Empty means no secret path. You will be moved to the new URL after saving.' });
+  add('panelPort', 'Panel port', s.panelPort, { type: 'number', hint: 'Changing this needs a panel restart (nexv restart)' });
+  add('subPort', 'Subscription port', s.subPort, { type: 'number' });
+  add('subPath', 'Subscription path', s.subPath);
+  add('subTitle', 'Subscription title', s.subTitle || 'NexV');
+  add('certFile', 'Default TLS certificate', s.certFile, { full: true, placeholder: '/etc/letsencrypt/live/example.com/fullchain.pem' });
+  add('keyFile', 'Default TLS private key', s.keyFile, { full: true, placeholder: '/etc/letsencrypt/live/example.com/privkey.pem' });
 
-  const logLevel = el('select');
-  for (const level of ['none', 'error', 'warning', 'info', 'debug']) {
-    logLevel.append(el('option', { value: level, selected: (s.xrayLogLevel || 'warning') === level }, [level]));
-  }
-  grid.append(el('div', { class: 'field' }, [el('label', { text: 'سطح لاگ Xray' }), logLevel]));
+  const logLevel = selectOf(['none', 'error', 'warning', 'info', 'debug'], s.xrayLogLevel || 'warning');
+  grid.append(el('div', { class: 'field' }, [el('label', { text: 'Xray log level' }), logLevel]));
 
   const torrent = el('input', { type: 'checkbox' });
   torrent.checked = !!s.blockTorrent;
   grid.append(el('div', { class: 'field' }, [
-    el('label', { text: 'مسدودسازی بیت‌تورنت' }),
-    el('label', { class: 'switch' }, [torrent, el('span', { class: 'track' }), el('span', { class: 'muted', text: 'ترافیک تورنت بلاک شود' })])
+    el('label', { text: 'BitTorrent' }),
+    el('label', { class: 'switch' }, [torrent, el('span', { class: 'track' }), el('span', { class: 'muted', text: 'Block torrent traffic' })])
   ]));
 
   card.append(grid, el('div', { class: 'row', style: 'margin-top:8px' }, [
     el('button', {
-      class: 'btn primary', text: 'ذخیره تنظیمات',
+      class: 'btn primary', text: 'Save settings',
       onclick: async () => {
         const payload = { xrayLogLevel: logLevel.value, blockTorrent: torrent.checked };
         for (const [key, control] of Object.entries(inputs)) {
@@ -729,25 +1197,25 @@ async function renderSettings(view) {
             // the current page lives under the old path; send the admin to the new one
             const url = `${location.origin}${newPath}/`;
             modal({
-              title: 'مسیر پنل تغییر کرد',
-              subtitle: 'آدرس جدید را ذخیره کنید؛ آدرس قبلی دیگر کار نمی‌کند.',
+              title: 'The panel path changed',
+              subtitle: 'Save the new address — the old one stops working.',
               body: el('div', {}, [el('div', { class: 'link-box', text: url })]),
-              actions: [{ label: 'رفتن به آدرس جدید', kind: 'primary', onClick: () => { location.href = url; } }]
+              actions: [{ label: 'Go to the new address', kind: 'primary', onClick: () => { location.href = url; } }]
             });
             return;
           }
-          toast(result.restartNeeded ? 'ذخیره شد — برای تغییر پورت پنل، سرویس را ری‌استارت کنید (nexv restart)' : 'تنظیمات ذخیره شد');
+          toast(result.restartNeeded ? 'Saved — run "nexv restart" to apply the new panel port' : 'Settings saved');
         } catch (err) { toast(err.message, 'err'); }
       }
     })
   ]));
   view.append(card);
 
-  view.append(el('div', { class: 'section-title', text: 'پشتیبان‌گیری' }));
+  view.append(el('div', { class: 'section-title', text: 'Backup' }));
   view.append(el('div', { class: 'card row' }, [
-    el('a', { class: 'btn', href: 'api/backup', download: '' }, ['دانلود فایل پشتیبان']),
+    el('a', { class: 'btn', href: `${BASE}api/backup`, download: '' }, ['Download backup']),
     el('button', {
-      class: 'btn', text: 'بازیابی از فایل',
+      class: 'btn', text: 'Restore from file',
       onclick: () => {
         const picker = el('input', { type: 'file', accept: 'application/json', class: 'hidden' });
         picker.addEventListener('change', async () => {
@@ -755,7 +1223,7 @@ async function renderSettings(view) {
           if (!file) return;
           try {
             await api.post('/restore', JSON.parse(await file.text()));
-            toast('پیکربندی بازیابی شد');
+            toast('Configuration restored');
             render();
           } catch (err) { toast(err.message, 'err'); }
         });
@@ -765,11 +1233,11 @@ async function renderSettings(view) {
       }
     }),
     el('button', {
-      class: 'btn ghost', text: 'مشاهده config.json',
+      class: 'btn ghost', text: 'View config.json',
       onclick: async () => {
         const cfg = await api.get('/xray/config');
         modal({
-          title: 'پیکربندی فعلی Xray',
+          title: 'Current Xray configuration',
           body: el('textarea', { readonly: 'readonly', style: 'min-height:340px' }, [JSON.stringify(cfg, null, 2)]),
           width: 760
         });
@@ -783,12 +1251,12 @@ async function renderSettings(view) {
 async function renderLogs(view) {
   const logs = await api.get('/logs');
   if (!logs.length) {
-    view.innerHTML = `<div class="card empty">${icon('empty', 42)}<div>رویدادی ثبت نشده است.</div></div>`;
+    view.innerHTML = `<div class="card empty">${icon('empty', 42)}<div>Nothing logged yet.</div></div>`;
     return;
   }
   const wrap = el('div', { class: 'table-wrap' });
   const table = el('table');
-  table.innerHTML = '<thead><tr><th>زمان</th><th>نوع</th><th>رویداد</th></tr></thead>';
+  table.innerHTML = '<thead><tr><th>Time</th><th>Type</th><th>Event</th></tr></thead>';
   const tbody = el('tbody');
   for (const log of logs) {
     tbody.append(el('tr', {}, [
@@ -812,18 +1280,18 @@ async function renderAccount(view) {
   const next = el('input', { type: 'password', autocomplete: 'new-password' });
 
   form.append(
-    el('div', { class: 'field' }, [el('label', { text: 'نام کاربری' }), username]),
-    el('div', { class: 'field' }, [el('label', { text: 'رمز عبور فعلی' }), current]),
+    el('div', { class: 'field' }, [el('label', { text: 'Username' }), username]),
+    el('div', { class: 'field' }, [el('label', { text: 'Current password' }), current]),
     el('div', { class: 'field full' }, [
-      el('label', { text: 'رمز عبور جدید' }), next,
-      el('div', { class: 'hint', text: 'خالی بگذارید تا رمز تغییر نکند' })
+      el('label', { text: 'New password' }), next,
+      el('div', { class: 'hint', text: 'Leave empty to keep the current password' })
     ])
   );
 
   view.append(el('div', { class: 'card' }, [
     form,
     el('button', {
-      class: 'btn primary', text: 'ذخیره حساب',
+      class: 'btn primary', text: 'Save account',
       onclick: async () => {
         try {
           await api.post('/account', {
@@ -831,8 +1299,8 @@ async function renderAccount(view) {
             password: next.value || undefined,
             currentPassword: current.value
           });
-          toast('حساب به‌روزرسانی شد؛ دوباره وارد شوید');
-          setTimeout(() => { location.href = 'login'; }, 1200);
+          toast('Account updated — please sign in again');
+          setTimeout(() => { location.href = `${BASE}login`; }, 1200);
         } catch (err) { toast(err.message, 'err'); }
       }
     })
@@ -851,8 +1319,8 @@ document.getElementById('themeToggle').addEventListener('click', () => {
 });
 
 document.getElementById('logoutBtn').addEventListener('click', async () => {
-  await api.post('/logout');
-  location.href = 'login';
+  try { await api.post('/logout'); } catch (_) { /* sign out locally anyway */ }
+  location.href = `${BASE}login`;
 });
 
 document.getElementById('menuBtn').addEventListener('click', () => {

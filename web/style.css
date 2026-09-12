@@ -47,7 +47,7 @@ body {
     radial-gradient(900px 520px at 96% 4%, rgba(155,108,255,.13), transparent 62%),
     var(--bg);
   color: var(--text);
-  font-family: "Vazirmatn", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Vazirmatn", sans-serif;
   font-size: 14px;
   line-height: 1.65;
   -webkit-font-smoothing: antialiased;

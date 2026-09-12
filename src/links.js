@@ -1,5 +1,5 @@
 'use strict';
-/** Share-link generation (vless / vmess / trojan / ss) and subscription rendering. */
+/** Share-link generation (vless / vmess / trojan / ss / socks) and subscription rendering. */
 const db = require('./db');
 
 function hostFor(inb) {
@@ -75,6 +75,11 @@ function buildLink(inb, client) {
       fp: inb.fingerprint || ''
     };
     return `vmess://${Buffer.from(JSON.stringify(conf)).toString('base64')}`;
+  }
+
+  if (inb.protocol === 'socks') {
+    const userinfo = Buffer.from(`${client.email}:${client.password || client.uuid}`).toString('base64url');
+    return `socks://${userinfo}@${host}:${port}#${encodeURIComponent(remark)}`;
   }
 
   if (inb.protocol === 'shadowsocks') {

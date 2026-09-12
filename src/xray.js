@@ -13,6 +13,25 @@ const XRAY_CONFIG = process.env.NEXV_XRAY_CONFIG || '/usr/local/etc/xray/config.
 const XRAY_SERVICE = process.env.NEXV_XRAY_SERVICE || 'xray';
 const API_PORT = 62789;
 
+/** Inbound protocols the panel can configure. */
+const INBOUND_PROTOCOLS = [
+  'vless', 'vmess', 'trojan', 'shadowsocks',
+  'socks', 'http', 'dokodemo-door', 'wireguard'
+];
+
+/** Outbound protocols the panel can configure. */
+const OUTBOUND_PROTOCOLS = [
+  'freedom', 'blackhole', 'dns',
+  'vless', 'vmess', 'trojan', 'shadowsocks',
+  'socks', 'http', 'wireguard'
+];
+
+/** Protocols that carry per-user accounts, so the Clients page applies to them. */
+const CLIENT_PROTOCOLS = ['vless', 'vmess', 'trojan', 'shadowsocks', 'socks', 'http', 'wireguard'];
+
+/** Protocols whose clients get a shareable subscription link. */
+const LINK_PROTOCOLS = ['vless', 'vmess', 'trojan', 'shadowsocks', 'socks'];
+
 function run(cmd, args, timeout = 15000) {
   return new Promise((resolve) => {
     execFile(cmd, args, { timeout, encoding: 'utf8' }, (err, stdout, stderr) => {
@@ -46,6 +65,8 @@ function streamSettings(inb) {
     s.httpupgradeSettings = { path: inb.wsPath || '/', host: inb.wsHost || '' };
   } else if (net === 'xhttp') {
     s.xhttpSettings = { path: inb.wsPath || '/', host: inb.wsHost || '', mode: inb.xhttpMode || 'auto' };
+  } else if (net === 'kcp') {
+    s.kcpSettings = { seed: inb.kcpSeed || '', header: { type: inb.kcpHeader || 'none' } };
   } else {
     s.tcpSettings = { header: { type: 'none' } };
   }
@@ -99,9 +120,187 @@ function inboundSettings(inb, clients) {
         // ss-2022 multi-user rejects a per-client method; the inbound-level one applies
         clients: active.map((c) => ({ password: c.password || c.uuid, email: clientTag(c) }))
       };
+    case 'socks':
+      // with no accounts the inbound would be an open proxy, so require auth
+      return {
+        auth: active.length ? 'password' : 'noauth',
+        accounts: active.map((c) => ({ user: c.email, pass: c.password || c.uuid })),
+        udp: inb.udp !== false,
+        ip: inb.udp !== false ? (inb.listen && inb.listen !== '0.0.0.0' ? inb.listen : '127.0.0.1') : undefined
+      };
+    case 'http':
+      return {
+        accounts: active.map((c) => ({ user: c.email, pass: c.password || c.uuid })),
+        allowTransparent: false
+      };
+    case 'dokodemo-door':
+      return {
+        address: inb.targetAddress || '127.0.0.1',
+        port: Number(inb.targetPort || 0) || undefined,
+        network: inb.targetNetwork || 'tcp,udp',
+        followRedirect: !!inb.followRedirect
+      };
+    case 'wireguard':
+      return {
+        secretKey: inb.wgPrivateKey || '',
+        mtu: Number(inb.wgMtu || 1420),
+        peers: active.map((c) => ({
+          publicKey: c.wgPublicKey || '',
+          allowedIPs: (c.wgAllowedIPs && c.wgAllowedIPs.length)
+            ? c.wgAllowedIPs
+            : ['0.0.0.0/0', '::/0']
+        })).filter((p) => p.publicKey)
+      };
     default:
       return { clients: [] };
   }
+}
+
+/** Render one stored outbound into the shape xray expects. */
+function outboundConfig(out) {
+  const stream = () => {
+    const s = streamSettings(out);
+    // an outbound with plain tcp and no security needs no streamSettings at all
+    if (s.network === 'tcp' && s.security === 'none') return undefined;
+    return s;
+  };
+  const host = out.address || '';
+  const port = Number(out.port || 0);
+
+  switch (out.protocol) {
+    case 'freedom':
+      return {
+        tag: out.tag,
+        protocol: 'freedom',
+        settings: {
+          domainStrategy: out.domainStrategy || 'AsIs',
+          redirect: out.redirect || undefined
+        }
+      };
+    case 'blackhole':
+      return {
+        tag: out.tag,
+        protocol: 'blackhole',
+        settings: { response: { type: out.blackholeResponse || 'none' } }
+      };
+    case 'dns':
+      return { tag: out.tag, protocol: 'dns', settings: {} };
+    case 'vless':
+      return {
+        tag: out.tag,
+        protocol: 'vless',
+        settings: {
+          vnext: [{
+            address: host,
+            port,
+            users: [{ id: out.uuid || '', encryption: 'none', flow: out.flow || '' }]
+          }]
+        },
+        streamSettings: stream()
+      };
+    case 'vmess':
+      return {
+        tag: out.tag,
+        protocol: 'vmess',
+        settings: {
+          vnext: [{ address: host, port, users: [{ id: out.uuid || '', alterId: 0, security: out.encryption || 'auto' }] }]
+        },
+        streamSettings: stream()
+      };
+    case 'trojan':
+      return {
+        tag: out.tag,
+        protocol: 'trojan',
+        settings: { servers: [{ address: host, port, password: out.password || '' }] },
+        streamSettings: stream()
+      };
+    case 'shadowsocks':
+      return {
+        tag: out.tag,
+        protocol: 'shadowsocks',
+        settings: {
+          servers: [{
+            address: host,
+            port,
+            method: out.method || 'aes-256-gcm',
+            password: out.password || '',
+            uot: !!out.uot
+          }]
+        },
+        streamSettings: stream()
+      };
+    case 'socks':
+      return {
+        tag: out.tag,
+        protocol: 'socks',
+        settings: {
+          servers: [Object.assign(
+            { address: host, port },
+            out.username ? { users: [{ user: out.username, pass: out.password || '' }] } : {}
+          )]
+        },
+        streamSettings: stream()
+      };
+    case 'http':
+      return {
+        tag: out.tag,
+        protocol: 'http',
+        settings: {
+          servers: [Object.assign(
+            { address: host, port },
+            out.username ? { users: [{ user: out.username, pass: out.password || '' }] } : {}
+          )]
+        },
+        streamSettings: stream()
+      };
+    case 'wireguard':
+      return {
+        tag: out.tag,
+        protocol: 'wireguard',
+        settings: {
+          secretKey: out.wgPrivateKey || '',
+          address: (out.wgAddress && out.wgAddress.length) ? out.wgAddress : ['10.0.0.2/32'],
+          mtu: Number(out.wgMtu || 1420),
+          peers: [{
+            publicKey: out.wgPeerPublicKey || '',
+            endpoint: host && port ? `${host}:${port}` : '',
+            allowedIPs: ['0.0.0.0/0', '::/0'],
+            preSharedKey: out.wgPreSharedKey || undefined
+          }]
+        }
+      };
+    default:
+      return null;
+  }
+}
+
+/** Turn a stored routing rule into an xray routing rule, dropping empty fields. */
+function routingRule(rule) {
+  const list = (value) => {
+    if (Array.isArray(value)) return value.filter(Boolean);
+    const parts = String(value || '').split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+    return parts.length ? parts : undefined;
+  };
+  const out = {
+    type: 'field',
+    outboundTag: rule.outboundTag || 'direct',
+    domain: list(rule.domain),
+    ip: list(rule.ip),
+    port: rule.port ? String(rule.port) : undefined,
+    sourcePort: rule.sourcePort ? String(rule.sourcePort) : undefined,
+    network: rule.network || undefined,
+    protocol: list(rule.protocol),
+    source: list(rule.source),
+    user: list(rule.user),
+    inboundTag: list(rule.inboundTag)
+  };
+  for (const key of Object.keys(out)) {
+    if (out[key] === undefined) delete out[key];
+  }
+  // a rule with no condition would swallow every connection
+  const hasCondition = ['domain', 'ip', 'port', 'sourcePort', 'network', 'protocol', 'source', 'user', 'inboundTag']
+    .some((key) => out[key] !== undefined);
+  return hasCondition ? out : null;
 }
 
 /** Stats keys are per-email, so the tag must be unique across all inbounds. */
@@ -140,15 +339,49 @@ function buildConfig() {
   for (const inb of d.inbounds) {
     if (inb.enable === false) continue;
     const clients = d.clients.filter((c) => c.inboundId === inb.id);
-    inbounds.push({
+    const entry = {
       tag: inb.tag,
       listen: inb.listen || '0.0.0.0',
       port: Number(inb.port),
       protocol: inb.protocol,
       settings: inboundSettings(inb, clients),
-      streamSettings: streamSettings(inb),
       sniffing: { enabled: inb.sniffing !== false, destOverride: ['http', 'tls', 'quic'] }
-    });
+    };
+    // wireguard and dokodemo-door carry no transport of their own
+    if (inb.protocol !== 'wireguard') entry.streamSettings = streamSettings(inb);
+    inbounds.push(entry);
+  }
+
+  const builtin = [
+    { tag: 'direct', protocol: 'freedom', settings: {} },
+    { tag: 'blocked', protocol: 'blackhole', settings: {} }
+  ];
+  const custom = [];
+  for (const out of (d.outbounds || [])) {
+    if (out.enable === false) continue;
+    const rendered = outboundConfig(out);
+    if (rendered) custom.push(rendered);
+  }
+
+  // the first outbound is xray's default for traffic no rule matched
+  const defaultTag = d.settings.defaultOutbound || 'direct';
+  const outbounds = [...builtin, ...custom];
+  const defaultIdx = outbounds.findIndex((o) => o.tag === defaultTag);
+  if (defaultIdx > 0) outbounds.unshift(outbounds.splice(defaultIdx, 1)[0]);
+
+  const rules = [
+    { type: 'field', inboundTag: ['api'], outboundTag: 'api' },
+    // explicit CIDRs rather than geoip:private, so the config never depends
+    // on geoip.dat being present next to the binary
+    { type: 'field', outboundTag: 'blocked', ip: PRIVATE_RANGES }
+  ];
+  for (const rule of (d.routing || [])) {
+    if (rule.enable === false) continue;
+    const rendered = routingRule(rule);
+    if (rendered) rules.push(rendered);
+  }
+  if (d.settings.blockTorrent) {
+    rules.push({ type: 'field', protocol: ['bittorrent'], outboundTag: 'blocked' });
   }
 
   return {
@@ -160,23 +393,10 @@ function buildConfig() {
       system: { statsInboundUplink: true, statsInboundDownlink: true }
     },
     inbounds,
-    outbounds: [
-      { tag: 'direct', protocol: 'freedom', settings: {} },
-      { tag: 'blocked', protocol: 'blackhole', settings: {} }
-    ],
-    routing: {
-      domainStrategy: 'AsIs',
-      rules: [
-        { type: 'field', inboundTag: ['api'], outboundTag: 'api' },
-        // explicit CIDRs rather than geoip:private, so the config never depends
-        // on geoip.dat being present next to the binary
-        { type: 'field', outboundTag: 'blocked', ip: PRIVATE_RANGES },
-        { type: 'field', protocol: ['bittorrent'], outboundTag: d.settings.blockTorrent ? 'blocked' : 'direct' }
-      ]
-    }
+    outbounds,
+    routing: { domainStrategy: d.settings.domainStrategy || 'AsIs', rules }
   };
 }
-
 function writeConfig() {
   const cfg = buildConfig();
   fs.mkdirSync(path.dirname(XRAY_CONFIG), { recursive: true });
@@ -311,6 +531,7 @@ module.exports = {
   xrayVersion,
   XRAY_BIN, XRAY_CONFIG, XRAY_SERVICE, API_PORT,
   buildConfig, writeConfig, testConfig, apply, serviceStatus,
+  INBOUND_PROTOCOLS, OUTBOUND_PROTOCOLS, CLIENT_PROTOCOLS, LINK_PROTOCOLS,
   restart, start, stop, collectTraffic, enforceLimits,
   clientTag, isExpired, isOverQuota, generateReality, run
 };
