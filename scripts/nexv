@@ -500,7 +500,12 @@ act_doctor() {
   if is_port_in_use "$port"; then
     local owner
     owner="$(port_owner "$port")"
-    ok "A process is listening on port $port${owner:+ ($owner)}"
+    if [[ -n $owner && $owner != *node* && $owner != *nexv* ]]; then
+      err "Port $port is held by a DIFFERENT program: $owner"
+      echo "    The panel cannot be serving there. Move it with: nexv fix"
+    else
+      ok "A process is listening on port $port${owner:+ ($owner)}"
+    fi
   elif command -v ss >/dev/null || command -v netstat >/dev/null || command -v lsof >/dev/null; then
     err "Nothing is listening on port $port"
     echo "    The panel is down or failed to bind. Check: nexv logs 50"
@@ -532,6 +537,18 @@ act_doctor() {
       ;;
     *) ok "No firewall is filtering the panel port" ;;
   esac
+
+  # a panel parked on an unusual port is the classic "it runs but will not
+  # open": carriers, office networks and captive portals filter everything
+  # except 80 and 443
+  if [[ $port != 443 && $port != 80 ]]; then
+    if is_port_in_use 443; then
+      warn "Port $port is easily filtered by mobile and office networks, and 443 is taken"
+    else
+      warn "Port $port is easily filtered by mobile and office networks"
+      echo "    Port 443 is free. Move the panel there with: nexv fix"
+    fi
+  fi
 
   # two panels managing one Xray is a fight neither wins
   if [[ -f /usr/local/bin/x-ui || -d /usr/local/x-ui || -d /etc/x-ui ]]; then
@@ -567,6 +584,118 @@ act_doctor() {
     [[ $code == 301 ]] && ok "Port 80 redirects to HTTPS" || warn "Port 80 is not redirecting (HTTP $code)"
   fi
   echo
+}
+
+# Put the panel somewhere the outside world can actually reach it.
+#
+# Port 443 is the one port that is open on every network - office wifi, mobile
+# carriers, captive portals. Panels parked on 2053, 2087 and friends are the
+# usual reason a running panel "does not open": the process is healthy and the
+# port is simply filtered somewhere between the browser and the server.
+act_fix() {
+  need_root
+  echo
+  echo "${BOLD}Making the panel reachable${RESET}"
+  echo
+
+  local port target owner
+  port="$(panel_port)"
+  printf "  %-24s %s\n" "Current panel port" "$port"
+
+  local cert key secure
+  cert="$(DATA_DIR=$DATA_DIR node -e '
+    const db = require(process.env.DATA_DIR + "/db.json");
+    const s = db.settings || {};
+    process.stdout.write(s.panelCertFile || s.certFile || "");
+  ' 2>/dev/null)"
+  key="$(DATA_DIR=$DATA_DIR node -e '
+    const db = require(process.env.DATA_DIR + "/db.json");
+    const s = db.settings || {};
+    process.stdout.write(s.panelKeyFile || s.keyFile || "");
+  ' 2>/dev/null)"
+  secure=no
+  [[ -n $cert && -n $key && -f $cert && -f $key ]] && secure=yes
+  printf "  %-24s %s\n" "HTTPS" "$secure"
+
+  if [[ $secure == no ]]; then
+    err "No certificate yet, so the panel cannot move to 443."
+    echo "  Run this first:  nexv cert <your-domain>"
+    return 1
+  fi
+
+  # is somebody else sitting on our configured port?
+  if is_port_in_use "$port"; then
+    owner="$(port_owner "$port")"
+    if [[ -n $owner && $owner != *node* && $owner != *nexv* ]]; then
+      warn "Port $port is held by another program: $owner"
+      echo "  The panel cannot be serving there; that is very likely the whole problem."
+    fi
+  fi
+
+  target=443
+  if [[ $port == 443 ]]; then
+    ok "The panel is already on 443"
+  elif is_port_in_use 443; then
+    owner="$(port_owner 443)"
+    err "Port 443 is already taken by: ${owner:-another process}"
+    echo "  Free it (often nginx or apache: systemctl stop nginx), then run: nexv fix"
+    return 1
+  else
+    info_port_move "$port" "$target" || return 1
+  fi
+
+  allow_port 443
+  allow_port 80
+
+  systemctl restart "$SERVICE"
+  sleep 3
+  if ! systemctl is-active --quiet "$SERVICE"; then
+    err "The panel did not come back up."
+    journalctl -u "$SERVICE" -n 20 --no-pager | sed 's/^/    /'
+    return 1
+  fi
+
+  local webpath host url code
+  webpath="$(DATA_DIR=$DATA_DIR node -e '
+    const db = require(process.env.DATA_DIR + "/db.json");
+    process.stdout.write((db.settings && db.settings.webBasePath) || "");
+  ' 2>/dev/null)"
+  host="$(DATA_DIR=$DATA_DIR node -e '
+    const db = require(process.env.DATA_DIR + "/db.json");
+    const s = db.settings || {};
+    process.stdout.write(s.domain || s.serverIP || "127.0.0.1");
+  ' 2>/dev/null)"
+
+  url="https://127.0.0.1:443${webpath}/login"
+  code="$(curl -sk -o /dev/null -m 10 -w '%{http_code}' "$url" 2>/dev/null || echo 000)"
+  if [[ $code == 200 ]]; then
+    ok "The panel answers on port 443"
+  else
+    err "The panel is not answering on 443 (HTTP $code)"
+    journalctl -u "$SERVICE" -n 20 --no-pager | sed 's/^/    /'
+    return 1
+  fi
+
+  echo
+  echo "${GREEN}${BOLD}  Open this:${RESET}"
+  echo "${BOLD}  https://${host}${webpath}/${RESET}"
+  echo
+  echo "  Port 80 redirects here too, so an http:// bookmark keeps working."
+  echo
+}
+
+# Write a new panel port, reporting what changed.
+info_port_move() {
+  local from="$1" to="$2"
+  PORT="$to" DATA_DIR="$DATA_DIR" node -e '
+    const fs = require("fs"), path = require("path");
+    const file = path.join(process.env.DATA_DIR, "db.json");
+    const db = JSON.parse(fs.readFileSync(file, "utf8"));
+    db.settings = db.settings || {};
+    db.settings.panelPort = Number(process.env.PORT);
+    fs.writeFileSync(file, JSON.stringify(db, null, 2), { mode: 0o600 });
+  ' || { err "Could not write the new port"; return 1; }
+  ok "Panel port moved from $from to $to"
 }
 
 act_uninstall() {
@@ -639,6 +768,7 @@ show_menu() {
   menu_row 23 "Update geo files"
   menu_rule
   menu_row 24 "Diagnose problems"
+  menu_row 25 "Make the panel reachable (move to 443)"
   menu_end
   echo
   printf "  Panel state        : %s\n" "$(state_of "$SERVICE")"
@@ -651,7 +781,7 @@ run_menu() {
   while true; do
     show_menu
     local choice domain file port name
-    read -rp "  Please enter your selection [0-24]: " choice
+    read -rp "  Please enter your selection [0-25]: " choice
     echo
     case "$choice" in
       0) exit 0 ;;
@@ -680,7 +810,8 @@ run_menu() {
       22) act_bbr; pause ;;
       23) act_geo; pause ;;
       24) act_doctor; pause ;;
-      *) err "Please choose a number between 0 and 24"; pause ;;
+      25) act_fix; pause ;;
+      *) err "Please choose a number between 0 and 25"; pause ;;
     esac
   done
 }
@@ -708,6 +839,7 @@ ${BOLD}nexv${RESET} - NexV Panel management
   nexv bbr                      enable BBR congestion control
   nexv geo                      update geoip.dat and geosite.dat
   nexv doctor                   diagnose why the panel is not answering
+  nexv fix                      move the panel to port 443 and verify it answers
   nexv uninstall                remove the panel
 HELP
 }
@@ -732,6 +864,7 @@ case "${1:-menu}" in
   bbr)             act_bbr ;;
   geo)             act_geo ;;
   doctor)          act_doctor ;;
+  fix)             act_fix ;;
   uninstall)       act_uninstall ;;
   help|-h|--help)  usage ;;
   *)               err "Unknown command: $1"; echo; usage; exit 1 ;;

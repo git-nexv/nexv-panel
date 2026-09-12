@@ -72,6 +72,7 @@ Every entry is also a direct command:
 | `nexv bbr` | enable BBR congestion control |
 | `nexv geo` | update geoip.dat and geosite.dat |
 | `nexv doctor` | diagnose why the panel is not answering |
+| `nexv fix` | move the panel to port 443 and verify it answers |
 | `nexv uninstall` | remove the panel |
 
 ## Panel sections
@@ -160,6 +161,22 @@ alongside, because both panels write the same Xray config and restart the same
 service, so each undoes the other.
 
 `nexv logs 50` shows more; requests slower than a second are logged there too.
+
+## "It is running but it will not open"
+
+Almost always the panel is healthy and its port is filtered somewhere between
+the browser and the server. Mobile carriers, office networks and captive
+portals routinely drop everything except 80 and 443, so a panel on 2053 or
+2087 can be unreachable while the process is perfectly fine.
+
+```bash
+nexv fix
+```
+
+It moves the panel to 443, opens 443 and 80 in the firewall, restarts, checks
+that the panel really answers there, and prints the URL. Port 80 keeps
+redirecting, so old bookmarks still work. It needs a certificate first
+(`nexv cert <domain>`) and refuses to move if something else owns 443.
 
 ## Firewall
 
