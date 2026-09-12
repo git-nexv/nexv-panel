@@ -314,14 +314,28 @@ if (require.main === module) {
     const tls = process.env.NEXV_NO_TLS ? null : tlsOptions();
     const scheme = tls ? 'https' : 'http';
 
-    createServer(app, tls).listen(port, host, () => {
-      const base = normalizeBasePath(db.settings.webBasePath);
-      console.log(`[nexv] panel listening on ${scheme}://${host}:${port}${base}/`);
-      // printed every start: without the path the panel cannot be reached
-      console.log(`[nexv] web path: ${base || '/'}`);
-      if (!tls) console.log('[nexv] TLS is off - set a certificate in Settings, or run: nexv cert <domain>');
-      startJobs();
-    });
+    createServer(app, tls)
+      .listen(port, host, () => {
+        const base = normalizeBasePath(db.settings.webBasePath);
+        console.log(`[nexv] panel listening on ${scheme}://${host}:${port}${base}/`);
+        // printed every start: without the path the panel cannot be reached
+        console.log(`[nexv] web path: ${base || '/'}`);
+        if (!tls) console.log('[nexv] TLS is off - set a certificate in Settings, or run: nexv cert <domain>');
+        startJobs();
+      })
+      .on('error', (err) => {
+        // systemd restarts us every few seconds; without naming the cause the
+        // journal fills with stack traces that say nothing about the port
+        if (err.code === 'EADDRINUSE') {
+          console.error(`[nexv] port ${port} is already in use by another process.`);
+          console.error('[nexv] free it, or pick another port with: nexv port <number>');
+        } else if (err.code === 'EACCES') {
+          console.error(`[nexv] not allowed to bind port ${port}. Ports below 1024 need root.`);
+        } else {
+          console.error(`[nexv] cannot listen on port ${port}: ${err.message}`);
+        }
+        process.exit(1);
+      });
 
     /*
      * With TLS on, a bookmarked http:// address hits a socket that only speaks

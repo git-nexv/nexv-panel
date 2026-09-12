@@ -17,6 +17,65 @@ ok()   { echo "${GREEN}[+]${RESET} $*"; }
 err()  { echo "${RED}[x]${RESET} $*"; }
 warn() { echo "${YELLOW}[!]${RESET} $*"; }
 
+
+# Is anything listening on this TCP port? Tries whichever tool the box has.
+is_port_in_use() {
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | awk -v p=":${port}$" '$4 ~ p { found = 1 } END { exit !found }' && return 0
+    return 1
+  fi
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -lnt 2>/dev/null | awk -v p=":${port}$" '$4 ~ p { found = 1 } END { exit !found }' && return 0
+    return 1
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1 && return 0
+  fi
+  return 1
+}
+
+# Which process holds it, when we can tell.
+port_owner() {
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnp 2>/dev/null | awk -v p=":${port}$" '$4 ~ p { print $NF; exit }'
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"${port}" -sTCP:LISTEN -F c 2>/dev/null | sed -n 's/^c//p' | head -1
+  fi
+}
+
+firewall_kind() {
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+    echo ufw
+  elif command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld 2>/dev/null; then
+    echo firewalld
+  else
+    echo none
+  fi
+}
+
+# Open one port in whichever firewall is running. A no-op when none is active,
+# which is the common case on a fresh VPS.
+allow_port() {
+  local port="$1"
+  case "$(firewall_kind)" in
+    ufw)       ufw allow "$port"/tcp >/dev/null 2>&1 && ok "Opened port $port in ufw" ;;
+    firewalld) firewall-cmd --permanent --add-port="$port"/tcp >/dev/null 2>&1 &&
+               firewall-cmd --reload >/dev/null 2>&1 && ok "Opened port $port in firewalld" ;;
+    *)         : ;;
+  esac
+}
+
+panel_port() {
+  DATA_DIR="$DATA_DIR" node -e '
+    try {
+      const db = require(process.env.DATA_DIR + "/db.json");
+      process.stdout.write(String((db.settings && db.settings.panelPort) || 2087));
+    } catch (e) { process.stdout.write("2087"); }
+  ' 2>/dev/null || echo 2087
+}
+
 confirm() {
   local answer
   read -rp "$1 [y/N]: " answer
@@ -114,6 +173,10 @@ act_port() {
   need_root
   local port="${1:-}"
   [[ $port =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )) || { err "Give a port number between 1 and 65535"; return 1; }
+  if [[ $port != "$(panel_port)" ]] && is_port_in_use "$port"; then
+    err "Port $port is already used by: $(port_owner "$port" || echo 'another process')"
+    return 1
+  fi
   PORT="$port" DATA_DIR="$DATA_DIR" node -e '
     const fs = require("fs"), path = require("path");
     const file = path.join(process.env.DATA_DIR, "db.json");
@@ -122,6 +185,7 @@ act_port() {
     db.settings.panelPort = Number(process.env.PORT);
     fs.writeFileSync(file, JSON.stringify(db, null, 2), { mode: 0o600 });
   ' || return 1
+  allow_port "$port"
   systemctl restart "$SERVICE"
   ok "Panel port changed to $port"
   act_url
@@ -217,6 +281,10 @@ EOF
   fi
   rm -f /tmp/nexv-cert-result.$$
 
+  # a moved port behind a firewall is a panel nobody can reach
+  allow_port "$(panel_port)"
+  allow_port 80
+
   systemctl restart "$SERVICE"
   sleep 2
   if systemctl is-active --quiet "$SERVICE"; then
@@ -262,24 +330,110 @@ act_reset_username() {
   ok "Admin username changed to $name"
 }
 
+act_firewall_open_panel_ports() {
+  local port
+  port="$(panel_port)"
+  local ports=("$port" 80 443 2096)
+  local kind
+  kind="$(firewall_kind)"
+  if [[ $kind == none ]]; then
+    warn "No active firewall found; nothing to open."
+    echo "  The panel ports are already reachable, unless your provider filters them."
+    return 0
+  fi
+  for p in "${ports[@]}"; do allow_port "$p"; done
+  ok "Panel ports opened in $kind: ${ports[*]}"
+}
+
+act_firewall_enable() {
+  need_root
+  if ! command -v ufw >/dev/null 2>&1; then
+    err "ufw is not installed. Install it first (option 1)."
+    return 1
+  fi
+  # Enabling ufw without an SSH rule locks you out of your own server.
+  ufw allow ssh >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null 2>&1
+  ok "SSH allowed (so enabling the firewall cannot lock you out)"
+  local port
+  port="$(panel_port)"
+  for p in "$port" 80 443 2096; do ufw allow "$p"/tcp >/dev/null 2>&1; done
+  ok "Panel ports allowed: $port 80 443 2096"
+  ufw --force enable && ok "Firewall enabled"
+}
+
+act_firewall_install() {
+  need_root
+  if command -v ufw >/dev/null 2>&1; then
+    ok "ufw is already installed"
+    return 0
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq ufw >/dev/null
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y -q ufw >/dev/null
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y -q ufw >/dev/null
+  else
+    err "No supported package manager found"
+    return 1
+  fi
+  command -v ufw >/dev/null 2>&1 && ok "ufw installed" || { err "ufw installation failed"; return 1; }
+}
+
+act_firewall_status() {
+  case "$(firewall_kind)" in
+    ufw)       ufw status verbose ;;
+    firewalld) firewall-cmd --list-all ;;
+    *)
+      if command -v ufw >/dev/null 2>&1; then
+        echo "ufw is installed but not active."
+        ufw status
+      else
+        echo "No firewall is active on this server."
+      fi
+      ;;
+  esac
+}
+
 act_firewall() {
   need_root
-  local port
-  port="$(DATA_DIR=$DATA_DIR node -e '
-    const db = require(process.env.DATA_DIR + "/db.json");
-    process.stdout.write(String((db.settings && db.settings.panelPort) || 2087));
-  ' 2>/dev/null || echo 2087)"
-  local ports=("$port" 80 443 2096)
-  if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
-    for p in "${ports[@]}"; do ufw allow "$p"/tcp >/dev/null 2>&1 || true; done
-    ok "Opened ${ports[*]} in ufw"
-  elif command -v firewall-cmd >/dev/null && systemctl is-active --quiet firewalld; then
-    for p in "${ports[@]}"; do firewall-cmd --permanent --add-port="$p"/tcp >/dev/null 2>&1 || true; done
-    firewall-cmd --reload >/dev/null 2>&1 || true
-    ok "Opened ${ports[*]} in firewalld"
-  else
-    warn "No active ufw or firewalld found; nothing to do."
-  fi
+  while true; do
+    echo
+    echo "  ${BOLD}Firewall${RESET}   (currently: $(firewall_kind))"
+    echo "    1. Install ufw"
+    echo "    2. Enable firewall (allows SSH and the panel ports first)"
+    echo "    3. Disable firewall"
+    echo "    4. Open the panel ports"
+    echo "    5. Open a specific port"
+    echo "    6. Close a specific port"
+    echo "    7. Show status and rules"
+    echo "    0. Back"
+    local choice port
+    read -rp "  Choose an option: " choice
+    echo
+    case "$choice" in
+      0) return 0 ;;
+      1) act_firewall_install ;;
+      2) act_firewall_enable ;;
+      3) confirm "Disable the firewall?" && { ufw disable && ok "Firewall disabled"; } ;;
+      4) act_firewall_open_panel_ports ;;
+      5) read -rp "  Port to open: " port
+         [[ $port =~ ^[0-9]+$ ]] && allow_port "$port" || err "Not a port number" ;;
+      6) read -rp "  Port to close: " port
+         if [[ $port =~ ^[0-9]+$ ]]; then
+           case "$(firewall_kind)" in
+             ufw)       ufw delete allow "$port"/tcp >/dev/null 2>&1 && ok "Closed $port" ;;
+             firewalld) firewall-cmd --permanent --remove-port="$port"/tcp >/dev/null 2>&1 &&
+                        firewall-cmd --reload >/dev/null 2>&1 && ok "Closed $port" ;;
+             *)         warn "No active firewall" ;;
+           esac
+         else
+           err "Not a port number"
+         fi ;;
+      7) act_firewall_status ;;
+      *) err "Choose a number between 0 and 7" ;;
+    esac
+  done
 }
 
 act_bbr() {
@@ -342,20 +496,49 @@ act_doctor() {
   printf "  %-22s %s\n" "HTTPS" "$secure"
   [[ $secure == yes ]] && printf "  %-22s %s\n" "Certificate" "$cert"
 
-  # is anything actually listening on that port? report honestly when the
-  # tools to check are missing, rather than calling that a dead port
-  local listing=""
-  if command -v ss >/dev/null; then
-    listing="$(ss -ltn 2>/dev/null)"
-  elif command -v netstat >/dev/null; then
-    listing="$(netstat -ltn 2>/dev/null)"
-  fi
-  if [[ -z $listing ]]; then
-    warn "Cannot list listening ports (install iproute2 for 'ss')"
-  elif grep -qE "[:.]${port}[[:space:]]" <<<"$listing"; then
-    ok "A process is listening on port $port"
-  else
+  # is anything actually listening on that port?
+  if is_port_in_use "$port"; then
+    local owner
+    owner="$(port_owner "$port")"
+    ok "A process is listening on port $port${owner:+ ($owner)}"
+  elif command -v ss >/dev/null || command -v netstat >/dev/null || command -v lsof >/dev/null; then
     err "Nothing is listening on port $port"
+    echo "    The panel is down or failed to bind. Check: nexv logs 50"
+  else
+    warn "Cannot list listening ports (install iproute2 for 'ss')"
+  fi
+
+  # a firewall that does not allow the panel port is the classic "it worked
+  # yesterday" cause, especially right after the port has been changed
+  local fw
+  fw="$(firewall_kind)"
+  printf "  %-22s %s\n" "Firewall" "$fw"
+  case "$fw" in
+    ufw)
+      if ufw status 2>/dev/null | grep -qE "(^|[[:space:]])${port}(/tcp)?[[:space:]]+ALLOW"; then
+        ok "ufw allows port $port"
+      else
+        err "ufw does NOT allow port $port - the panel is unreachable from outside"
+        echo "    Fix it with: nexv firewall   (option 4), or: ufw allow ${port}/tcp"
+      fi
+      ;;
+    firewalld)
+      if firewall-cmd --list-ports 2>/dev/null | grep -q "${port}/tcp"; then
+        ok "firewalld allows port $port"
+      else
+        err "firewalld does NOT allow port $port"
+        echo "    Fix it with: nexv firewall   (option 4)"
+      fi
+      ;;
+    *) ok "No firewall is filtering the panel port" ;;
+  esac
+
+  # two panels managing one Xray is a fight neither wins
+  if [[ -f /usr/local/bin/x-ui || -d /usr/local/x-ui || -d /etc/x-ui ]]; then
+    warn "3x-ui is also installed on this server"
+    echo "    Both panels write /usr/local/etc/xray/config.json and restart the"
+    echo "    xray service, so each one undoes the other's configuration."
+    echo "    Keep one of them, or point them at different files."
   fi
 
   if [[ $secure == yes && -f $cert ]]; then

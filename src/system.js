@@ -88,10 +88,30 @@ function disk() {
   });
 }
 
+/**
+ * A single provider is a single point of failure - blocked, rate limited, or
+ * simply down - and without an IP the panel cannot build share links. Try a
+ * few in turn, then fall back to the host's own address.
+ */
+const IP_PROVIDERS = [
+  'https://api4.ipify.org',
+  'https://ipv4.icanhazip.com',
+  'https://v4.ident.me',
+  'https://ipv4.myexternalip.com/raw'
+];
+
+function isIPv4(value) {
+  return /^(\d{1,3}\.){3}\d{1,3}$/.test(value) && value.split('.').every((n) => Number(n) <= 255);
+}
+
 function publicIP() {
+  const attempts = IP_PROVIDERS.map((url) => `curl -4 -s --max-time 3 ${url}`).join(' || ');
   return new Promise((resolve) => {
-    execFile('sh', ['-c', 'curl -4 -s --max-time 3 https://api.ipify.org || hostname -I | awk "{print \\$1}"'],
-      { encoding: 'utf8', timeout: 6000 }, (err, stdout) => resolve((stdout || '').trim()));
+    execFile('sh', ['-c', `${attempts} || hostname -I | awk "{print \\$1}"`],
+      { encoding: 'utf8', timeout: 15000 }, (err, stdout) => {
+        const ip = (stdout || '').trim().split(/\s+/)[0] || '';
+        resolve(isIPv4(ip) ? ip : '');
+      });
   });
 }
 

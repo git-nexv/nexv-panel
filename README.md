@@ -68,7 +68,7 @@ Every entry is also a direct command:
 | `nexv cert <domain>` | issue a certificate and turn on HTTPS |
 | `nexv reset-password [pw]` | reset the admin password |
 | `nexv reset-username <name>` | change the admin username |
-| `nexv firewall` | open the panel ports in ufw or firewalld |
+| `nexv firewall` | firewall menu: install, enable, open or close ports |
 | `nexv bbr` | enable BBR congestion control |
 | `nexv geo` | update geoip.dat and geosite.dat |
 | `nexv doctor` | diagnose why the panel is not answering |
@@ -152,11 +152,25 @@ config is rewritten without it.
 nexv doctor
 ```
 
-It reports the service state, the port, whether anything is listening on it,
-the certificate and its expiry, whether the panel answers on its own URL, and
-whether port 80 redirects — and prints the last 20 log lines when it does not
-answer. `nexv logs 50` shows more; requests slower than a second are logged
-there too.
+It reports the service state, the port and which process holds it, whether the
+firewall allows that port, the certificate and its expiry, whether the panel
+answers on its own URL, and whether port 80 redirects — and prints the last 20
+log lines when it does not answer. It also warns when 3x-ui is installed
+alongside, because both panels write the same Xray config and restart the same
+service, so each undoes the other.
+
+`nexv logs 50` shows more; requests slower than a second are logged there too.
+
+## Firewall
+
+```bash
+nexv firewall
+```
+
+Installs ufw, enables it, opens or closes ports, and shows the rules. Enabling
+the firewall always allows SSH and the panel ports first, so turning it on
+cannot lock you out. Changing the panel port or issuing a certificate opens the
+new port automatically.
 
 ## Paths
 
