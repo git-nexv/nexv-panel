@@ -279,6 +279,8 @@ async function bootstrap() {
     db.saveNow();
   }
   try { xray.writeConfig(); } catch (err) { console.error('[xray] cannot write config:', err.message); }
+  // a bot that was running before the restart starts polling again on its own
+  try { require('./telegram').resume(); } catch (err) { console.error('[bot] could not resume:', err.message); }
 }
 
 /**

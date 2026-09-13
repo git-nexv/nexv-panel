@@ -1,14 +1,17 @@
 {
   "name": "nexv-panel",
-  "version": "3.6.0",
+  "version": "3.7.0",
   "description": "NexV Panel - a complete Xray-core management panel with a modern UI",
   "main": "src/server.js",
   "type": "commonjs",
   "scripts": {
     "start": "node src/server.js"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
     "bcryptjs": "^2.4.3",
     "express": "^4.19.2",
     "qrcode": "^1.5.3"

@@ -11,6 +11,8 @@ const links = require('../links');
 const transfer = require('../transfer');
 const version = require('../version');
 const update = require('../update');
+const telegram = require('../telegram');
+const botai = require('../botai');
 const system = require('../system');
 
 const router = express.Router();
@@ -105,6 +107,110 @@ router.post('/account', async (req, res) => {
   }
   logEvent('auth', `account updated for ${req.user.username}`);
   res.json({ ok: true });
+});
+
+
+/* ------------------------------- the bot -------------------------------- */
+
+/** The bot's own settings, without handing the token back out in full. */
+function botView() {
+  const b = telegram.bot();
+  return {
+    enabled: !!b.enabled,
+    hasToken: !!b.token,
+    tokenHint: b.token ? `${b.token.slice(0, 8)}…${b.token.slice(-4)}` : '',
+    adminId: b.adminId || '',
+    adminLinked: !!b.adminChatId,
+    brand: b.brand || 'NexV',
+    currency: b.currency || 'Toman',
+    screens: b.screens || [],
+    plans: b.plans || [],
+    orders: (b.orders || []).slice(0, 60),
+    ai: { hasKey: !!(b.ai && b.ai.apiKey), model: (b.ai && b.ai.model) || botai.DEFAULT_MODEL },
+    status: telegram.status()
+  };
+}
+
+router.get('/bot', (req, res) => res.json(botView()));
+
+router.put('/bot', async (req, res) => {
+  const b = telegram.bot();
+  const body = req.body || {};
+  // an empty token field means "leave the one you have"
+  if (typeof body.token === 'string' && body.token.trim()) b.token = body.token.trim();
+  if (body.token === null) b.token = '';
+  if (body.adminId !== undefined) b.adminId = String(body.adminId).trim();
+  if (body.brand !== undefined) b.brand = String(body.brand).slice(0, 40);
+  if (body.currency !== undefined) b.currency = String(body.currency).slice(0, 16);
+  if (Array.isArray(body.screens)) b.screens = botai.sanitise({ screens: body.screens });
+  if (Array.isArray(body.plans)) {
+    b.plans = body.plans.map((p) => ({
+      id: p.id || db.id(),
+      name: String(p.name || 'Plan').slice(0, 40),
+      gb: Number(p.gb) || 0,
+      days: Number(p.days) || 30,
+      price: String(p.price || '0').slice(0, 20),
+      inboundId: p.inboundId || '',
+      enable: p.enable !== false
+    }));
+  }
+  if (body.ai && typeof body.ai === 'object') {
+    b.ai = b.ai || {};
+    if (typeof body.ai.apiKey === 'string' && body.ai.apiKey.trim()) b.ai.apiKey = body.ai.apiKey.trim();
+    if (body.ai.apiKey === null) b.ai.apiKey = '';
+    if (body.ai.model !== undefined) b.ai.model = String(body.ai.model).slice(0, 60);
+  }
+  db.saveNow();
+  logEvent('bot', 'bot settings saved');
+  res.json(botView());
+});
+
+/** Does this token belong to a real bot? Answers without starting anything. */
+router.post('/bot/test', async (req, res) => {
+  const token = (req.body && req.body.token) || telegram.bot().token;
+  if (!token) return bad(res, 'no token to test');
+  try {
+    const me = await telegram.whoAmI(token);
+    res.json({ ok: true, username: me.username, name: me.first_name });
+  } catch (err) { bad(res, err.message); }
+});
+
+router.post('/bot/start', async (req, res) => {
+  try {
+    const status = await telegram.start();
+    logEvent('bot', `bot started (@${status.username || 'unknown'})`);
+    res.json(status);
+  } catch (err) { bad(res, err.message); }
+});
+
+router.post('/bot/stop', (req, res) => {
+  logEvent('bot', 'bot stopped');
+  res.json(telegram.stop());
+});
+
+router.get('/bot/status', (req, res) => res.json(telegram.status()));
+
+/** Send a message to the admin's chat, to prove the wiring end to end. */
+router.post('/bot/ping', async (req, res) => {
+  const b = telegram.bot();
+  const target = b.adminChatId || (/^\d+$/.test(b.adminId || '') ? b.adminId : '');
+  if (!target) {
+    return bad(res, 'no admin chat yet - send /start to the bot from the admin account once');
+  }
+  await telegram.send(target, 'Test message from the NexV panel ✅');
+  res.json({ ok: true });
+});
+
+router.post('/bot/ai', async (req, res) => {
+  const b = telegram.bot();
+  const ready = botai.ready(b.ai);
+  if (!ready.ok) return bad(res, ready.reason, 409);
+  const description = (req.body && req.body.description) || '';
+  if (!description.trim()) return bad(res, 'describe the bot you want');
+  try {
+    const result = await botai.generate(b.ai, description, req.body.useCurrent ? b.screens : null);
+    res.json(result);
+  } catch (err) { bad(res, err.message, 502); }
 });
 
 /* ------------------------------ dashboard ------------------------------- */
@@ -575,17 +681,19 @@ router.get('/clients', (req, res) => {
   }));
 });
 
-router.post('/clients', async (req, res) => {
-  const body = req.body || {};
-  const inb = db.data.inbounds.find((i) => i.id === body.inboundId);
-  if (!inb) return bad(res, 'inbound not found', 404);
-  const client = normalizeClient(body, null, inb);
-  if (!client.email) return bad(res, 'a client name (email) is required');
+/**
+ * Add a client to an inbound and push the new Xray config, rolling the client
+ * back if Xray refuses it. Shared with the Telegram bot, which sells the same
+ * thing this route creates by hand.
+ */
+async function createClient(inbound, body) {
+  const client = normalizeClient(body, null, inbound);
+  if (!client.email) throw new Error('a client name (email) is required');
   if (db.data.clients.some((c) => c.email === client.email)) {
-    return bad(res, 'that client name is already in use');
+    throw new Error('that client name is already in use');
   }
   client.id = db.id();
-  client.inboundId = inb.id;
+  client.inboundId = inbound.id;
   client.up = 0;
   client.down = 0;
   client.createdAt = Date.now();
@@ -597,10 +705,19 @@ router.post('/clients', async (req, res) => {
     db.data.clients = db.data.clients.filter((c) => c.id !== client.id);
     db.saveNow();
     await xray.apply();
-    return bad(res, applied.error);
+    throw new Error(applied.error);
   }
-  logEvent('client', `added client ${client.email} to ${inb.remark}`);
-  res.json(Object.assign({}, client, { link: links.buildLink(inb, client) }));
+  logEvent('client', `added client ${client.email} to ${inbound.remark}`);
+  return Object.assign({}, client, { link: links.buildLink(inbound, client) });
+}
+
+router.post('/clients', async (req, res) => {
+  const body = req.body || {};
+  const inb = db.data.inbounds.find((i) => i.id === body.inboundId);
+  if (!inb) return bad(res, 'inbound not found', 404);
+  try {
+    res.json(await createClient(inb, body));
+  } catch (err) { bad(res, err.message); }
 });
 
 router.put('/clients/:id', async (req, res) => {
@@ -1038,3 +1155,4 @@ router.use((err, req, res, next) => {
 
 module.exports = router;
 module.exports.subUrl = subUrl;
+module.exports.createClient = createClient;

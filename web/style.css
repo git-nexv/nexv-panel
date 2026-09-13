@@ -475,12 +475,86 @@ td .row-actions { display: flex; gap: 6px; }
   .qr-box img { width: min(230px, 68vw); height: auto; }
   /* one line on a phone: both keys drop their labels and the title gives way
      before anything wraps onto a second row */
-  #restartXray span:last-child, #updateChip span { display: none; }
-  #restartXray { padding: 8px; width: 34px; height: 34px; }
+  #updateChip span { display: none; }
   #updateChip { padding: 7px; gap: 0; }
   .topbar h1 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .topbar { flex-wrap: nowrap; }
   .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 35; }
+}
+
+
+/* ---- light / dark: an Apple-style switch you can also drag ---- */
+.theme-switch {
+  --tx: 24px;
+  position: relative; flex: 0 0 auto;
+  width: 54px; height: 30px; box-sizing: border-box; padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  cursor: pointer;
+  touch-action: none; -webkit-tap-highlight-color: transparent;
+  transition: background .3s var(--glide), border-color .3s var(--glide);
+}
+.theme-switch:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.ts-mark {
+  position: absolute; top: 50%; margin-top: -7px;
+  width: 14px; height: 14px; color: var(--faint);
+  transition: opacity .3s var(--glide);
+}
+.ts-sun { left: 7px; }
+.ts-moon { right: 7px; }
+.ts-knob {
+  position: absolute; top: 2px; left: 2px;
+  width: 24px; height: 24px; border-radius: 999px;
+  display: grid; place-items: center; color: #fff;
+  background: linear-gradient(160deg, var(--brand), var(--brand-2));
+  box-shadow: 0 5px 12px -3px rgba(0, 0, 0, .5), inset 0 1px 0 rgba(255, 255, 255, .35);
+  transform: translateX(var(--tx)) scale(var(--sx, 1), var(--sy, 1));
+  transition: transform .42s var(--spring);
+}
+.theme-switch.dragging .ts-knob { transition: none; }
+/* the knob carries the current mark, so the one underneath it steps aside */
+:root[data-theme="light"] .theme-switch { --tx: 0px; }
+:root[data-theme="light"] .ts-sun { opacity: 0; }
+:root:not([data-theme="light"]) .ts-moon { opacity: 0; }
+
+
+/* ------------------------------- bot builder ----------------------------- */
+
+.bot-split { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.bot-list { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.bot-preview-card { position: sticky; top: 86px; }
+.bot-screen .section-title { margin-top: 18px; }
+.bot-rows { display: flex; flex-direction: column; gap: 10px; }
+.bot-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.bot-btn {
+  display: flex; gap: 6px; align-items: center; flex: 1 1 260px; min-width: 0;
+  padding: 8px; border-radius: var(--radius-sm);
+  background: var(--surface); border: 1px solid var(--border);
+}
+.bot-btn input, .bot-btn select { min-width: 0; flex: 1 1 90px; }
+
+/* what the message will look like once Telegram draws it */
+.tg-preview { margin-top: 6px; }
+.tg-bubble {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 14px 14px 14px 4px; padding: 10px 13px;
+  font-size: 13px; line-height: 1.55; white-space: normal; overflow-wrap: anywhere;
+}
+.tg-keys { display: flex; flex-direction: column; gap: 5px; margin-top: 5px; }
+.tg-row { display: flex; gap: 5px; }
+.tg-key {
+  flex: 1 1 0; text-align: center;
+  padding: 8px 10px; border-radius: 9px;
+  background: color-mix(in srgb, var(--brand) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--brand) 34%, transparent);
+  color: var(--text); font-size: 12px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .bot-split { grid-template-columns: 1fr; }
+  .bot-preview-card { position: static; }
 }
 
 /* ------------------------------ modal tabs ------------------------------ */

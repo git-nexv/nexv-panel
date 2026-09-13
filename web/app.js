@@ -144,6 +144,8 @@ const ICONS = {
   logs: '<path d="M4 4h16v2H4V4Zm0 5h16v2H4V9Zm0 5h11v2H4v-2Zm0 5h11v2H4v-2Z"/>',
   account: '<path d="M12 12a5 5 0 1 0-5-5 5 5 0 0 0 5 5Zm0 2c-4 0-9 2-9 5v3h18v-3c0-3-5-5-9-5Z"/>',
   logout: '<path d="M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h5v-2H5V5h5V3Zm7.3 4.3-1.4 1.4L18.2 11H9v2h9.2l-2.3 2.3 1.4 1.4L22 12l-4.7-4.7Z"/>',
+  sun: '<path d="M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10Zm0 2.5a1 1 0 0 1 1 1V22a1 1 0 1 1-2 0v-1.5a1 1 0 0 1 1-1Zm0-18a1 1 0 0 1 1 1V4a1 1 0 1 1-2 0V2.5a1 1 0 0 1 1-1ZM22 11a1 1 0 1 1 0 2h-1.5a1 1 0 1 1 0-2H22ZM3.5 11a1 1 0 1 1 0 2H2a1 1 0 1 1 0-2h1.5Zm15.4 6.5a1 1 0 0 1 1.4 1.4l-1 1a1 1 0 0 1-1.5-1.4l1.1-1Zm-14.9-13a1 1 0 0 1 1.4 0l1 1.1A1 1 0 0 1 5 7L3.9 6a1 1 0 0 1 0-1.4Zm14.9 0a1 1 0 0 1 1.4 1.4L19.3 7a1 1 0 0 1-1.5-1.4l1.1-1.1ZM5 17.5l1 1a1 1 0 0 1-1.4 1.4l-1-1A1 1 0 0 1 5 17.5Z"/>',
+  bot: '<path d="M12 2a1 1 0 0 1 1 1v2h3a4 4 0 0 1 4 4v7a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V9a4 4 0 0 1 4-4h3V3a1 1 0 0 1 1-1Zm-2.5 9A1.5 1.5 0 1 0 9.5 14a1.5 1.5 0 0 0 0-3Zm5 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3ZM2 10h1.2v5H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1Zm19 0a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1.2v-5H21Z"/>',
   theme: '<path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/>',
   menu: '<path d="M3 6h18v2H3V6Zm0 5h18v2H3v-2Zm0 5h18v2H3v-2Z"/>',
   refresh: '<path d="M12 6V3L8 7l4 4V8a4 4 0 1 1-4 4H6a6 6 0 1 0 6-6Z"/>',
@@ -241,7 +243,7 @@ const PAGES = [
   { id: 'clients', label: 'Clients', icon: 'clients' },
   { id: 'outbounds', label: 'Outbounds', icon: 'outbounds' },
   { id: 'routing', label: 'Routing', icon: 'routing' },
-  { id: 'logs', label: 'Logs', icon: 'logs' },
+  { id: 'bot', label: 'Bot', icon: 'bot' },
   { id: 'account', label: 'Account', icon: 'account' },
   // settings sits at the end of the bar, the way a settings key usually does
   { id: 'settings', label: 'Settings', icon: 'settings' }
@@ -274,7 +276,7 @@ function render() {
     outbounds: renderOutbounds,
     routing: renderRouting,
     settings: renderSettings,
-    logs: renderLogs,
+    bot: renderBot,
     account: renderAccount
   }[state.page] || renderDashboard;
 
@@ -1803,14 +1805,411 @@ async function renderSettings(view) {
       }
     })
   ]));
+
+  view.append(el('div', { class: 'section-title', text: 'Event log' }));
+  await renderLogs(view);
 }
 
-/* ------------------------------- page: logs ------------------------------ */
+/* -------------------------------- page: bot ------------------------------ */
+
+const BOT_ACTIONS = [
+  { value: 'screen', label: 'Open a screen' },
+  { value: 'plans', label: 'Show the plans' },
+  { value: 'configs', label: 'Send their configs' },
+  { value: 'usage', label: 'Show their usage' },
+  { value: 'support', label: 'Support screen' },
+  { value: 'url', label: 'Open a link' },
+  { value: 'text', label: 'Show a message' }
+];
+
+/** What the user will actually see in Telegram, drawn from a screen. */
+function botPreview(screen, brand) {
+  const body = String(screen.text || '')
+    .replace(/{name}/g, 'Ali')
+    .replace(/{brand}/g, brand || 'NexV')
+    .replace(/{admin}/g, '@admin');
+  const bubble = el('div', { class: 'tg-bubble' });
+  // the bot sends HTML, so show it as the user would read it
+  bubble.innerHTML = body
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/&lt;(\/?)(b|i|code|u|s)&gt;/g, '<$1$2>')
+    .replace(/\n/g, '<br>');
+  const keys = el('div', { class: 'tg-keys' });
+  for (const row of (screen.buttons || [])) {
+    const line = el('div', { class: 'tg-row' });
+    for (const btn of row) line.append(el('span', { class: 'tg-key', text: btn.label }));
+    if (line.children.length) keys.append(line);
+  }
+  return el('div', { class: 'tg-preview' }, [bubble, keys]);
+}
+
+/** One screen's editor: its text, and rows of inline buttons under it. */
+function botScreenCard(screen, ctx) {
+  const card = el('div', { class: 'card bot-screen' });
+  const redraw = () => { ctx.refresh(); };
+
+  const key = el('input', { value: screen.key || '', placeholder: 'start' });
+  key.addEventListener('input', () => { screen.key = key.value.toLowerCase().replace(/[^a-z0-9_]/g, ''); });
+  const title = el('input', { value: screen.title || '', placeholder: 'Welcome' });
+  title.addEventListener('input', () => { screen.title = title.value; });
+  const text = el('textarea', { style: 'min-height:110px' }, [screen.text || '']);
+  text.addEventListener('input', () => { screen.text = text.value; ctx.preview(); });
+
+  const grid = el('div', { class: 'form-grid' });
+  formField(grid, 'Screen key', key, { hint: 'start is the first screen' });
+  formField(grid, 'Title', title);
+  formField(grid, 'Message', text, { full: true, hint: 'Placeholders: {name} {brand} {admin} · HTML: <b> <i> <code>' });
+
+  const rows = el('div', { class: 'bot-rows' });
+  const drawRows = () => {
+    rows.innerHTML = '';
+    screen.buttons = screen.buttons || [];
+    screen.buttons.forEach((row, rowIndex) => {
+      const line = el('div', { class: 'bot-row' });
+      row.forEach((btn, btnIndex) => {
+        const label = el('input', { value: btn.label || '', placeholder: 'Button text' });
+        label.addEventListener('input', () => { btn.label = label.value; ctx.preview(); });
+        const action = selectOf(BOT_ACTIONS, btn.action || 'screen');
+        const value = el('input', {
+          value: btn.value || '',
+          placeholder: btn.action === 'url' ? 'https://…' : 'screen key'
+        });
+        const needsValue = () => ['screen', 'url', 'text'].includes(action.value);
+        value.hidden = !needsValue();
+        action.addEventListener('change', () => {
+          btn.action = action.value;
+          value.hidden = !needsValue();
+          value.placeholder = action.value === 'url' ? 'https://…' : action.value === 'text' ? 'message' : 'screen key';
+          ctx.preview();
+        });
+        value.addEventListener('input', () => { btn.value = value.value; });
+        line.append(el('div', { class: 'bot-btn' }, [
+          label, action, value,
+          el('button', {
+            class: 'btn icon danger', title: 'Remove button', html: icon('trash'),
+            onclick: () => { row.splice(btnIndex, 1); if (!row.length) screen.buttons.splice(rowIndex, 1); drawRows(); ctx.preview(); }
+          })
+        ]));
+      });
+      if (row.length < 2) {
+        line.append(el('button', {
+          class: 'btn ghost', text: '+ side by side',
+          onclick: () => { row.push({ label: 'Button', action: 'screen', value: 'start' }); drawRows(); ctx.preview(); }
+        }));
+      }
+      rows.append(line);
+    });
+    rows.append(el('button', {
+      class: 'btn', html: `${icon('plus')} Add a button row`,
+      onclick: () => { screen.buttons.push([{ label: 'Button', action: 'screen', value: 'start' }]); drawRows(); ctx.preview(); }
+    }));
+    hydrateIcons(rows);
+  };
+  drawRows();
+
+  card.append(
+    el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+      el('strong', { text: screen.title || screen.key || 'Screen' }),
+      el('button', {
+        class: 'btn icon danger', title: 'Delete this screen', html: icon('trash'),
+        onclick: () => { ctx.remove(screen); redraw(); }
+      })
+    ]),
+    grid,
+    el('div', { class: 'section-title', text: 'Inline buttons' }),
+    rows
+  );
+  hydrateIcons(card);
+  return card;
+}
+
+async function renderBot(view) {
+  const data = await api.get('/bot');
+  const inbounds = await api.get('/inbounds');
+  const draft = {
+    brand: data.brand,
+    currency: data.currency,
+    adminId: data.adminId,
+    screens: JSON.parse(JSON.stringify(data.screens || [])),
+    plans: JSON.parse(JSON.stringify(data.plans || []))
+  };
+
+  const { wrap, panels } = tabbed(['Setup', 'Screens', 'Plans', 'Orders', 'AI']);
+  for (const panel of Object.values(panels)) panel.className = 'tab-panel';
+  view.append(wrap);
+
+  const save = async (extra) => {
+    const payload = Object.assign({
+      brand: draft.brand, currency: draft.currency, adminId: draft.adminId,
+      screens: draft.screens, plans: draft.plans
+    }, extra || {});
+    try {
+      await api.put('/bot', payload);
+      toast('Bot saved');
+    } catch (err) { toast(err.message, 'err'); }
+  };
+
+  /* ---- Setup ---- */
+  const statusChip = el('span', { class: 'chip' });
+  const paintStatus = (status) => {
+    statusChip.className = `chip ${status.running ? 'ok' : ''}`;
+    statusChip.innerHTML = `<i></i>${status.running
+      ? `Running${status.username ? ` as @${status.username}` : ''}`
+      : 'Stopped'}`;
+  };
+  paintStatus(data.status);
+
+  const token = el('input', { type: 'password', placeholder: data.hasToken ? data.tokenHint : '123456:ABC-DEF…' });
+  const admin = el('input', { value: data.adminId || '', placeholder: '123456789 or @username' });
+  admin.addEventListener('input', () => { draft.adminId = admin.value.trim(); });
+  const brand = el('input', { value: data.brand || 'NexV' });
+  brand.addEventListener('input', () => { draft.brand = brand.value; });
+  const currency = el('input', { value: data.currency || 'Toman' });
+  currency.addEventListener('input', () => { draft.currency = currency.value; });
+
+  const setupGrid = el('div', { class: 'form-grid' });
+  formField(setupGrid, 'Bot token from @BotFather', token, {
+    full: true,
+    hint: data.hasToken ? `A token is saved (${data.tokenHint}). Type a new one to replace it.` : 'Talk to @BotFather, send /newbot, and paste the token here.'
+  });
+  formField(setupGrid, 'Admin', admin, {
+    hint: 'Numeric id or @username. Send /id to your bot to learn your id.'
+  });
+  formField(setupGrid, 'Brand name', brand, { hint: 'Used wherever {brand} appears' });
+  formField(setupGrid, 'Currency', currency);
+
+  const startBtn = el('button', {
+    class: 'btn primary', html: `${icon('power')} ${data.status.running ? 'Stop the bot' : 'Start the bot'}`,
+    onclick: async () => {
+      startBtn.disabled = true;
+      try {
+        const running = startBtn.textContent.includes('Stop');
+        const status = await api.post(running ? '/bot/stop' : '/bot/start', {});
+        paintStatus(status);
+        startBtn.innerHTML = `${icon('power')} ${status.running ? 'Stop the bot' : 'Start the bot'}`;
+        hydrateIcons(startBtn);
+        toast(status.running ? 'The bot is listening' : 'The bot is stopped');
+      } catch (err) { toast(err.message, 'err'); }
+      startBtn.disabled = false;
+    }
+  });
+
+  panels.Setup.append(el('div', { class: 'card' }, [
+    el('div', { class: 'between', style: 'margin-bottom:14px' }, [
+      el('strong', { text: 'Connection' }), statusChip
+    ]),
+    setupGrid,
+    el('div', { class: 'row', style: 'margin-top:8px' }, [
+      el('button', {
+        class: 'btn primary', text: 'Save',
+        onclick: () => save(token.value.trim() ? { token: token.value.trim() } : null)
+      }),
+      el('button', {
+        class: 'btn', text: 'Test the token',
+        onclick: async () => {
+          try {
+            const me = await api.post('/bot/test', token.value.trim() ? { token: token.value.trim() } : {});
+            toast(`Token belongs to @${me.username}`);
+          } catch (err) { toast(err.message, 'err'); }
+        }
+      }),
+      startBtn,
+      el('button', {
+        class: 'btn ghost', text: 'Send me a test message',
+        onclick: async () => {
+          try { await api.post('/bot/ping', {}); toast('Sent'); } catch (err) { toast(err.message, 'err'); }
+        }
+      })
+    ]),
+    el('div', { class: 'hint', style: 'margin-top:12px', text: data.adminLinked
+      ? 'The admin chat is linked, so orders and alerts can reach you.'
+      : 'Send /start to your bot from the admin account once, so the panel learns where to send orders.' })
+  ]));
+
+  /* ---- Screens ---- */
+  const list = el('div', { class: 'bot-list' });
+  const preview = el('div', { class: 'card bot-preview-card' });
+  const drawPreview = () => {
+    preview.innerHTML = '';
+    preview.append(el('strong', { text: 'Preview' }));
+    for (const screen of draft.screens) {
+      preview.append(el('div', { class: 'muted', style: 'margin:12px 0 4px', text: `/${screen.key}` }));
+      preview.append(botPreview(screen, draft.brand));
+    }
+  };
+  const drawScreens = () => {
+    list.innerHTML = '';
+    const ctx = {
+      refresh: drawScreens,
+      preview: drawPreview,
+      remove: (screen) => { draft.screens = draft.screens.filter((s) => s !== screen); }
+    };
+    for (const screen of draft.screens) list.append(botScreenCard(screen, ctx));
+    list.append(el('button', {
+      class: 'btn', html: `${icon('plus')} Add a screen`,
+      onclick: () => {
+        draft.screens.push({ key: `screen${draft.screens.length + 1}`, title: 'New screen', text: 'Your message here.', buttons: [[{ label: '⬅️ Back', action: 'screen', value: 'start' }]] });
+        drawScreens(); drawPreview();
+      }
+    }));
+    hydrateIcons(list);
+    drawPreview();
+  };
+  drawScreens();
+  panels.Screens.append(
+    el('div', { class: 'row', style: 'margin-bottom:14px' }, [
+      el('button', { class: 'btn primary', text: 'Save the bot', onclick: () => save() })
+    ]),
+    el('div', { class: 'bot-split' }, [list, preview])
+  );
+
+  /* ---- Plans ---- */
+  const plansBox = el('div');
+  const drawPlans = () => {
+    plansBox.innerHTML = '';
+    draft.plans.forEach((plan, index) => {
+      const grid = el('div', { class: 'form-grid' });
+      const bind = (field, control, cast) => {
+        control.addEventListener('input', () => { plan[field] = cast ? cast(control.value) : control.value; });
+        return control;
+      };
+      formField(grid, 'Name', bind('name', el('input', { value: plan.name || '' })));
+      formField(grid, 'Price', bind('price', el('input', { value: plan.price || '' })));
+      formField(grid, 'Quota (GB)', bind('gb', el('input', { type: 'number', min: '0', value: plan.gb || 0 }), Number), { hint: '0 means unlimited' });
+      formField(grid, 'Days', bind('days', el('input', { type: 'number', min: '1', value: plan.days || 30 }), Number));
+      const inbound = selectOf(inbounds.map((i) => ({ value: i.id, label: `${i.remark} (${i.protocol}:${i.port})` })), plan.inboundId);
+      inbound.addEventListener('change', () => { plan.inboundId = inbound.value; });
+      formField(grid, 'Sold from inbound', inbound, { full: true, hint: 'The client is created on this inbound when you approve an order' });
+      plansBox.append(el('div', { class: 'card' }, [
+        el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+          el('strong', { text: plan.name || 'Plan' }),
+          el('button', {
+            class: 'btn icon danger', title: 'Remove', html: icon('trash'),
+            onclick: () => { draft.plans.splice(index, 1); drawPlans(); }
+          })
+        ]),
+        grid
+      ]));
+    });
+    plansBox.append(el('div', { class: 'row' }, [
+      el('button', {
+        class: 'btn', html: `${icon('plus')} Add a plan`,
+        onclick: () => {
+          draft.plans.push({ name: 'New plan', gb: 30, days: 30, price: '0', inboundId: inbounds[0] ? inbounds[0].id : '', enable: true });
+          drawPlans();
+        }
+      }),
+      el('button', { class: 'btn primary', text: 'Save plans', onclick: () => save() })
+    ]));
+    hydrateIcons(plansBox);
+  };
+  drawPlans();
+  panels.Plans.append(plansBox);
+
+  /* ---- Orders ---- */
+  if (!data.orders.length) {
+    panels.Orders.append(el('div', { class: 'card empty', html: `${icon('empty', 42)}<div>No orders yet.</div>` }));
+  } else {
+    const wrapOrders = el('div', { class: 'table-wrap' });
+    const table = el('table');
+    table.innerHTML = '<thead><tr><th>When</th><th>Buyer</th><th>Plan</th><th>Status</th></tr></thead>';
+    const tbody = el('tbody');
+    for (const order of data.orders) {
+      tbody.append(el('tr', {}, [
+        el('td', { class: 'muted mono', text: fmtDate(order.at) }),
+        el('td', {}, [
+          el('strong', { text: order.name || String(order.userId) }),
+          el('div', { class: 'faint', style: 'font-size:11px', text: order.username ? `@${order.username}` : String(order.userId) })
+        ]),
+        el('td', { class: 'muted', text: order.planName || '' }),
+        el('td', {}, [el('span', {
+          class: `chip ${order.status === 'done' ? 'ok' : order.status === 'pending' ? '' : 'danger'}`,
+          html: `<i></i>${order.status}`
+        })])
+      ]));
+    }
+    table.append(tbody);
+    mountTable(wrapOrders, table);
+    panels.Orders.append(wrapOrders);
+  }
+
+  /* ---- AI ---- */
+  const aiKey = el('input', { type: 'password', placeholder: data.ai.hasKey ? 'a key is saved' : 'sk-ant-…' });
+  const aiModel = el('input', { value: data.ai.model || '' });
+  const aiGrid = el('div', { class: 'form-grid' });
+  formField(aiGrid, 'Anthropic API key', aiKey, {
+    full: true,
+    hint: 'Kept on your server and used only for this. Leave empty to keep the saved one.'
+  });
+  formField(aiGrid, 'Model', aiModel, { full: true });
+
+  const describe = el('textarea', {
+    style: 'min-height:120px',
+    placeholder: 'Describe the bot you want. For example: a sales bot in Persian with a welcome screen, a plans screen, a tutorial screen for iPhone and Android, and a support screen.'
+  });
+  const proposal = el('div');
+
+  panels.AI.append(el('div', { class: 'card' }, [
+    el('strong', { text: 'Build the bot for me' }),
+    el('div', { class: 'muted', style: 'margin:6px 0 16px' }, ['Describe it in your own words and review what comes back before it replaces anything.']),
+    aiGrid,
+    el('div', { class: 'row', style: 'margin-bottom:14px' }, [
+      el('button', {
+        class: 'btn', text: 'Save the key',
+        onclick: () => save(aiKey.value.trim() || aiModel.value.trim()
+          ? { ai: { apiKey: aiKey.value.trim() || undefined, model: aiModel.value.trim() || undefined } }
+          : null)
+      })
+    ]),
+    describe,
+    el('div', { class: 'row', style: 'margin-top:12px' }, [
+      el('button', {
+        class: 'btn primary', html: `${icon('sparkle')} Design the bot`,
+        onclick: async function () {
+          const button = this;
+          button.disabled = true;
+          proposal.innerHTML = '<div class="skeleton" style="height:90px"></div>';
+          try {
+            const result = await api.post('/bot/ai', { description: describe.value, useCurrent: true });
+            proposal.innerHTML = '';
+            proposal.append(el('div', { class: 'section-title', text: `${result.screens.length} screens proposed` }));
+            for (const screen of result.screens) {
+              proposal.append(el('div', { class: 'muted', style: 'margin:12px 0 4px', text: `/${screen.key}` }));
+              proposal.append(botPreview(screen, draft.brand));
+            }
+            proposal.append(el('div', { class: 'row', style: 'margin-top:16px' }, [
+              el('button', {
+                class: 'btn primary', text: 'Use these screens',
+                onclick: async () => {
+                  draft.screens = result.screens;
+                  drawScreens();
+                  await save();
+                  proposal.innerHTML = '';
+                  toast('The bot was rebuilt — open the Screens tab to fine-tune it');
+                }
+              }),
+              el('button', { class: 'btn ghost', text: 'Discard', onclick: () => { proposal.innerHTML = ''; } })
+            ]));
+          } catch (err) {
+            proposal.innerHTML = '';
+            proposal.append(el('div', { class: 'card empty', text: err.message }));
+          }
+          button.disabled = false;
+        }
+      })
+    ]),
+    proposal
+  ]));
+
+  hydrateIcons(view);
+}
+
+/* --------------------- settings section: the event log ------------------- */
 
 async function renderLogs(view) {
   const logs = await api.get('/logs');
   if (!logs.length) {
-    view.innerHTML = `<div class="card empty">${icon('empty', 42)}<div>Nothing logged yet.</div></div>`;
+    view.append(el('div', { class: 'card empty', html: `${icon('empty', 42)}<div>Nothing logged yet.</div>` }));
     return;
   }
   const wrap = el('div', { class: 'table-wrap' });
@@ -1985,11 +2384,6 @@ function buildDock() {
 
   const rows = [
     ...rest.map((page) => ({ page: page.id, icon: page.icon, label: page.label })),
-    {
-      icon: 'theme',
-      label: 'Theme',
-      run: () => applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light')
-    },
     {
       icon: 'logout',
       label: 'Sign out',
@@ -2280,6 +2674,85 @@ function liquidLens(container, selector, axis, onPick) {
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   store.set('nexv-theme', theme);
+  const face = document.querySelector('#themeToggle .ts-face');
+  if (face) face.innerHTML = icon(theme === 'light' ? 'sun' : 'theme', 14);
+  const toggle = document.getElementById('themeToggle');
+  if (toggle) toggle.setAttribute('aria-checked', theme === 'light' ? 'false' : 'true');
+}
+
+/**
+ * The header's light/dark switch. It flips on a tap, and the knob can also be
+ * carried across with a finger: it follows, squashes with the speed it is
+ * moving and settles on the nearer side, the way the dock's capsule does.
+ */
+function themeSwitch(node) {
+  if (!node) return;
+  const knob = node.querySelector('.ts-knob');
+  const travel = () => node.clientWidth - knob.offsetWidth - 4;
+  const isLight = () => document.documentElement.dataset.theme === 'light';
+
+  let pressing = false;
+  let pointerId = null;
+  let dragging = false;
+  let startX = 0;
+  let startTx = 0;
+  let tx = 0;
+  let lastTx = 0;
+
+  const put = (value) => {
+    tx = Math.max(0, Math.min(travel(), value));
+    node.style.setProperty('--tx', `${tx.toFixed(1)}px`);
+    // the knob stretches the way it does in the dock, then rounds out again
+    const stretch = Math.min(0.22, Math.abs(tx - lastTx) * 0.02);
+    knob.style.setProperty('--sx', (1 + stretch).toFixed(3));
+    knob.style.setProperty('--sy', (1 - stretch * 0.6).toFixed(3));
+    lastTx = tx;
+  };
+
+  const settle = (light) => {
+    node.style.removeProperty('--tx');
+    knob.style.setProperty('--sx', 1);
+    knob.style.setProperty('--sy', 1);
+    node.classList.remove('dragging');
+    applyTheme(light ? 'light' : 'dark');
+  };
+
+  node.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    pressing = true;
+    dragging = false;
+    pointerId = event.pointerId;
+    startX = event.clientX;
+    startTx = isLight() ? 0 : travel();
+    lastTx = startTx;
+    try { node.setPointerCapture(event.pointerId); } catch (_) { /* older browsers */ }
+  });
+
+  node.addEventListener('pointermove', (event) => {
+    if (!pressing || event.pointerId !== pointerId) return;
+    if (!dragging && Math.abs(event.clientX - startX) > 4) {
+      dragging = true;
+      node.classList.add('dragging');
+    }
+    if (dragging) {
+      put(startTx + (event.clientX - startX));
+      event.preventDefault();
+    }
+  });
+
+  const release = (event, cancelled) => {
+    if (!pressing || (event && event.pointerId !== pointerId)) return;
+    pressing = false;
+    if (cancelled) return settle(isLight());
+    // a tap flips it; a drag lands on whichever side the knob ended nearer
+    settle(dragging ? tx < travel() / 2 : !isLight());
+    dragging = false;
+  };
+  node.addEventListener('pointerup', (event) => release(event, false));
+  node.addEventListener('pointercancel', (event) => release(event, true));
+  node.addEventListener('keydown', (event) => {
+    if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); settle(!isLight()); }
+  });
 }
 
 /** Last resort: show what went wrong instead of an empty shell. */
@@ -2295,21 +2768,16 @@ function bootFailure(message) {
 }
 
 window.addEventListener('error', (event) => {
-  if (!document.getElementById('nav').children.length) bootFailure(event.message || 'unexpected script error');
+  const view = document.getElementById('view');
+  if (view && !view.children.length) bootFailure(event.message || 'unexpected script error');
 });
 
 function boot() {
-  document.getElementById('themeToggle').addEventListener('click', () => {
-    applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
-  });
+  themeSwitch(document.getElementById('themeToggle'));
 
   document.getElementById('logoutBtn').addEventListener('click', async () => {
     try { await api.post('/logout'); } catch (_) { /* sign out locally anyway */ }
     location.href = `${BASE}login`;
-  });
-
-  document.getElementById('restartXray').addEventListener('click', function () {
-    xrayAction('restart', this);
   });
 
   window.addEventListener('hashchange', () => {
