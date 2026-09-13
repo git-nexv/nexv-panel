@@ -2,16 +2,26 @@
 /**
  * "Describe the bot you want, and have it built."
  *
- * The panel does not ship an API key of its own - there is nowhere sensible to
- * keep one on someone else's server - so the admin brings their own Anthropic
- * key in the Bot page. Without a key this whole feature simply says so.
+ * The panel ships no API key of its own - there is nowhere sensible to keep one
+ * on someone else's server - so the admin brings their own in the Bot page, from
+ * whichever provider they already pay for. Anthropic goes through the official
+ * SDK; the OpenAI-compatible endpoint covers OpenAI, Groq, DeepSeek, OpenRouter,
+ * Together, xAI and anything self-hosted that speaks the same shape; Gemini has
+ * its own. Adding an SDK per provider would weigh the install down for nothing,
+ * so those two are plain HTTPS calls.
  *
  * Whatever comes back is treated as a proposal: it is validated and normalised
  * here, and the Bot page shows it for review before anything is saved.
  */
+const https = require('https');
 const Anthropic = require('@anthropic-ai/sdk');
 
-const DEFAULT_MODEL = 'claude-opus-5';
+const PROVIDERS = {
+  anthropic: { label: 'Anthropic (Claude)', model: 'claude-opus-5', needsUrl: false },
+  openai: { label: 'OpenAI', model: 'gpt-5', needsUrl: false, host: 'api.openai.com', path: '/v1/chat/completions' },
+  compatible: { label: 'OpenAI-compatible (Groq, DeepSeek, OpenRouter, local…)', model: '', needsUrl: true },
+  gemini: { label: 'Google Gemini', model: 'gemini-2.5-pro', needsUrl: false, host: 'generativelanguage.googleapis.com' }
+};
 
 const ACTIONS = ['screen', 'plans', 'configs', 'usage', 'support', 'url', 'text'];
 
@@ -30,7 +40,9 @@ const SYSTEM = [
   '<b>, <i>, <code>. Never use Markdown.',
   'There must be exactly one screen with the key "start". Every screen key referenced by a',
   'screen button must exist. Keep each screen to at most 8 buttons, in rows of one or two.',
-  'Write in the language the admin used to describe the bot. Emoji in button labels are welcome.'
+  'Write in Persian unless the admin asks for another language. Emoji in button labels are welcome.',
+  'Payment is handled by the panel itself, so never write screens about card numbers or wallets.',
+  'Answer with JSON only, in the shape {"screens":[{"key","title","text","buttons":[[{"label","action","value"}]]}]}.'
 ].join('\n');
 
 const FLOW_SCHEMA = {
@@ -109,27 +121,71 @@ function sanitise(flow) {
 
 function ready(settings) {
   if (!settings || !settings.apiKey) {
-    return { ok: false, reason: 'add an Anthropic API key in the AI tab first' };
+    return { ok: false, reason: 'add an API key in the AI tab first' };
+  }
+  const provider = PROVIDERS[settings.provider] || PROVIDERS.anthropic;
+  if (provider.needsUrl && !settings.baseUrl) {
+    return { ok: false, reason: 'this provider needs its endpoint URL' };
+  }
+  if (provider.needsUrl && !settings.model) {
+    return { ok: false, reason: 'this provider needs a model name' };
   }
   return { ok: true };
 }
 
-/**
- * Ask for a bot. Returns the screens it proposes - the caller decides whether
- * to keep them.
- */
-async function generate({ apiKey, model }, description, current) {
-  const client = new Anthropic({ apiKey });
-  const brief = [
-    `Design the bot described below.${current && current.length ? ' An earlier version is included; improve on it rather than starting over.' : ''}`,
-    '',
-    'Description:',
-    String(description || '').slice(0, 4000),
-    current && current.length ? `\nCurrent screens:\n${JSON.stringify(current).slice(0, 6000)}` : ''
-  ].join('\n');
+/* ------------------------------ the providers ---------------------------- */
 
+/** One JSON POST, with the provider's own error text passed through. */
+function post({ host, port, path, headers }, payload) {
+  const body = JSON.stringify(payload);
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      host,
+      port: port || 443,
+      path,
+      method: 'POST',
+      headers: Object.assign({
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(body)
+      }, headers || {}),
+      timeout: 180000
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        let parsed;
+        try { parsed = JSON.parse(data); } catch (_) {
+          return reject(new Error(`the provider answered with something that is not JSON (HTTP ${res.statusCode})`));
+        }
+        if (res.statusCode >= 400) {
+          const message = (parsed.error && (parsed.error.message || parsed.error)) || parsed.message || `HTTP ${res.statusCode}`;
+          return reject(new Error(String(message)));
+        }
+        resolve(parsed);
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('the provider did not answer in time')));
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
+/** Pull the first JSON object out of whatever the model wrote. */
+function parseFlow(text) {
+  const trimmed = String(text || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '');
+  try { return JSON.parse(trimmed); } catch (_) { /* it wrapped the JSON in prose */ }
+  const start = trimmed.indexOf('{');
+  const end = trimmed.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try { return JSON.parse(trimmed.slice(start, end + 1)); } catch (_) { /* give up below */ }
+  }
+  throw new Error('the model did not return a usable bot');
+}
+
+async function askAnthropic(settings, brief) {
+  const client = new Anthropic({ apiKey: settings.apiKey });
   const response = await client.beta.messages.create({
-    model: model || DEFAULT_MODEL,
+    model: settings.model || PROVIDERS.anthropic.model,
     max_tokens: 16000,
     system: SYSTEM,
     thinking: { type: 'adaptive' },
@@ -138,20 +194,87 @@ async function generate({ apiKey, model }, description, current) {
     output_config: { format: { type: 'json_schema', schema: FLOW_SCHEMA } },
     messages: [{ role: 'user', content: brief }]
   });
+  if (response.stop_reason === 'refusal') throw new Error('the model declined to answer that request');
+  if (response.parsed_output) return response.parsed_output;
+  return parseFlow((response.content || []).filter((b) => b.type === 'text').map((b) => b.text).join(''));
+}
 
-  if (response.stop_reason === 'refusal') {
-    throw new Error('the model declined to answer that request');
-  }
+/** OpenAI and everything that copied its chat-completions shape. */
+async function askChatCompletions(settings, brief, endpoint) {
+  const result = await post({
+    host: endpoint.host,
+    port: endpoint.port,
+    path: endpoint.path,
+    headers: { authorization: `Bearer ${settings.apiKey}` }
+  }, {
+    model: settings.model || PROVIDERS.openai.model,
+    messages: [
+      { role: 'system', content: SYSTEM },
+      { role: 'user', content: brief }
+    ],
+    response_format: { type: 'json_object' }
+  });
+  const choice = (result.choices || [])[0];
+  const message = choice && choice.message;
+  if (!message) throw new Error('the provider returned no answer');
+  const content = Array.isArray(message.content)
+    ? message.content.map((part) => part.text || '').join('')
+    : message.content;
+  return parseFlow(content);
+}
 
-  let flow = response.parsed_output;
-  if (!flow) {
-    const text = (response.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
-    try { flow = JSON.parse(text); } catch (_) { throw new Error('the model did not return a usable bot'); }
-  }
+async function askGemini(settings, brief) {
+  const model = settings.model || PROVIDERS.gemini.model;
+  const result = await post({
+    host: PROVIDERS.gemini.host,
+    path: `/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(settings.apiKey)}`
+  }, {
+    systemInstruction: { parts: [{ text: SYSTEM }] },
+    contents: [{ role: 'user', parts: [{ text: brief }] }],
+    generationConfig: { responseMimeType: 'application/json' }
+  });
+  const candidate = (result.candidates || [])[0];
+  const parts = candidate && candidate.content && candidate.content.parts;
+  if (!parts) throw new Error('the provider returned no answer');
+  return parseFlow(parts.map((part) => part.text || '').join(''));
+}
+
+/** Split "https://host:port/path" into what http.request wants. */
+function splitUrl(raw) {
+  const url = new URL(String(raw).trim());
+  return {
+    host: url.hostname,
+    port: url.port ? Number(url.port) : 443,
+    path: url.pathname === '/' ? '/v1/chat/completions' : `${url.pathname}${url.search}`
+  };
+}
+
+/**
+ * Ask for a bot. Returns the screens it proposes - the caller decides whether
+ * to keep them.
+ */
+async function generate(settings, description, current) {
+  const check = ready(settings);
+  if (!check.ok) throw new Error(check.reason);
+
+  const brief = [
+    `Design the bot described below.${current && current.length ? ' An earlier version is included; improve on it rather than starting over.' : ''}`,
+    '',
+    'Description:',
+    String(description || '').slice(0, 4000),
+    current && current.length ? `\nCurrent screens:\n${JSON.stringify(current).slice(0, 6000)}` : ''
+  ].join('\n');
+
+  const name = PROVIDERS[settings.provider] ? settings.provider : 'anthropic';
+  let flow;
+  if (name === 'anthropic') flow = await askAnthropic(settings, brief);
+  else if (name === 'gemini') flow = await askGemini(settings, brief);
+  else if (name === 'compatible') flow = await askChatCompletions(settings, brief, splitUrl(settings.baseUrl));
+  else flow = await askChatCompletions(settings, brief, PROVIDERS.openai);
 
   const screens = sanitise(flow);
   if (!screens.length) throw new Error('the model did not return any screens');
-  return { screens, model: response.model || model || DEFAULT_MODEL };
+  return { screens, provider: name, model: settings.model || PROVIDERS[name].model };
 }
 
-module.exports = { generate, ready, sanitise, DEFAULT_MODEL };
+module.exports = { generate, ready, sanitise, PROVIDERS, DEFAULT_MODEL: PROVIDERS.anthropic.model };

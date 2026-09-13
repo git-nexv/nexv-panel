@@ -306,6 +306,10 @@ textarea { resize: vertical; min-height: 90px; font-family: ui-monospace, "SFMon
 .switch input:checked + .track::after { background: var(--brand); transform: translateX(17px); }
 [dir="rtl"] .switch input:checked + .track::after { transform: translateX(-17px); }
 
+/* a class that sets display outranks the browser's own [hidden] rule, so every
+   hidden field would still show; this settles it once for the whole panel */
+[hidden] { display: none !important; }
+
 /* -------------------------------- table --------------------------------- */
 
 .table-wrap { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--border); }

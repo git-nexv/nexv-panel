@@ -126,7 +126,17 @@ function botView() {
     screens: b.screens || [],
     plans: b.plans || [],
     orders: (b.orders || []).slice(0, 60),
-    ai: { hasKey: !!(b.ai && b.ai.apiKey), model: (b.ai && b.ai.model) || botai.DEFAULT_MODEL },
+    pay: b.pay || telegram.defaults().pay,
+    payWays: telegram.payWays(),
+    ai: {
+      hasKey: !!(b.ai && b.ai.apiKey),
+      provider: (b.ai && b.ai.provider) || 'anthropic',
+      model: (b.ai && b.ai.model) || '',
+      baseUrl: (b.ai && b.ai.baseUrl) || ''
+    },
+    providers: Object.entries(botai.PROVIDERS).map(([value, meta]) => ({
+      value, label: meta.label, model: meta.model, needsUrl: !!meta.needsUrl
+    })),
     status: telegram.status()
   };
 }
@@ -154,11 +164,38 @@ router.put('/bot', async (req, res) => {
       enable: p.enable !== false
     }));
   }
+  if (body.pay && typeof body.pay === 'object') {
+    const pay = b.pay || telegram.defaults().pay;
+    if (body.pay.card) {
+      pay.card = {
+        enable: body.pay.card.enable !== false,
+        number: String(body.pay.card.number || '').slice(0, 40),
+        holder: String(body.pay.card.holder || '').slice(0, 60),
+        note: String(body.pay.card.note || '').slice(0, 300)
+      };
+    }
+    if (body.pay.crypto) {
+      pay.crypto = {
+        enable: body.pay.crypto.enable !== false,
+        note: String(body.pay.crypto.note || '').slice(0, 300),
+        wallets: (Array.isArray(body.pay.crypto.wallets) ? body.pay.crypto.wallets : [])
+          .map((w) => ({
+            asset: String(w.asset || 'USDT').slice(0, 20),
+            network: String(w.network || '').slice(0, 30),
+            address: String(w.address || '').slice(0, 120)
+          }))
+          .filter((w) => w.address)
+      };
+    }
+    b.pay = pay;
+  }
   if (body.ai && typeof body.ai === 'object') {
     b.ai = b.ai || {};
     if (typeof body.ai.apiKey === 'string' && body.ai.apiKey.trim()) b.ai.apiKey = body.ai.apiKey.trim();
     if (body.ai.apiKey === null) b.ai.apiKey = '';
+    if (body.ai.provider !== undefined && botai.PROVIDERS[body.ai.provider]) b.ai.provider = body.ai.provider;
     if (body.ai.model !== undefined) b.ai.model = String(body.ai.model).slice(0, 60);
+    if (body.ai.baseUrl !== undefined) b.ai.baseUrl = String(body.ai.baseUrl).slice(0, 200);
   }
   db.saveNow();
   logEvent('bot', 'bot settings saved');
@@ -189,6 +226,15 @@ router.post('/bot/stop', (req, res) => {
 });
 
 router.get('/bot/status', (req, res) => res.json(telegram.status()));
+
+/** Throw the screens away and start from the Persian starter again. */
+router.post('/bot/reset-screens', (req, res) => {
+  const b = telegram.bot();
+  b.screens = telegram.starterScreens();
+  db.saveNow();
+  logEvent('bot', 'bot screens reset to the starter');
+  res.json({ screens: b.screens });
+});
 
 /** Send a message to the admin's chat, to prove the wiring end to end. */
 router.post('/bot/ping', async (req, res) => {

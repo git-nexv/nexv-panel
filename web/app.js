@@ -1934,17 +1934,18 @@ async function renderBot(view) {
     currency: data.currency,
     adminId: data.adminId,
     screens: JSON.parse(JSON.stringify(data.screens || [])),
-    plans: JSON.parse(JSON.stringify(data.plans || []))
+    plans: JSON.parse(JSON.stringify(data.plans || [])),
+    pay: JSON.parse(JSON.stringify(data.pay || { card: {}, crypto: { wallets: [] } }))
   };
 
-  const { wrap, panels } = tabbed(['Setup', 'Screens', 'Plans', 'Orders', 'AI']);
+  const { wrap, panels } = tabbed(['Setup', 'Screens', 'Plans', 'Payment', 'Orders', 'AI']);
   for (const panel of Object.values(panels)) panel.className = 'tab-panel';
   view.append(wrap);
 
   const save = async (extra) => {
     const payload = Object.assign({
       brand: draft.brand, currency: draft.currency, adminId: draft.adminId,
-      screens: draft.screens, plans: draft.plans
+      screens: draft.screens, plans: draft.plans, pay: draft.pay
     }, extra || {});
     try {
       await api.put('/bot', payload);
@@ -2061,7 +2062,18 @@ async function renderBot(view) {
   drawScreens();
   panels.Screens.append(
     el('div', { class: 'row', style: 'margin-bottom:14px' }, [
-      el('button', { class: 'btn primary', text: 'Save the bot', onclick: () => save() })
+      el('button', { class: 'btn primary', text: 'Save the bot', onclick: () => save() }),
+      el('button', {
+        class: 'btn ghost', text: 'Load the Persian starter',
+        onclick: () => confirmDialog('Replace every screen with the Persian starter?', async () => {
+          try {
+            const result = await api.post('/bot/reset-screens', {});
+            draft.screens = result.screens;
+            drawScreens();
+            toast('Starter loaded');
+          } catch (err) { toast(err.message, 'err'); }
+        })
+      })
     ]),
     el('div', { class: 'bot-split' }, [list, preview])
   );
@@ -2109,6 +2121,93 @@ async function renderBot(view) {
   drawPlans();
   panels.Plans.append(plansBox);
 
+  /* ---- Payment ---- */
+  const payBox = el('div');
+  const drawPay = () => {
+    payBox.innerHTML = '';
+    const card = draft.pay.card = draft.pay.card || {};
+    const crypto = draft.pay.crypto = draft.pay.crypto || {};
+    crypto.wallets = crypto.wallets || [];
+
+    const bind = (obj, field, control, cast) => {
+      control.addEventListener('input', () => { obj[field] = cast ? cast(control.value) : control.value; });
+      return control;
+    };
+    const toggleOf = (obj, label) => {
+      const box = el('input', { type: 'checkbox' });
+      box.checked = obj.enable !== false;
+      box.addEventListener('change', () => { obj.enable = box.checked; });
+      return el('label', { class: 'switch' }, [box, el('span', { class: 'track' }), el('span', { class: 'muted', text: label })]);
+    };
+
+    /* card to card */
+    const cardGrid = el('div', { class: 'form-grid' });
+    formField(cardGrid, 'Card number', bind(card, 'number', el('input', { value: card.number || '', placeholder: '6037 9975 0000 0000' })), {
+      hint: 'Shown to the buyer as a copyable line'
+    });
+    formField(cardGrid, 'Card holder', bind(card, 'holder', el('input', { value: card.holder || '', placeholder: 'نام و نام خانوادگی' })));
+    formField(cardGrid, 'Extra note', bind(card, 'note', el('input', { value: card.note || '', placeholder: 'optional line shown under the card' })), { full: true });
+
+    payBox.append(el('div', { class: 'card' }, [
+      el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+        el('strong', { text: '💳 Card to card' }), toggleOf(card, 'Offer this method')
+      ]),
+      cardGrid,
+      el('div', { class: 'hint', text: 'After showing these, the bot asks the buyer for a photo of the receipt and forwards it to you with their username and numeric id.' })
+    ]));
+
+    /* crypto */
+    const walletList = el('div', { class: 'bot-rows' });
+    const drawWallets = () => {
+      walletList.innerHTML = '';
+      crypto.wallets.forEach((wallet, index) => {
+        const grid = el('div', { class: 'form-grid' });
+        formField(grid, 'Asset', bind(wallet, 'asset', el('input', { value: wallet.asset || 'USDT', placeholder: 'USDT' })));
+        formField(grid, 'Network', bind(wallet, 'network', el('input', { value: wallet.network || '', placeholder: 'TRC20' })), {
+          hint: 'Shown next to the address so nobody sends on the wrong chain'
+        });
+        formField(grid, 'Wallet address', bind(wallet, 'address', el('input', { value: wallet.address || '', placeholder: 'T…' })), { full: true });
+        walletList.append(el('div', { class: 'card' }, [
+          el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+            el('strong', { text: `${wallet.asset || 'USDT'} · ${wallet.network || 'network?'}` }),
+            el('button', {
+              class: 'btn icon danger', title: 'Remove', html: icon('trash'),
+              onclick: () => { crypto.wallets.splice(index, 1); drawWallets(); }
+            })
+          ]),
+          grid
+        ]));
+      });
+      walletList.append(el('button', {
+        class: 'btn', html: `${icon('plus')} Add a wallet`,
+        onclick: () => { crypto.wallets.push({ asset: 'USDT', network: 'TRC20', address: '' }); drawWallets(); }
+      }));
+      hydrateIcons(walletList);
+    };
+    drawWallets();
+
+    const cryptoNote = bind(crypto, 'note', el('input', { value: crypto.note || '', placeholder: 'optional line shown under the wallets' }));
+    const cryptoGrid = el('div', { class: 'form-grid' });
+    formField(cryptoGrid, 'Extra note', cryptoNote, { full: true });
+
+    payBox.append(el('div', { class: 'card' }, [
+      el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+        el('strong', { text: '🪙 Crypto' }), toggleOf(crypto, 'Offer this method')
+      ]),
+      cryptoGrid,
+      el('div', { class: 'section-title', text: 'Wallets' }),
+      walletList,
+      el('div', { class: 'hint', style: 'margin-top:10px', text: 'The buyer can answer with a screenshot or paste the transaction hash; either one reaches you with their username and numeric id.' })
+    ]));
+
+    payBox.append(el('div', { class: 'row' }, [
+      el('button', { class: 'btn primary', text: 'Save payment settings', onclick: () => save() })
+    ]));
+    hydrateIcons(payBox);
+  };
+  drawPay();
+  panels.Payment.append(payBox);
+
   /* ---- Orders ---- */
   if (!data.orders.length) {
     panels.Orders.append(el('div', { class: 'card empty', html: `${icon('empty', 42)}<div>No orders yet.</div>` }));
@@ -2137,14 +2236,32 @@ async function renderBot(view) {
   }
 
   /* ---- AI ---- */
-  const aiKey = el('input', { type: 'password', placeholder: data.ai.hasKey ? 'a key is saved' : 'sk-ant-…' });
-  const aiModel = el('input', { value: data.ai.model || '' });
+  const providers = data.providers || [];
+  const aiProvider = selectOf(providers.map((p) => ({ value: p.value, label: p.label })), data.ai.provider);
+  const aiKey = el('input', { type: 'password', placeholder: data.ai.hasKey ? 'a key is saved' : 'paste your key' });
+  const aiModel = el('input', { value: data.ai.model || '', placeholder: '' });
+  const aiUrl = el('input', { value: data.ai.baseUrl || '', placeholder: 'https://api.groq.com/openai/v1/chat/completions' });
   const aiGrid = el('div', { class: 'form-grid' });
-  formField(aiGrid, 'Anthropic API key', aiKey, {
+
+  const urlField = el('div', { class: 'field full' }, [
+    el('label', { text: 'Endpoint URL' }), aiUrl,
+    el('div', { class: 'hint', text: 'Any server that speaks the OpenAI chat-completions shape' })
+  ]);
+  const followProvider = () => {
+    const meta = providers.find((p) => p.value === aiProvider.value) || {};
+    urlField.hidden = !meta.needsUrl;
+    aiModel.placeholder = meta.model || 'model name';
+  };
+  aiProvider.addEventListener('change', followProvider);
+
+  formField(aiGrid, 'Provider', aiProvider, { full: true, hint: 'Use whichever you already pay for' });
+  formField(aiGrid, 'API key', aiKey, {
     full: true,
     hint: 'Kept on your server and used only for this. Leave empty to keep the saved one.'
   });
-  formField(aiGrid, 'Model', aiModel, { full: true });
+  formField(aiGrid, 'Model', aiModel, { full: true, hint: 'Leave empty for the provider\u2019s default' });
+  aiGrid.append(urlField);
+  followProvider();
 
   const describe = el('textarea', {
     style: 'min-height:120px',
@@ -2154,14 +2271,19 @@ async function renderBot(view) {
 
   panels.AI.append(el('div', { class: 'card' }, [
     el('strong', { text: 'Build the bot for me' }),
-    el('div', { class: 'muted', style: 'margin:6px 0 16px' }, ['Describe it in your own words and review what comes back before it replaces anything.']),
+    el('div', { class: 'muted', style: 'margin:6px 0 16px' }, ['Describe it in your own words and review what comes back before it replaces anything. The bot writes in Persian unless you ask for another language.']),
     aiGrid,
     el('div', { class: 'row', style: 'margin-bottom:14px' }, [
       el('button', {
-        class: 'btn', text: 'Save the key',
-        onclick: () => save(aiKey.value.trim() || aiModel.value.trim()
-          ? { ai: { apiKey: aiKey.value.trim() || undefined, model: aiModel.value.trim() || undefined } }
-          : null)
+        class: 'btn', text: 'Save the provider',
+        onclick: () => save({
+          ai: {
+            provider: aiProvider.value,
+            apiKey: aiKey.value.trim() || undefined,
+            model: aiModel.value.trim(),
+            baseUrl: aiUrl.value.trim()
+          }
+        })
       })
     ]),
     describe,
