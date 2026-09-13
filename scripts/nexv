@@ -538,16 +538,22 @@ act_doctor() {
     *) ok "No firewall is filtering the panel port" ;;
   esac
 
-  # a panel parked on an unusual port is the classic "it runs but will not
-  # open": carriers, office networks and captive portals filter everything
-  # except 80 and 443
+  # a panel parked on a high port is the classic "it runs but will not open":
+  # carriers, office networks and captive portals filter everything but 80/443.
+  # Those two belong to the inbounds, so the port-80 redirect is the way out.
   if [[ $port != 443 && $port != 80 ]]; then
-    if is_port_in_use 443; then
-      warn "Port $port is easily filtered by mobile and office networks, and 443 is taken"
-    else
-      warn "Port $port is easily filtered by mobile and office networks"
-      echo "    Port 443 is free. Move the panel there with: nexv fix"
+    warn "Port $port can be filtered by mobile carriers and office networks"
+    if [[ $secure == yes ]]; then
+      echo "    Ports 80 and 443 are best left to your inbounds."
+      echo "    The panel answers on port 80 as a redirect, unless an inbound uses it."
     fi
+    echo "    To try a different port:  nexv fix <port>"
+  fi
+
+  # the panel squatting on a port an inbound wants is worth saying out loud
+  if [[ $port == 443 || $port == 80 ]]; then
+    warn "The panel holds port $port, which an inbound usually wants"
+    echo "    Move it with: nexv fix <port>"
   fi
 
   # two panels managing one Xray is a fight neither wins
@@ -569,7 +575,8 @@ act_doctor() {
   # the real test: does the panel answer on its own URL?
   local url="${scheme}://127.0.0.1:${port}${webpath}/login"
   local code
-  code="$(curl -sk -o /dev/null -m 10 -w '%{http_code}' "$url" 2>/dev/null || echo 000)"
+  code="$(curl -sk -o /dev/null -m 10 -w '%{http_code}' "$url" 2>/dev/null)"
+  code="${code:-000}"
   if [[ $code == 200 ]]; then
     ok "The panel answers on $scheme://$host:$port${webpath}/"
   else
@@ -580,25 +587,52 @@ act_doctor() {
   fi
 
   if [[ $secure == yes && $port != 80 ]]; then
-    code="$(curl -s -o /dev/null -m 10 -w '%{http_code}' "http://127.0.0.1/" 2>/dev/null || echo 000)"
-    [[ $code == 301 ]] && ok "Port 80 redirects to HTTPS" || warn "Port 80 is not redirecting (HTTP $code)"
+    # an inbound on 80 is a deliberate choice, not a missing redirect
+    # ask the panel's own data, which is what the server checks when it decides
+    # whether to bind the redirect
+    if DATA_DIR="$DATA_DIR" node -e '
+      try {
+        const db = require(process.env.DATA_DIR + "/db.json");
+        process.exit((db.inbounds || []).some((i) => i.enable !== false && Number(i.port) === 80) ? 0 : 1);
+      } catch (e) { process.exit(1); }
+    ' 2>/dev/null; then
+      ok "Port 80 is used by an inbound, so the panel leaves it alone"
+    else
+      code="$(curl -s -o /dev/null -m 10 -w '%{http_code}' "http://127.0.0.1/" 2>/dev/null)"
+      code="${code:-000}"
+      [[ $code == 301 ]] && ok "Port 80 redirects to the panel" \
+        || warn "Port 80 is not redirecting (HTTP $code)"
+    fi
   fi
   echo
 }
 
 # Put the panel somewhere the outside world can actually reach it.
 #
-# Port 443 is the one port that is open on every network - office wifi, mobile
-# carriers, captive portals. Panels parked on 2053, 2087 and friends are the
-# usual reason a running panel "does not open": the process is healthy and the
-# port is simply filtered somewhere between the browser and the server.
+# Ports 80 and 443 are worth far more to an inbound than to a panel - an
+# inbound on 443 is indistinguishable from ordinary HTTPS - so the panel keeps
+# off them and takes a high port instead. Give a port explicitly to override.
+PANEL_PORT_MIN=10000
+PANEL_PORT_MAX=60000
+
+pick_free_port() {
+  local candidate attempt=0
+  while (( attempt < 40 )); do
+    candidate=$(( RANDOM % (PANEL_PORT_MAX - PANEL_PORT_MIN) + PANEL_PORT_MIN ))
+    is_port_in_use "$candidate" || { echo "$candidate"; return 0; }
+    attempt=$(( attempt + 1 ))
+  done
+  return 1
+}
+
 act_fix() {
   need_root
+  local wanted="${1:-}"
   echo
   echo "${BOLD}Making the panel reachable${RESET}"
   echo
 
-  local port target owner
+  local port owner
   port="$(panel_port)"
   printf "  %-24s %s\n" "Current panel port" "$port"
 
@@ -617,35 +651,40 @@ act_fix() {
   [[ -n $cert && -n $key && -f $cert && -f $key ]] && secure=yes
   printf "  %-24s %s\n" "HTTPS" "$secure"
 
-  if [[ $secure == no ]]; then
-    err "No certificate yet, so the panel cannot move to 443."
-    echo "  Run this first:  nexv cert <your-domain>"
-    return 1
-  fi
-
   # is somebody else sitting on our configured port?
   if is_port_in_use "$port"; then
     owner="$(port_owner "$port")"
     if [[ -n $owner && $owner != *node* && $owner != *nexv* ]]; then
       warn "Port $port is held by another program: $owner"
-      echo "  The panel cannot be serving there; that is very likely the whole problem."
     fi
   fi
 
-  target=443
-  if [[ $port == 443 ]]; then
-    ok "The panel is already on 443"
-  elif is_port_in_use 443; then
-    owner="$(port_owner 443)"
-    err "Port 443 is already taken by: ${owner:-another process}"
-    echo "  Free it (often nginx or apache: systemctl stop nginx), then run: nexv fix"
-    return 1
+  local target
+  if [[ -n $wanted ]]; then
+    [[ $wanted =~ ^[0-9]+$ ]] && (( wanted >= 1 && wanted <= 65535 )) \
+      || { err "Give a port number between 1 and 65535"; return 1; }
+    target="$wanted"
+  elif [[ $port == 80 || $port == 443 ]]; then
+    # the panel is squatting on a port an inbound should have
+    target="$(pick_free_port)" || { err "Could not find a free port"; return 1; }
+    warn "Ports 80 and 443 belong to your inbounds; moving the panel off $port"
   else
-    info_port_move "$port" "$target" || return 1
+    target="$port"
   fi
 
-  allow_port 443
-  allow_port 80
+  if [[ $target != "$port" ]]; then
+    if [[ $target != "$port" ]] && is_port_in_use "$target"; then
+      owner="$(port_owner "$target")"
+      err "Port $target is already taken by: ${owner:-another process}"
+      return 1
+    fi
+    info_port_move "$port" "$target" || return 1
+    port="$target"
+  else
+    ok "Keeping the panel on port $port"
+  fi
+
+  allow_port "$port"
 
   systemctl restart "$SERVICE"
   sleep 3
@@ -655,7 +694,7 @@ act_fix() {
     return 1
   fi
 
-  local webpath host url code
+  local webpath host url code scheme
   webpath="$(DATA_DIR=$DATA_DIR node -e '
     const db = require(process.env.DATA_DIR + "/db.json");
     process.stdout.write((db.settings && db.settings.webBasePath) || "");
@@ -665,22 +704,27 @@ act_fix() {
     const s = db.settings || {};
     process.stdout.write(s.domain || s.serverIP || "127.0.0.1");
   ' 2>/dev/null)"
+  scheme=http
+  [[ $secure == yes ]] && scheme=https
 
-  url="https://127.0.0.1:443${webpath}/login"
+  url="${scheme}://127.0.0.1:${port}${webpath}/login"
   code="$(curl -sk -o /dev/null -m 10 -w '%{http_code}' "$url" 2>/dev/null || echo 000)"
   if [[ $code == 200 ]]; then
-    ok "The panel answers on port 443"
+    ok "The panel answers on port $port"
   else
-    err "The panel is not answering on 443 (HTTP $code)"
+    err "The panel is not answering on $port (HTTP $code)"
     journalctl -u "$SERVICE" -n 20 --no-pager | sed 's/^/    /'
     return 1
   fi
 
   echo
   echo "${GREEN}${BOLD}  Open this:${RESET}"
-  echo "${BOLD}  https://${host}${webpath}/${RESET}"
+  echo "${BOLD}  ${scheme}://${host}:${port}${webpath}/${RESET}"
   echo
-  echo "  Port 80 redirects here too, so an http:// bookmark keeps working."
+  if (( port >= 1024 )); then
+    echo "  A high port can be filtered by mobile carriers and office networks."
+    echo "  If it will not open from your phone, try another with: nexv fix <port>"
+  fi
   echo
 }
 
@@ -1024,7 +1068,7 @@ show_menu() {
   menu_row 23 "Update geo files"
   menu_rule
   menu_row 24 "Diagnose problems"
-  menu_row 25 "Make the panel reachable (move to 443)"
+  menu_row 25 "Make the panel reachable (change its port)"
   menu_row 26 "Fix Xray when it will not start"
   menu_row 27 "Fix certificate permissions"
   menu_end
@@ -1068,7 +1112,8 @@ run_menu() {
       22) act_bbr; pause ;;
       23) act_geo; pause ;;
       24) act_doctor; pause ;;
-      25) act_fix; pause ;;
+      25) read -rp "  Panel port (empty = pick one automatically): " port
+          act_fix "$port"; pause ;;
       26) act_xray_fix; pause ;;
       27) act_cert_fix; pause ;;
       *) err "Please choose a number between 0 and 27"; pause ;;
@@ -1099,7 +1144,7 @@ ${BOLD}nexv${RESET} - NexV Panel management
   nexv bbr                      enable BBR congestion control
   nexv geo                      update geoip.dat and geosite.dat
   nexv doctor                   diagnose why the panel is not answering
-  nexv fix                      move the panel to port 443 and verify it answers
+  nexv fix [port]               move the panel to a reachable port and verify it
   nexv xray-fix                 explain why Xray will not start, and start it
   nexv cert-fix                 make the certificate readable by the Xray user
   nexv uninstall                remove the panel
@@ -1126,7 +1171,7 @@ case "${1:-menu}" in
   bbr)             act_bbr ;;
   geo)             act_geo ;;
   doctor)          act_doctor ;;
-  fix)             act_fix ;;
+  fix)             act_fix "${2:-}" ;;
   xray-fix)        act_xray_fix ;;
   cert-fix)        act_cert_fix ;;
   uninstall)       act_uninstall ;;

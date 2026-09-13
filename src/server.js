@@ -343,7 +343,12 @@ if (require.main === module) {
      * port 80 turns that into a working link. Port 80 being taken (a web
      * server, or certbot mid-renewal) is not an error worth failing over.
      */
-    if (tls && port !== 80) {
+    // ports 80 and 443 are worth more to an inbound than to the panel, so the
+    // redirect steps aside whenever an inbound is configured on 80
+    const inboundOn80 = db.data.inbounds.some((i) => i.enable !== false && Number(i.port) === 80);
+    if (inboundOn80) console.log('[nexv] port 80 left to an inbound; no http redirect');
+
+    if (tls && port !== 80 && !inboundOn80) {
       require('http')
         .createServer((req, res) => {
           const host = (req.headers.host || '').split(':')[0];

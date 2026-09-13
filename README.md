@@ -74,7 +74,7 @@ Every entry is also a direct command:
 | `nexv doctor` | diagnose why the panel is not answering |
 | `nexv xray-fix` | explain why Xray will not start, and start it |
 | `nexv cert-fix` | make the certificate readable by the Xray user |
-| `nexv fix` | move the panel to port 443 and verify it answers |
+| `nexv fix [port]` | move the panel to a reachable port and verify it |
 | `nexv uninstall` | remove the panel |
 
 ## Panel sections
@@ -187,13 +187,18 @@ portals routinely drop everything except 80 and 443, so a panel on 2053 or
 2087 can be unreachable while the process is perfectly fine.
 
 ```bash
-nexv fix
+nexv fix [port]
 ```
 
-It moves the panel to 443, opens 443 and 80 in the firewall, restarts, checks
-that the panel really answers there, and prints the URL. Port 80 keeps
-redirecting, so old bookmarks still work. It needs a certificate first
-(`nexv cert <domain>`) and refuses to move if something else owns 443.
+It moves the panel, opens the port in the firewall, restarts, checks that the
+panel really answers there, and prints the URL. With no port it keeps the
+current one, unless the panel is sitting on 80 or 443 — those belong to your
+inbounds, where an inbound on 443 is indistinguishable from ordinary HTTPS —
+in which case it picks a free high port instead.
+
+While the panel has TLS and no inbound uses port 80, it also answers on 80
+with a redirect to itself, so it stays reachable on a network that filters
+high ports. Configure an inbound on 80 and the panel stands aside.
 
 ## Certificates and the Xray user
 
