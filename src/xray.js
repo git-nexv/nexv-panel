@@ -5,8 +5,9 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 const db = require('./db');
+const certs = require('./certs');
 
 const XRAY_BIN = process.env.NEXV_XRAY_BIN || '/usr/local/bin/xray';
 const XRAY_CONFIG = process.env.NEXV_XRAY_CONFIG || '/usr/local/etc/xray/config.json';
@@ -105,7 +106,11 @@ function tlsSettings(inb, net) {
     }
     const cert = inb.certFile || db.settings.certFile;
     const key = inb.keyFile || db.settings.keyFile;
-    return cert && key ? [Object.assign(base, { certificateFile: cert, keyFile: key })] : [];
+    if (!cert || !key) return [];
+    /* xray may not be allowed to open the file the admin named; hand it a copy
+       it can read rather than a path that dies at startup */
+    const usable = certs.forXray(cert, key, serviceOwner());
+    return [Object.assign(base, { certificateFile: usable.cert, keyFile: usable.key })];
   };
 
   const out = {
@@ -533,6 +538,45 @@ async function serviceUser() {
   return serviceUserCache;
 }
 
+/*
+ * The same answer, but available while the config is being built - which is
+ * synchronous, and has to know whether the certificate needs a readable copy.
+ * Both spellings share the one cache, so this asks systemd at most once.
+ */
+let serviceOwnerCache = null;
+function serviceOwner() {
+  if (serviceOwnerCache) return serviceOwnerCache;
+  if (serviceUserCache === null && process.env.NEXV_XRAY_USER) {
+    serviceUserCache = process.env.NEXV_XRAY_USER;
+  }
+  if (serviceUserCache === null) {
+    try {
+      const out = execFileSync('systemctl', ['show', XRAY_SERVICE, '-p', 'User', '--value'], {
+        encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore']
+      });
+      serviceUserCache = out.trim() || 'root';
+    } catch (_) {
+      // no systemd, or no such unit: nothing is dropping privileges either
+      serviceUserCache = 'root';
+    }
+  }
+  serviceOwnerCache = { user: serviceUserCache, gid: groupIdOf(serviceUserCache) };
+  return serviceOwnerCache;
+}
+
+/** The primary group of an account, straight out of /etc/passwd. */
+function groupIdOf(user) {
+  if (!user || user === 'root') return 0;
+  try {
+    const line = fs.readFileSync('/etc/passwd', 'utf8')
+      .split('\n').find((l) => l.startsWith(`${user}:`));
+    const gid = line ? Number(line.split(':')[3]) : NaN;
+    return Number.isFinite(gid) ? gid : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 /**
  * Validate the config the way the service will load it.
  *
@@ -578,14 +622,18 @@ async function apply() {
   writeConfig();
   let test = await testConfig();
 
-  // a certificate the service user cannot read is a permissions problem with a
-  // known fix, so fix it and try once more instead of handing back an error
+  /*
+   * A certificate the service user cannot read is a permissions problem with a
+   * known fix, and the config writer has already applied it: every such file is
+   * mirrored somewhere readable. Force the mirror to be rebuilt - the copy can
+   * predate a renewal, or have been deleted - and test once more before giving
+   * up. This used to shell out to `nexv cert-fix`, which restarts the panel:
+   * the request that triggered it died with the service that was serving it.
+   */
   if (!test.ok && /permission denied/i.test(test.message || '')) {
-    const repaired = await repairCerts();
-    if (repaired.ok) {
-      writeConfig();
-      test = await testConfig();
-    }
+    certs.refresh();
+    writeConfig();
+    test = await testConfig();
   }
 
   if (!test.ok && fs.existsSync(XRAY_BIN)) {

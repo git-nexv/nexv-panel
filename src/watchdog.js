@@ -15,6 +15,7 @@ const { execFile } = require('child_process');
 
 const db = require('./db');
 const xray = require('./xray');
+const certs = require('./certs');
 
 const NEXV_CLI = process.env.NEXV_CLI || '/usr/local/bin/nexv';
 const EVERY = Number(process.env.NEXV_WATCHDOG_SECONDS || 60) * 1000;
@@ -57,6 +58,19 @@ async function check() {
   state.running = true;
   try {
     if (!hasSystemd() || !hasWork()) return;
+
+    /*
+     * A certificate renewed at three in the morning replaces the original and
+     * leaves the copy xray reads a month behind, which nobody notices until
+     * browsers start refusing the connection. Catch it up here and, if it had
+     * moved on, restart so xray serves the new one.
+     */
+    if (certs.refresh()) {
+      log('xray', 'the certificate changed on disk; xray restarted to pick it up');
+      await run('systemctl', ['restart', 'xray'], 30000);
+      return;
+    }
+
     if (await isRunning()) {
       if (state.failures) {
         log('xray', 'xray is running again');
