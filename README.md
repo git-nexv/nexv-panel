@@ -129,10 +129,9 @@ nexv cert panel.example.com
 Point the domain's DNS at the server first, and leave port 80 free while the
 command runs. Afterwards `nexv url` prints an `https://` address.
 
-A panel sitting on port 80 is moved to 443, because a TLS listener on port 80
-is unreachable either way: plain HTTP hits a socket that only speaks TLS, and
-HTTPS goes to 443 where nothing is listening. Once TLS is on, port 80 serves a
-redirect to the panel, so an old `http://` bookmark keeps working.
+If the panel is on port 80, `nexv cert` warns rather than moving it: a TLS
+listener there is unreachable either way, since plain HTTP hits a socket that
+only speaks TLS. Pick a port yourself with `nexv port <number>`.
 
 To use a certificate you already have, set **Panel TLS certificate** and
 **Panel TLS private key** under Settings and run `nexv restart`. Leaving them
@@ -187,18 +186,17 @@ portals routinely drop everything except 80 and 443, so a panel on 2053 or
 2087 can be unreachable while the process is perfectly fine.
 
 ```bash
-nexv fix [port]
+nexv fix <port>
 ```
 
-It moves the panel, opens the port in the firewall, restarts, checks that the
-panel really answers there, and prints the URL. With no port it keeps the
-current one, unless the panel is sitting on 80 or 443 — those belong to your
-inbounds, where an inbound on 443 is indistinguishable from ordinary HTTPS —
-in which case it picks a free high port instead.
+It changes the panel port, opens it in the firewall, restarts, checks that the
+panel really answers there, and prints the URL. With no port it only reports —
+it never picks a port for you, and never moves the panel on its own.
 
-While the panel has TLS and no inbound uses port 80, it also answers on 80
-with a redirect to itself, so it stays reachable on a network that filters
-high ports. Configure an inbound on 80 and the panel stands aside.
+Ports 80 and 443 are left to your inbounds. The panel can answer on port 80
+with a redirect to itself, which helps on a network that filters high ports,
+but that is off by default: switch on **Redirect port 80** in Settings. It
+stays off while an inbound uses port 80.
 
 ## Certificates and the Xray user
 

@@ -23,6 +23,9 @@ const DEFAULTS = () => ({
     tgAdminId: '',
     theme: 'dark',
     lang: 'en',
+    // binding port 80 for a redirect is opt-in: it is a port the admin may
+    // want for an inbound, and taking it unasked is a surprise
+    httpRedirect: false,
     trafficResetDay: 1
   },
   users: [],        // panel admins

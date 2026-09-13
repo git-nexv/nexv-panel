@@ -1413,11 +1413,26 @@ async function renderSettings(view) {
     el('label', { class: 'switch' }, [torrent, el('span', { class: 'track' }), el('span', { class: 'muted', text: 'Block torrent traffic' })])
   ]));
 
+  const httpRedirect = el('input', { type: 'checkbox' });
+  httpRedirect.checked = !!s.httpRedirect;
+  grid.append(el('div', { class: 'field' }, [
+    el('label', { text: 'Redirect port 80' }),
+    el('label', { class: 'switch' }, [
+      httpRedirect, el('span', { class: 'track' }),
+      el('span', { class: 'muted', text: 'Answer on port 80 and redirect here' })
+    ]),
+    el('div', { class: 'hint', text: 'Off by default. Ignored while an inbound uses port 80.' })
+  ]));
+
   card.append(grid, el('div', { class: 'row', style: 'margin-top:8px' }, [
     el('button', {
       class: 'btn primary', text: 'Save settings',
       onclick: async () => {
-        const payload = { xrayLogLevel: logLevel.value, blockTorrent: torrent.checked };
+        const payload = {
+          xrayLogLevel: logLevel.value,
+          blockTorrent: torrent.checked,
+          httpRedirect: httpRedirect.checked
+        };
         for (const [key, control] of Object.entries(inputs)) {
           payload[key] = control.type === 'number' ? Number(control.value) : control.value;
         }

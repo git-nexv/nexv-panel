@@ -766,9 +766,9 @@ router.put('/settings', async (req, res) => {
   const allowed = ['panelPort', 'webBasePath', 'domain', 'subDomain', 'subPort', 'subPath',
     'tgBotToken', 'tgAdminId', 'theme', 'lang', 'certFile', 'keyFile', 'xrayLogLevel',
     'blockTorrent', 'serverIP', 'trafficResetDay', 'defaultOutbound', 'domainStrategy',
-    'subTitle', 'panelCertFile', 'panelKeyFile'];
+    'subTitle', 'panelCertFile', 'panelKeyFile', 'httpRedirect'];
   // TLS material is read once when the listener is created
-  const restartKeys = ['panelPort', 'panelCertFile', 'panelKeyFile', 'certFile', 'keyFile'];
+  const restartKeys = ['panelPort', 'panelCertFile', 'panelKeyFile', 'certFile', 'keyFile', 'httpRedirect'];
   const s = db.settings;
   let restartNeeded = false;
 
