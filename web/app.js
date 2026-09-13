@@ -1370,6 +1370,7 @@ function clientState(c) {
   if (c.enable === false) return 'disabled';
   if (c.expired) return 'expired';
   if (c.depleted) return 'depleted';
+  if (c.overIps) return 'overIps';
   return 'active';
 }
 
@@ -1384,7 +1385,8 @@ const CLIENT_STATES = [
   { id: 'active', label: 'Active', tone: 'ok', match: (c) => clientState(c) === 'active' },
   { id: 'disabled', label: 'Disabled', tone: 'off', match: (c) => c.enable === false },
   { id: 'expired', label: 'Expired', tone: 'bad', match: (c) => !!c.expired },
-  { id: 'depleted', label: 'Out of quota', tone: 'bad', match: (c) => !!c.depleted }
+  { id: 'depleted', label: 'Out of quota', tone: 'bad', match: (c) => !!c.depleted },
+  { id: 'overIps', label: 'Too many IPs', tone: 'bad', match: (c) => !!c.overIps }
 ];
 
 /** What each bulk action sweeps up, matching the server's own scopes. */
@@ -1404,6 +1406,7 @@ const CLIENT_CHIPS = {
   disabled: { class: 'chip', label: 'Disabled' },
   expired: { class: 'chip danger', label: 'Expired' },
   depleted: { class: 'chip danger', label: 'Out of quota' },
+  overIps: { class: 'chip warn', label: 'Too many IPs' },
   active: { class: 'chip ok', label: 'Active' }
 };
 
@@ -1613,8 +1616,11 @@ function liveCell(client) {
       el('div', { class: 'live-rate', text: client.online ? (speed ? `${bytes(speed)}/s` : 'idle') : 'offline' }),
       client.ipCount
         ? el('button', {
-          class: 'live-ips', type: 'button',
-          text: `${client.ipCount} IP${client.ipCount > 1 ? 's' : ''}`,
+          class: `live-ips ${client.overIps ? 'over' : ''}`, type: 'button',
+          title: client.limitIp ? `${client.limitIp} allowed at once` : 'no limit set',
+          text: client.limitIp
+            ? `${client.ipCount} / ${client.limitIp} IP`
+            : `${client.ipCount} IP${client.ipCount > 1 ? 's' : ''}`,
           onclick: () => showClientIps(client)
         })
         : null
@@ -1639,7 +1645,8 @@ function showClientIps(client) {
   modal({
     title: `Addresses for ${client.email}`,
     subtitle: limit
-      ? `Allowed at once: ${limit}. Seen in the last five minutes: ${client.ips.length}.`
+      ? `Allowed at once: ${limit}. Seen in the last five minutes: ${client.ips.length}.${
+        client.overIps ? ' Over the limit, so this client is cut off until the extra addresses go quiet.' : ''}`
       : `Seen in the last five minutes: ${client.ips.length}. No IP limit is set on this client.`,
     body: el('div', {}, [
       list,
@@ -1727,7 +1734,9 @@ function clientForm(existing) {
   const days = el('input', { type: 'number', min: '0', value: v.expiryTime ? Math.max(0, daysLeft(v.expiryTime)) : 30 });
   formField(form, 'Valid for (days)', days, { hint: '0 means no expiry' });
 
-  const limitIp = formField(form, 'Concurrent IP limit', el('input', { type: 'number', min: '0', value: v.limitIp || 0 }));
+  const limitIp = formField(form, 'Concurrent IP limit', el('input', { type: 'number', min: '0', value: v.limitIp || 0 }), {
+    hint: 'Addresses seen at once in a five-minute window. Over it, the client is cut off until the extras go quiet. 0 means no limit.'
+  });
   const flowSel = selectOf([{ value: '', label: 'No flow' }, { value: 'xtls-rprx-vision', label: 'xtls-rprx-vision' }], v.flow || '');
   formField(form, 'Flow (VLESS over TCP only)', flowSel);
   const wgPublicKey = formField(form, 'WireGuard peer public key', el('input', { value: v.wgPublicKey || '' }), { full: true });

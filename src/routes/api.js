@@ -878,6 +878,7 @@ router.get('/clients', (req, res) => {
       protocol: inb ? inb.protocol : '',
       expired: xray.isExpired(c),
       depleted: xray.isOverQuota(c),
+      overIps: xray.isOverIpLimit(c),
       link: inb ? links.buildLink(inb, c) : '',
       // moving traffic right now counts as online even before a new connection
       // shows up in the access log, which is only read every ten seconds

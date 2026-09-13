@@ -224,16 +224,24 @@ function escapeHtml(value) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/*
+ * Step up a unit on what will be printed, not on the raw figure: a gigabyte
+ * less 512 bytes is 1023.9995 MB, which a customer is told is "1024 MB".
+ */
+const UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
+
 function bytes(n) {
-  n = Number(n) || 0;
-  // a per-second rate is rarely a whole number, and 833.3333333333334 B/s
-  // is not something anyone wants to read; rounding first also stops 1023.7
-  // printing as "1024 B" instead of tipping over into KB
-  if (Math.round(n) < 1024) return `${Math.round(n)} B`;
-  const units = ['KB', 'MB', 'GB', 'TB'];
-  let i = -1;
-  do { n /= 1024; i++; } while (n >= 1024 && i < units.length - 1);
-  return `${n.toFixed(n >= 100 ? 0 : 1)} ${units[i]}`;
+  let value = Math.max(0, Number(n) || 0);
+  let i = 0;
+  const print = (v, unit) => (unit === 0
+    ? String(Math.round(v))
+    : v.toFixed(v >= 100 ? 0 : 1).replace(/\.0$/, ''));
+
+  while (i < UNITS.length - 1 && Number(print(value, i)) >= 1024) {
+    value /= 1024;
+    i++;
+  }
+  return `${print(value, i)} ${UNITS[i]}`;
 }
 
 function adminHandle() {
@@ -625,10 +633,44 @@ async function isMember(userId, force) {
   } catch (err) {
     // the bot was removed, or was never an admin: do not lock everyone out
     runtime.error = `channel check failed: ${err.message}`;
+    warnAdminAboutChannel(err.message);
     member = true;
   }
   members.set(userId, { member, at: Date.now() });
   return member;
+}
+
+/*
+ * Tell the admin their gate has stopped working.
+ *
+ * Telegram will only say who is in a channel if the bot is an administrator
+ * there. When it is not, every check fails and the gate quietly lets everyone
+ * through - which is the right way to fail, but silently is not: the admin
+ * believes the channel is mandatory and it is not. Said once an hour, and
+ * again whenever the reason changes, so a broken gate cannot go unnoticed and
+ * a working bot cannot be drowned in it either.
+ */
+const channelWarning = { at: 0, reason: '' };
+const WARN_AGAIN = 60 * 60 * 1000;
+
+function warnAdminAboutChannel(reason) {
+  const b = bot();
+  if (!b.adminChatId) return;
+  const now = Date.now();
+  if (reason === channelWarning.reason && now - channelWarning.at < WARN_AGAIN) return;
+  channelWarning.at = now;
+  channelWarning.reason = reason;
+
+  const c = channel();
+  send(b.adminChatId, [
+    '⚠️ <b>عضویت اجباری کانال کار نمی‌کند</b>',
+    '',
+    `کانال: <code>${escapeHtml(c.id || '—')}</code>`,
+    `پاسخ تلگرام: <code>${escapeHtml(reason)}</code>`,
+    '',
+    'ربات باید در کانال <b>ادمین</b> باشد تا بتواند عضویت را بررسی کند.',
+    'تا وقتی درست نشود، ربات همه را بدون عضویت رد می‌کند.'
+  ].join('\n'));
 }
 
 /** The wall: the admin's own text, a join button, and a button to re-check. */

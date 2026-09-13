@@ -8,6 +8,7 @@ const path = require('path');
 const { execFile, execFileSync } = require('child_process');
 const db = require('./db');
 const certs = require('./certs');
+const online = require('./online');
 
 const XRAY_BIN = process.env.NEXV_XRAY_BIN || '/usr/local/bin/xray';
 const XRAY_CONFIG = process.env.NEXV_XRAY_CONFIG || '/usr/local/etc/xray/config.json';
@@ -175,7 +176,8 @@ function streamSettings(inb) {
 }
 
 function inboundSettings(inb, clients) {
-  const active = clients.filter((c) => c.enable !== false && !isExpired(c) && !isOverQuota(c));
+  const active = clients.filter((c) => c.enable !== false
+    && !isExpired(c) && !isOverQuota(c) && !isOverIpLimit(c));
   switch (inb.protocol) {
     case 'vless':
       return {
@@ -428,6 +430,21 @@ function isExpired(c) {
 function isOverQuota(c) {
   if (!c.totalGB || c.totalGB <= 0) return false;
   return (c.up || 0) + (c.down || 0) >= c.totalGB * 1024 ** 3;
+}
+
+/**
+ * More places at once than this client is allowed.
+ *
+ * The field has been on the client form all along and did nothing whatsoever -
+ * a limit the panel collected, displayed, and never applied. It counts the
+ * addresses seen in the last five minutes, which is the same list the Clients
+ * page shows behind the green dot, so what disables an account is exactly what
+ * the admin can see. Zero means no limit, and that is the default.
+ */
+function isOverIpLimit(c) {
+  const limit = Number(c.limitIp || 0);
+  if (!limit || limit <= 0) return false;
+  return online.forTag(clientTag(c)).ips.length > limit;
 }
 
 /** RFC1918 + loopback + link-local; keeps clients from reaching the server's own LAN. */
@@ -764,16 +781,42 @@ function rateFor(clientId) {
   return { up: entry.up, down: entry.down };
 }
 
-/** Disable clients that ran out of quota or time, then push a fresh config. */
+/*
+ * Say so once, not once a minute: an account being shared flips over and back
+ * as addresses age out of the five-minute window, and a log full of the same
+ * line is a log nobody reads.
+ */
+const toldAbout = new Map();
+const TELL_AGAIN = 60 * 60 * 1000;
+
+function noteOverIpLimit(c) {
+  const last = toldAbout.get(c.id) || 0;
+  if (Date.now() - last < TELL_AGAIN) return;
+  toldAbout.set(c.id, Date.now());
+  const seen = online.forTag(clientTag(c)).ips.length;
+  const d = db.data;
+  d.logs.unshift({
+    at: Date.now(),
+    type: 'client',
+    message: `${c.email} was cut off: ${seen} addresses at once, ${c.limitIp} allowed`
+  });
+  if (d.logs.length > 500) d.logs.length = 500;
+}
+
+/** Disable clients that ran out of quota or time or are in too many places. */
 async function enforceLimits() {
   const d = db.data;
   let dirty = false;
   for (const c of d.clients) {
-    const shouldDisable = isExpired(c) || isOverQuota(c);
+    const overIps = isOverIpLimit(c);
+    const shouldDisable = isExpired(c) || isOverQuota(c) || overIps;
     if (shouldDisable && c.enable !== false && !c.autoDisabled) {
       c.autoDisabled = true;
+      if (overIps) noteOverIpLimit(c);
       dirty = true;
     } else if (!shouldDisable && c.autoDisabled) {
+      /* it comes back on its own once the extra addresses go quiet - the point
+         is to stop an account being in six places, not to end it */
       c.autoDisabled = false;
       dirty = true;
     }
@@ -849,7 +892,7 @@ async function generateReality() {
 module.exports = {
   xrayVersion,
   XRAY_BIN, XRAY_CONFIG, XRAY_SERVICE, API_PORT,
-  buildConfig, writeConfig, testConfig, apply, serviceStatus, repairCerts, messageOf,
+  buildConfig, writeConfig, testConfig, apply, serviceStatus, repairCerts, messageOf, isOverIpLimit,
   INBOUND_PROTOCOLS, OUTBOUND_PROTOCOLS, CLIENT_PROTOCOLS, LINK_PROTOCOLS,
   restart, start, stop, collectTraffic, enforceLimits, ensureAccessLog, accessLogUsable, ACCESS_LOG, rateFor,
   clientTag, isExpired, isOverQuota, generateReality, generateECH, parseECH, run, serviceUser

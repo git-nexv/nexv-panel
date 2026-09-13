@@ -687,6 +687,12 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
   color: var(--muted); font: inherit; font-size: 10.5px; font-weight: 600;
 }
 .live-ips:hover { color: var(--text); border-color: var(--border-strong); }
+/* over its allowance, and therefore cut off until the extra addresses go quiet */
+.live-ips.over {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+}
 
 /* the header's theme switch, shrunk to sit in a table row */
 .mini-switch {

@@ -120,6 +120,8 @@ everything collapses to an instant change under `prefers-reduced-motion`.
 - **Clients** — accounts per inbound, with quota, expiry, QR codes and links,
   a live count of who is active, disabled, expired or out of quota, a search
   box, and one menu that clears out everyone a quota or a date has finished.
+  A client's concurrent IP limit is enforced: over it, the client is cut off
+  until the extra addresses go quiet, and the Clients page says so.
 - **Outbounds** — where traffic leaves: direct, blocked, or your own proxies.
 - **Routing** — ordered rules that pick an outbound per domain, IP, port or user.
 - **Settings** — six tabs: general (domain, ports, secret path), config names,
