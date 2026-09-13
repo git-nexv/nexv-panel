@@ -20,6 +20,20 @@ To install a branch other than `main`:
 NEXV_BRANCH=my-branch bash <(curl -fsSL https://raw.githubusercontent.com/git-nexv/nexv-panel/my-branch/install.sh)
 ```
 
+### Unattended install
+
+With no terminal to ask on — piped into `bash`, run from cloud-init or a CI
+job — the installer asks nothing and takes its answers from the environment:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/git-nexv/nexv-panel/main/install.sh \
+  | NEXV_PORT=2087 NEXV_USER=admin NEXV_PASS='your-password' NEXV_DOMAIN=panel.example.com bash
+```
+
+Anything you leave out gets a sensible default, and the password is generated
+when you do not set one. `NEXV_NONINTERACTIVE=1` forces this mode even on a
+terminal.
+
 ## The secret web path
 
 On first boot the panel generates a random path, for example

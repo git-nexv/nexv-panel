@@ -31,6 +31,10 @@ ART
 
 [[ $EUID -eq 0 ]] || fail "This script must run as root (use: sudo -i)"
 
+# An install with nobody watching - `curl | bash`, cloud-init, a CI runner -
+# must never stop on a question it cannot ask.
+if [[ "${NEXV_NONINTERACTIVE:-0}" == "1" || ! -t 0 ]]; then INTERACTIVE=0; else INTERACTIVE=1; fi
+
 detect_os() {
   [[ -f /etc/os-release ]] || fail "Could not identify the Linux distribution"
   . /etc/os-release
@@ -94,16 +98,80 @@ apt_do() {
   done
 }
 
+# Nearly every cloud image already has these. Working out what is genuinely
+# missing means a normal install never calls the package manager at all, which
+# is the surest way not to trip over its lock.
+missing_tools() {
+  local want=() c
+  for c in curl git tar openssl; do
+    command -v "$c" >/dev/null 2>&1 || want+=("$c")
+  done
+  # the CA bundle answers to no command of its own
+  [[ -s /etc/ssl/certs/ca-certificates.crt || -d /etc/pki/tls/certs ]] || want+=(ca-certificates)
+  printf '%s\n' ${want[@]+"${want[@]}"}
+}
+
 install_packages() {
-  info "Installing prerequisites..."
+  local missing=()
+  while IFS= read -r line; do [[ -n $line ]] && missing+=("$line"); done < <(missing_tools)
+
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    ok "Prerequisites are already present - nothing to install"
+    return 0
+  fi
+
+  info "Installing prerequisites: ${missing[*]}"
   if [[ $PKG == apt ]]; then
     export DEBIAN_FRONTEND=noninteractive
     apt_do update -qq
-    apt_do install -y -qq curl wget git tar unzip ca-certificates openssl cron psmisc >/dev/null
+    apt_do install -y -qq "${missing[@]}" >/dev/null
   else
-    $PKG install -y -q curl wget git tar unzip ca-certificates openssl cronie >/dev/null
+    $PKG install -y -q "${missing[@]}" >/dev/null
   fi
   ok "Prerequisites installed"
+}
+
+node_arch() {
+  case "$(uname -m)" in
+    x86_64 | amd64)      echo x64 ;;
+    aarch64 | arm64)     echo arm64 ;;
+    armv7l)              echo armv7l ;;
+    ppc64le)             echo ppc64le ;;
+    s390x)               echo s390x ;;
+    *)                   return 1 ;;
+  esac
+}
+
+# The official build, straight from nodejs.org: curl and tar are all it needs,
+# so no repository has to be added and no package lock has to be waited on.
+# The checksum comes from the same file that names the tarball.
+install_node_tarball() {
+  local arch base sums file want tmp
+  arch="$(node_arch)" || return 1
+  base="https://nodejs.org/dist/latest-v20.x"
+
+  sums="$(curl -fsSL --max-time 30 "$base/SHASUMS256.txt" 2>/dev/null)" || return 1
+  file="$(awk -v suffix="linux-$arch.tar.gz" '$2 ~ suffix"$" { print $2; exit }' <<<"$sums")"
+  [[ -n $file ]] || return 1
+  want="$(awk -v f="$file" '$2 == f { print $1 }' <<<"$sums")"
+  [[ -n $want ]] || return 1
+
+  tmp="$(mktemp -d)"
+  curl -fsSL --max-time 600 -o "$tmp/$file" "$base/$file" || { rm -rf "$tmp"; return 1; }
+  if command -v sha256sum >/dev/null 2>&1; then
+    echo "$want  $tmp/$file" | sha256sum -c --status || { rm -rf "$tmp"; return 1; }
+  fi
+
+  rm -rf /usr/local/lib/nodejs
+  mkdir -p /usr/local/lib/nodejs
+  tar -xzf "$tmp/$file" -C /usr/local/lib/nodejs --strip-components=1 || { rm -rf "$tmp"; return 1; }
+  rm -rf "$tmp"
+
+  local binary
+  for binary in node npm npx; do
+    [[ -e /usr/local/lib/nodejs/bin/$binary ]] && ln -sf "/usr/local/lib/nodejs/bin/$binary" "/usr/local/bin/$binary"
+  done
+  command -v node >/dev/null 2>&1
 }
 
 install_node() {
@@ -112,15 +180,22 @@ install_node() {
     return
   fi
   info "Installing Node.js 20 LTS..."
+
+  if install_node_tarball; then
+    ok "Node.js $(node -v) installed from nodejs.org"
+    return
+  fi
+
+  warn "Could not fetch the official build; falling back to the package manager"
   if [[ $PKG == apt ]]; then
     wait_for_apt
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1 || true
     apt_do install -y -qq nodejs >/dev/null
   else
-    curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - >/dev/null 2>&1
+    curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - >/dev/null 2>&1 || true
     $PKG install -y -q nodejs >/dev/null
   fi
-  command -v node >/dev/null || fail "Node.js installation failed"
+  command -v node >/dev/null || fail "Node.js could not be installed. Install Node 18 or newer and run this again."
   ok "Node.js $(node -v) installed"
 }
 
@@ -163,27 +238,44 @@ fetch_panel() {
 }
 
 ask_config() {
-  echo
-  echo "${BOLD}-- Panel configuration --${RESET}"
-  read -rp "Panel port [2087]: " PANEL_PORT;  PANEL_PORT="${PANEL_PORT:-2087}"
-  read -rp "Admin username [admin]: " ADMIN_USER; ADMIN_USER="${ADMIN_USER:-admin}"
-  read -rsp "Admin password (empty = generate one): " ADMIN_PASS; echo
-  [[ -n $ADMIN_PASS ]] || ADMIN_PASS="$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-14)"
-  read -rp "Panel domain (optional, e.g. panel.example.com): " DOMAIN
-  if [[ -n $DOMAIN ]]; then
-    read -rp "Request a free Let's Encrypt certificate for it? [Y/n]: " WANT_SSL
-    WANT_SSL="${WANT_SSL:-Y}"
+  PANEL_PORT="${NEXV_PORT:-}"
+  ADMIN_USER="${NEXV_USER:-}"
+  ADMIN_PASS="${NEXV_PASS:-}"
+  DOMAIN="${NEXV_DOMAIN:-}"
+  WANT_SSL="${NEXV_SSL:-}"
+
+  # Piped into bash, or run by cloud-init, there is nobody to answer: every
+  # question falls back to its environment variable or its default instead of
+  # reading EOF from the pipe and pretending that was an answer.
+  if [[ $INTERACTIVE -eq 1 ]]; then
+    echo
+    echo "${BOLD}-- Panel configuration --${RESET}"
+    [[ -n $PANEL_PORT ]] || { read -rp "Panel port [2087]: " PANEL_PORT; }
+    [[ -n $ADMIN_USER ]] || { read -rp "Admin username [admin]: " ADMIN_USER; }
+    [[ -n $ADMIN_PASS ]] || { read -rsp "Admin password (empty = generate one): " ADMIN_PASS; echo; }
+    [[ -n $DOMAIN ]] || { read -rp "Panel domain (optional, e.g. panel.example.com): " DOMAIN; }
+    if [[ -n $DOMAIN && -z $WANT_SSL ]]; then
+      read -rp "Request a free Let's Encrypt certificate for it? [Y/n]: " WANT_SSL
+    fi
+  else
+    info "No terminal to ask on - using defaults (set NEXV_PORT, NEXV_USER, NEXV_PASS, NEXV_DOMAIN to choose)"
   fi
+
+  PANEL_PORT="${PANEL_PORT:-2087}"
+  ADMIN_USER="${ADMIN_USER:-admin}"
+  [[ -n $ADMIN_PASS ]] || ADMIN_PASS="$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-14)"
+  [[ -z $DOMAIN ]] || WANT_SSL="${WANT_SSL:-Y}"
 }
 
 setup_ssl() {
   [[ -n ${DOMAIN:-} && ${WANT_SSL:-N} =~ ^[Yy]$ ]] || return 0
 
   info "Installing certbot and requesting a certificate for $DOMAIN..."
+  # cron only matters here, for the renewal job, so it is not everyone's problem
   if [[ $PKG == apt ]]; then
-    apt-get install -y -qq certbot >/dev/null
+    apt_do install -y -qq certbot cron >/dev/null
   else
-    $PKG install -y -q certbot >/dev/null
+    $PKG install -y -q certbot cronie >/dev/null
   fi
 
   local resolved
