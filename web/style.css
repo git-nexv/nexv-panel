@@ -302,7 +302,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
 .field label { font-size: 12.5px; color: var(--muted); font-weight: 550; }
-.field .hint { font-size: 11.5px; color: var(--faint); }
+/* a note under a control. It was only ever styled inside a .field, so the
+   same class used anywhere else came out as full-size body text */
+.hint { font-size: 11.5px; color: var(--faint); line-height: 1.5; }
 input, select, textarea {
   width: 100%;
   padding: 10px 12px;
@@ -799,6 +801,24 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
 }
 .chips label:has(input:checked) { border-color: var(--brand); color: var(--text); background: var(--surface-2); }
 .chips input { accent-color: var(--brand); margin: 0; }
+
+/* the pieces a config name can be built from, each one a button that types
+   itself into the template */
+.token-chips { gap: 6px; }
+.token {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 11.5px;
+  cursor: pointer;
+  direction: ltr;
+  transition: border-color .15s var(--ease), color .15s var(--ease), background .15s var(--ease);
+}
+.token:hover { border-color: var(--brand); color: var(--text); background: var(--surface-2); }
+.token:active { transform: scale(.96); }
 
 .input-row { display: flex; gap: 8px; align-items: stretch; }
 .input-row input { flex: 1; min-width: 0; }

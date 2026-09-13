@@ -2140,65 +2140,68 @@ async function routingForm(existing, tags) {
 
 /* ----------------------------- page: settings ---------------------------- */
 
+/*
+ * Settings used to be one column you scrolled: panel, TLS, backup, account and
+ * the whole event log, one after the other. It is six short pages behind tabs
+ * now, the way the Bot page is laid out, so nothing has to be scrolled past to
+ * reach something else.
+ */
+const SETTINGS_TABS = ['General', 'Config names', 'TLS', 'Backup', 'Account', 'Logs'];
+
 async function renderSettings(view) {
   const s = await api.get('/settings');
   state.settings = s;
 
-  const card = el('div', { class: 'card' });
-  const grid = el('div', { class: 'form-grid' });
-  const inputs = {};
+  const { wrap, panels } = tabbed(SETTINGS_TABS);
+  for (const panel of Object.values(panels)) panel.className = 'tab-panel';
+  view.append(wrap);
 
-  const add = (key, label, value, opts = {}) => {
+  const inputs = {};
+  /** One labelled text field, remembered so Save can collect it. */
+  const add = (grid, key, label, value, opts = {}) => {
     const control = el('input', { type: opts.type || 'text', value: value ?? '', placeholder: opts.placeholder || '' });
     inputs[key] = control;
     grid.append(el('div', { class: `field ${opts.full ? 'full' : ''}` }, [
       el('label', { text: label }), control,
       opts.hint ? el('div', { class: 'hint', text: opts.hint }) : null
     ]));
+    return control;
   };
 
-  add('domain', 'Panel domain', s.domain, { hint: 'Used for share links and TLS' });
-  add('webBasePath', 'Secret web path', s.webBasePath || '',
+  /* ---- General ---- */
+  const general = el('div', { class: 'form-grid' });
+  add(general, 'domain', 'Panel domain', s.domain, { hint: 'Used for share links and TLS' });
+  add(general, 'webBasePath', 'Secret web path', s.webBasePath || '',
     { hint: 'For example /myPanel. Empty means no secret path. You will be moved to the new URL after saving.' });
-  add('panelPort', 'Panel port', s.panelPort, { type: 'number', hint: 'Changing this needs a panel restart (nexv restart)' });
-  add('subPort', 'Subscription port', s.subPort, { type: 'number' });
-  add('subPath', 'Subscription path', s.subPath);
-  add('subTitle', 'Subscription title', s.subTitle || 'NexV');
-  add('certFile', 'Default TLS certificate (Xray inbounds)', s.certFile, { full: true, placeholder: '/etc/letsencrypt/live/example.com/fullchain.pem' });
-  add('keyFile', 'Default TLS private key (Xray inbounds)', s.keyFile, { full: true, placeholder: '/etc/letsencrypt/live/example.com/privkey.pem' });
-  add('panelCertFile', 'Panel TLS certificate', s.panelCertFile, {
-    full: true,
-    placeholder: 'leave empty to reuse the certificate above',
-    hint: 'Set this to serve the panel itself over HTTPS. Restart the panel afterwards (nexv restart).'
-  });
-  add('panelKeyFile', 'Panel TLS private key', s.panelKeyFile, {
-    full: true, placeholder: 'leave empty to reuse the key above'
-  });
+  add(general, 'panelPort', 'Panel port', s.panelPort, { type: 'number', hint: 'Changing this needs a panel restart (nexv restart)' });
+  add(general, 'subPort', 'Subscription port', s.subPort, { type: 'number' });
+  add(general, 'subPath', 'Subscription path', s.subPath);
+  add(general, 'subTitle', 'Subscription title', s.subTitle || 'NexV');
 
   const logLevel = selectOf(['none', 'error', 'warning', 'info', 'debug'], s.xrayLogLevel || 'warning');
-  grid.append(el('div', { class: 'field' }, [el('label', { text: 'Xray log level' }), logLevel]));
+  general.append(el('div', { class: 'field' }, [el('label', { text: 'Xray log level' }), logLevel]));
 
   const torrent = el('input', { type: 'checkbox' });
   torrent.checked = !!s.blockTorrent;
-  grid.append(el('div', { class: 'field' }, [
+  general.append(el('div', { class: 'field' }, [
     el('label', { text: 'BitTorrent' }),
     el('label', { class: 'switch' }, [torrent, el('span', { class: 'track' }), el('span', { class: 'muted', text: 'Block torrent traffic' })])
   ]));
 
   const trackIps = el('input', { type: 'checkbox' });
   trackIps.checked = s.trackIps !== false;
-  grid.append(el('div', { class: 'field' }, [
+  general.append(el('div', { class: 'field' }, [
     el('label', { text: 'Client addresses' }),
     el('label', { class: 'switch' }, [
       trackIps, el('span', { class: 'track' }),
       el('span', { class: 'muted', text: 'Record which IPs each client connects from' })
     ]),
-    el('div', { class: 'hint', text: 'Turns on Xray\u2019s access log, which is where the Clients page reads them from.' })
+    el('div', { class: 'hint', text: 'Turns on Xray’s access log, which is where the Clients page reads them from.' })
   ]));
 
   const httpRedirect = el('input', { type: 'checkbox' });
   httpRedirect.checked = !!s.httpRedirect;
-  grid.append(el('div', { class: 'field' }, [
+  general.append(el('div', { class: 'field' }, [
     el('label', { text: 'Redirect port 80' }),
     el('label', { class: 'switch' }, [
       httpRedirect, el('span', { class: 'track' }),
@@ -2207,45 +2210,133 @@ async function renderSettings(view) {
     el('div', { class: 'hint', text: 'Off by default. Ignored while an inbound uses port 80.' })
   ]));
 
-  card.append(grid, el('div', { class: 'row', style: 'margin-top:8px' }, [
-    el('button', {
-      class: 'btn primary', text: 'Save settings',
-      onclick: async () => {
-        const payload = {
-          xrayLogLevel: logLevel.value,
-          blockTorrent: torrent.checked,
-          trackIps: trackIps.checked,
-          httpRedirect: httpRedirect.checked
-        };
-        for (const [key, control] of Object.entries(inputs)) {
-          payload[key] = control.type === 'number' ? Number(control.value) : control.value;
-        }
-        const oldPath = s.webBasePath || '';
-        try {
-          const result = await api.put('/settings', payload);
-          const newPath = result.webBasePath || '';
-          if (newPath !== oldPath) {
-            // the current page lives under the old path; send the admin to the new one
-            const url = `${location.origin}${newPath}/`;
-            modal({
-              title: 'The panel path changed',
-              subtitle: 'Save the new address — the old one stops working.',
-              body: el('div', {}, [el('div', { class: 'link-box', text: url })]),
-              actions: [{ label: 'Go to the new address', kind: 'primary', onClick: () => { location.href = url; } }]
-            });
-            return;
-          }
-          toast(result.restartNeeded
-            ? 'Saved — run "nexv restart" on the server to apply the port and TLS changes'
-            : 'Settings saved');
-        } catch (err) { toast(err.message, 'err'); }
-      }
-    })
-  ]));
-  view.append(card);
+  /* ---- Config names ---- */
+  const naming = el('div', {});
+  const template = el('input', {
+    type: 'text', class: 'mono',
+    value: s.remarkTemplate || '{{inbound}}-{{client}}',
+    placeholder: '{{inbound}}-{{client}}'
+  });
+  inputs.remarkTemplate = template;
 
-  view.append(el('div', { class: 'section-title', text: 'Backup' }));
-  view.append(el('div', { class: 'card row' }, [
+  const preview = el('div', { class: 'link-box', style: 'margin-top:10px' });
+  const previewNote = el('div', { class: 'hint', style: 'margin-top:6px' });
+  let previewTimer = null;
+  const drawPreview = async () => {
+    try {
+      const result = await api.post('/settings/remark-preview', { template: template.value });
+      preview.textContent = result.preview || '(empty)';
+      previewNote.textContent = result.sample
+        ? 'Made-up figures — there is no client to try it on yet.'
+        : `As it would name ${result.from}’s config.`;
+    } catch (err) { preview.textContent = err.message; }
+  };
+  template.addEventListener('input', () => {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(drawPreview, 220);
+  });
+
+  /* the tokens, as buttons that drop themselves in where the cursor is */
+  const tokens = el('div', { class: 'chips token-chips' });
+  for (const item of (s.remarkTokens || [])) {
+    tokens.append(el('button', {
+      type: 'button', class: 'token', title: item.about,
+      text: `{{${item.token}}}`,
+      onclick: () => {
+        const at = template.selectionStart ?? template.value.length;
+        const to = template.selectionEnd ?? at;
+        const text = `{{${item.token}}}`;
+        template.value = template.value.slice(0, at) + text + template.value.slice(to);
+        template.focus();
+        template.selectionStart = template.selectionEnd = at + text.length;
+        drawPreview();
+      }
+    }));
+  }
+
+  naming.append(
+    el('div', { class: 'muted', style: 'margin-bottom:14px' }, [
+      'The name each config carries in the client app. Anything outside the braces is kept exactly as you type it.'
+    ]),
+    el('div', { class: 'field full' }, [
+      el('label', { text: 'Name template' }), template,
+      el('div', { class: 'hint', text: 'For example:  {{inbound}} | {{client}} - {{usage}} - {{days}}' })
+    ]),
+    el('div', { class: 'field full' }, [
+      el('label', { text: 'Available pieces' }), tokens,
+      el('div', { class: 'hint', text: 'Click one to drop it in where the cursor is.' })
+    ]),
+    el('div', { class: 'field full' }, [
+      el('label', { text: 'Preview' }), preview, previewNote
+    ]),
+    el('div', { class: 'hint', style: 'margin-top:4px' }, [
+      'Names are built when a link is handed out, so changing this renames every config at once — people will see the new name after their app refreshes the subscription.'
+    ])
+  );
+  panels['Config names'].append(el('div', { class: 'card' }, [naming]));
+  drawPreview();
+
+  /* ---- TLS ---- */
+  const tls = el('div', { class: 'form-grid' });
+  add(tls, 'certFile', 'Default TLS certificate (Xray inbounds)', s.certFile, { full: true, placeholder: '/etc/letsencrypt/live/example.com/fullchain.pem' });
+  add(tls, 'keyFile', 'Default TLS private key (Xray inbounds)', s.keyFile, { full: true, placeholder: '/etc/letsencrypt/live/example.com/privkey.pem' });
+  add(tls, 'panelCertFile', 'Panel TLS certificate', s.panelCertFile, {
+    full: true,
+    placeholder: 'leave empty to reuse the certificate above',
+    hint: 'Set this to serve the panel itself over HTTPS. Restart the panel afterwards (nexv restart).'
+  });
+  add(tls, 'panelKeyFile', 'Panel TLS private key', s.panelKeyFile, {
+    full: true, placeholder: 'leave empty to reuse the key above'
+  });
+  tls.append(el('div', { class: 'field full' }, [
+    el('div', { class: 'hint', text: 'Xray runs as a different user than the panel, so it is handed a readable copy of whatever you name here. The files themselves are never moved or reopened to anyone else.' })
+  ]));
+
+  /*
+   * One Save for every field on every tab - switching tabs hides fields, it
+   * does not forget them - and a button of its own on each, because a Save
+   * that lives on another tab is one nobody finds.
+   */
+  const saveAll = async () => {
+    const payload = {
+      xrayLogLevel: logLevel.value,
+      blockTorrent: torrent.checked,
+      trackIps: trackIps.checked,
+      httpRedirect: httpRedirect.checked
+    };
+    for (const [key, control] of Object.entries(inputs)) {
+      payload[key] = control.type === 'number' ? Number(control.value) : control.value;
+    }
+    const oldPath = s.webBasePath || '';
+    try {
+      const result = await api.put('/settings', payload);
+      const newPath = result.webBasePath || '';
+      if (newPath !== oldPath) {
+        // the current page lives under the old path; send the admin to the new one
+        const url = `${location.origin}${newPath}/`;
+        modal({
+          title: 'The panel path changed',
+          subtitle: 'Save the new address — the old one stops working.',
+          body: el('div', {}, [el('div', { class: 'link-box', text: url })]),
+          actions: [{ label: 'Go to the new address', kind: 'primary', onClick: () => { location.href = url; } }]
+        });
+        return;
+      }
+      toast(result.restartNeeded
+        ? 'Saved — run "nexv restart" on the server to apply the port and TLS changes'
+        : 'Settings saved');
+    } catch (err) { toast(err.message, 'err'); }
+  };
+  const saveRow = () => el('div', { class: 'row', style: 'margin-top:8px' }, [
+    el('button', { class: 'btn primary', text: 'Save settings', onclick: saveAll })
+  ]);
+
+  panels.General.append(el('div', { class: 'card' }, [general, saveRow()]));
+  panels.TLS.append(el('div', { class: 'card' }, [tls, saveRow()]));
+  naming.append(saveRow());
+
+  /* ---- Backup ---- */
+  panels.Backup.append(el('div', { class: 'card row' }, [
     el('button', {
       class: 'btn primary', text: 'Show backup as text',
       onclick: async () => {
@@ -2317,11 +2408,9 @@ async function renderSettings(view) {
     })
   ]));
 
-  view.append(el('div', { class: 'section-title', text: 'Account' }));
-  await renderAccount(view);
-
-  view.append(el('div', { class: 'section-title', text: 'Event log' }));
-  await renderLogs(view);
+  /* ---- Account and Logs: the pages they already were ---- */
+  await renderAccount(panels.Account);
+  await renderLogs(panels.Logs);
 }
 
 /* -------------------------------- page: bot ------------------------------ */

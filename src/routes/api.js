@@ -1311,14 +1311,44 @@ router.post('/routing/reorder', async (req, res) => {
 router.get('/settings', (req, res) => {
   const s = Object.assign({}, db.settings);
   delete s.sessionSecret;
+  s.remarkTemplate = s.remarkTemplate || links.DEFAULT_REMARK;
+  s.remarkTokens = links.REMARK_TOKENS;
   res.json(s);
+});
+
+/*
+ * What a template would actually name things, run against a real client so the
+ * admin sees their own data rather than a made-up example. The rendering lives
+ * on the server because the links do: a preview drawn in the browser would be
+ * a second implementation, free to drift from the one that counts.
+ */
+router.post('/settings/remark-preview', (req, res) => {
+  const template = String((req.body || {}).template || '');
+  const d = db.data;
+
+  const client = d.clients.find((c) => c.inboundId && d.inbounds.some((i) => i.id === c.inboundId))
+    || d.clients[0];
+  const inbound = (client && d.inbounds.find((i) => i.id === client.inboundId)) || d.inbounds[0];
+
+  /* nothing to draw on yet: show the shape with a stand-in */
+  const sampleInbound = inbound || { remark: 'Main', protocol: 'vless', port: 443 };
+  const sampleClient = client || {
+    email: 'sample', up: 700 * 1024 ** 2, down: 800 * 1024 ** 2,
+    totalGB: 10, expiryTime: Date.now() + 30 * 86400000
+  };
+
+  res.json({
+    preview: links.remarkFor(sampleInbound, sampleClient, template),
+    from: client ? client.email : '',
+    sample: !client
+  });
 });
 
 router.put('/settings', async (req, res) => {
   const allowed = ['panelPort', 'webBasePath', 'domain', 'subDomain', 'subPort', 'subPath',
     'tgBotToken', 'tgAdminId', 'theme', 'lang', 'certFile', 'keyFile', 'xrayLogLevel',
     'blockTorrent', 'serverIP', 'trafficResetDay', 'defaultOutbound', 'domainStrategy', 'trackIps',
-    'subTitle', 'panelCertFile', 'panelKeyFile', 'httpRedirect'];
+    'subTitle', 'panelCertFile', 'panelKeyFile', 'httpRedirect', 'remarkTemplate'];
   // TLS material is read once when the listener is created
   const restartKeys = ['panelPort', 'panelCertFile', 'panelKeyFile', 'certFile', 'keyFile', 'httpRedirect'];
   const s = db.settings;

@@ -34,6 +34,93 @@ function streamParams(inb) {
   return p;
 }
 
+/*
+ * What a config calls itself in the client app.
+ *
+ * The name used to be inbound-client and nothing else. An admin selling
+ * accounts wants more in there - how much is left, how long is left - and
+ * wants it their way round, so it is a template: anything outside {{...}} is
+ * kept verbatim, and each token is replaced with the value it names.
+ */
+const DEFAULT_REMARK = '{{inbound}}-{{client}}';
+
+const REMARK_TOKENS = [
+  { token: 'inbound', about: 'the inbound\u2019s name' },
+  { token: 'client', about: 'the client\u2019s name' },
+  { token: 'usage', about: 'used of quota, e.g. 1.4 GB / 10 GB' },
+  { token: 'used', about: 'traffic used so far' },
+  { token: 'quota', about: 'the quota, or \u221e' },
+  { token: 'left', about: 'traffic still to go' },
+  { token: 'days', about: 'days remaining, or \u221e' },
+  { token: 'expiry', about: 'the expiry date' },
+  { token: 'protocol', about: 'vless, vmess, trojan\u2026' },
+  { token: 'port', about: 'the inbound\u2019s port' },
+  { token: 'host', about: 'the address clients connect to' },
+  { token: 'panel', about: 'the subscription title' }
+];
+
+const INFINITY = '\u221e';
+
+const UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+
+/*
+ * Step up a unit on what will be *printed*, not on the raw figure: a gigabyte
+ * less 512 bytes is 1023.9995 MB, which prints as "1024 MB" if you only look
+ * at the number behind it. And 10.0 GB is a quota nobody writes that way.
+ */
+function readable(bytes) {
+  let value = Math.max(0, Number(bytes) || 0);
+  let i = 0;
+  const print = (v, unit) => (unit === 0
+    ? String(Math.round(v))
+    : v.toFixed(v >= 100 ? 0 : 1).replace(/\.0$/, ''));
+
+  while (i < UNITS.length - 1 && Number(print(value, i)) >= 1024) {
+    value /= 1024;
+    i++;
+  }
+  return `${print(value, i)} ${UNITS[i]}`;
+}
+
+/** The values every token can take for one client on one inbound. */
+function remarkValues(inb, client) {
+  const used = (client.up || 0) + (client.down || 0);
+  const quota = (client.totalGB || 0) * 1024 ** 3;
+  const expiry = Number(client.expiryTime || 0);
+  const daysLeft = expiry ? Math.ceil((expiry - Date.now()) / 86400000) : 0;
+
+  return {
+    inbound: inb.remark || inb.tag || '',
+    client: client.email || '',
+    used: readable(used),
+    quota: quota ? readable(quota) : INFINITY,
+    usage: quota ? `${readable(used)} / ${readable(quota)}` : readable(used),
+    left: quota ? readable(Math.max(0, quota - used)) : INFINITY,
+    days: expiry ? (daysLeft > 0 ? String(daysLeft) : '0') : INFINITY,
+    expiry: expiry ? new Date(expiry).toISOString().slice(0, 10) : INFINITY,
+    protocol: inb.protocol || '',
+    port: String(inb.port || ''),
+    host: hostFor(inb),
+    panel: db.settings.subTitle || 'NexV'
+  };
+}
+
+/**
+ * Render the naming template. An unknown token is left as it was typed rather
+ * than silently becoming an empty string: a name reading {{clint}} is a typo
+ * the admin can see and fix, where a missing word is a mystery.
+ */
+function remarkFor(inb, client, template) {
+  const tpl = template !== undefined && template !== null && template !== ''
+    ? String(template)
+    : (db.settings.remarkTemplate || DEFAULT_REMARK);
+  const values = remarkValues(inb, client);
+  return tpl.replace(/\{\{\s*([A-Za-z]+)\s*\}\}/g, (whole, name) => {
+    const key = name.toLowerCase();
+    return Object.prototype.hasOwnProperty.call(values, key) ? values[key] : whole;
+  }).trim();
+}
+
 function qs(obj) {
   return Object.entries(obj)
     .filter(([, v]) => v !== undefined && v !== null && v !== '')
@@ -44,7 +131,7 @@ function qs(obj) {
 function buildLink(inb, client) {
   const host = hostFor(inb);
   const port = inb.port;
-  const remark = `${inb.remark || inb.tag}-${client.email}`;
+  const remark = remarkFor(inb, client);
   const params = streamParams(inb);
 
   if (inb.protocol === 'vless') {
@@ -107,4 +194,4 @@ function subscriptionFor(subId) {
   return links;
 }
 
-module.exports = { buildLink, subscriptionFor, hostFor };
+module.exports = { buildLink, subscriptionFor, hostFor, remarkFor, DEFAULT_REMARK, REMARK_TOKENS };

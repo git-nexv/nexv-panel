@@ -122,9 +122,13 @@ everything collapses to an instant change under `prefers-reduced-motion`.
   box, and one menu that clears out everyone a quota or a date has finished.
 - **Outbounds** — where traffic leaves: direct, blocked, or your own proxies.
 - **Routing** — ordered rules that pick an outbound per domain, IP, port or user.
-- **Settings** — domain, ports, secret path, TLS files, backup and restore.
-- **Logs** — panel events.
-- **Account** — change your own username and password.
+- **Settings** — six tabs: general (domain, ports, secret path), config names,
+  TLS files, backup and restore, the account, and the event log.
+  - **Config names** is a template for what each config calls itself in the
+    client app, for example `{{inbound}} | {{client}} - {{usage}} - {{days}}`.
+    Anything outside the braces is kept verbatim; the pieces on offer are
+    inbound, client, usage, used, quota, left, days, expiry, protocol, port,
+    host and panel, and the page previews the result against a real client.
 
 ## Protocols
 
