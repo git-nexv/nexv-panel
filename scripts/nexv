@@ -698,6 +698,77 @@ info_port_move() {
   ok "Panel port moved from $from to $to"
 }
 
+# Why xray will not start, and how to get it back.
+#
+# `systemctl start xray` only ever says "failed"; the reason is in the journal
+# or in a config the panel wrote that binds a port something else already owns.
+act_xray_fix() {
+  need_root
+  local cfg="/usr/local/etc/xray/config.json"
+  local bin="/usr/local/bin/xray"
+  echo
+  echo "${BOLD}Xray recovery${RESET}"
+  echo
+
+  [[ -x $bin ]] || { err "xray is not installed at $bin"; return 1; }
+  [[ -f $cfg ]] || { err "no config at $cfg"; echo "  Rebuild it from the panel: nexv restart"; return 1; }
+
+  if systemctl is-active --quiet xray; then
+    ok "Xray is already running"
+    return 0
+  fi
+
+  # 1. does the config even parse?
+  local test_out
+  if test_out="$("$bin" run -test -config "$cfg" 2>&1)"; then
+    ok "The config parses"
+  else
+    err "The config is invalid:"
+    echo "$test_out" | tail -5 | sed 's/^/    /'
+    echo
+    echo "  Rewrite it from the panel's own data:  nexv restart"
+    return 1
+  fi
+
+  # 2. the usual runtime killer: a port somebody else already owns
+  local busy=0 port owner
+  while read -r port; do
+    [[ $port =~ ^[0-9]+$ ]] || continue
+    if is_port_in_use "$port"; then
+      owner="$(port_owner "$port")"
+      if [[ -n $owner && $owner != *xray* ]]; then
+        err "Inbound port $port is held by: $owner"
+        busy=1
+      fi
+    fi
+  done < <(node -e '
+    try {
+      const cfg = require("/usr/local/etc/xray/config.json");
+      for (const i of cfg.inbounds || []) if (i.port) console.log(i.port);
+    } catch (e) {}
+  ' 2>/dev/null)
+
+  if [[ $busy == 1 ]]; then
+    echo
+    echo "  Xray cannot bind a port another program is using."
+    echo "  Change or disable that inbound in the panel, then: systemctl restart xray"
+    echo "  (the panel itself listens on port $(panel_port))"
+    return 1
+  fi
+
+  # 3. nothing obvious - start it and report what the journal says
+  systemctl start xray 2>/dev/null
+  sleep 2
+  if systemctl is-active --quiet xray; then
+    ok "Xray started"
+    return 0
+  fi
+
+  err "Xray still refuses to start. Last log lines:"
+  journalctl -u xray -n 25 --no-pager | sed 's/^/    /'
+  return 1
+}
+
 act_uninstall() {
   need_root
   confirm "Remove the panel from this server?" || { echo "Cancelled"; return 0; }
@@ -769,6 +840,7 @@ show_menu() {
   menu_rule
   menu_row 24 "Diagnose problems"
   menu_row 25 "Make the panel reachable (move to 443)"
+  menu_row 26 "Fix Xray when it will not start"
   menu_end
   echo
   printf "  Panel state        : %s\n" "$(state_of "$SERVICE")"
@@ -781,7 +853,7 @@ run_menu() {
   while true; do
     show_menu
     local choice domain file port name
-    read -rp "  Please enter your selection [0-25]: " choice
+    read -rp "  Please enter your selection [0-26]: " choice
     echo
     case "$choice" in
       0) exit 0 ;;
@@ -811,7 +883,8 @@ run_menu() {
       23) act_geo; pause ;;
       24) act_doctor; pause ;;
       25) act_fix; pause ;;
-      *) err "Please choose a number between 0 and 25"; pause ;;
+      26) act_xray_fix; pause ;;
+      *) err "Please choose a number between 0 and 26"; pause ;;
     esac
   done
 }
@@ -840,6 +913,7 @@ ${BOLD}nexv${RESET} - NexV Panel management
   nexv geo                      update geoip.dat and geosite.dat
   nexv doctor                   diagnose why the panel is not answering
   nexv fix                      move the panel to port 443 and verify it answers
+  nexv xray-fix                 explain why Xray will not start, and start it
   nexv uninstall                remove the panel
 HELP
 }
@@ -865,6 +939,7 @@ case "${1:-menu}" in
   geo)             act_geo ;;
   doctor)          act_doctor ;;
   fix)             act_fix ;;
+  xray-fix)        act_xray_fix ;;
   uninstall)       act_uninstall ;;
   help|-h|--help)  usage ;;
   *)               err "Unknown command: $1"; echo; usage; exit 1 ;;

@@ -114,6 +114,32 @@ router.get('/status', async (req, res) => {
 
 router.get('/logs', (req, res) => res.json(db.data.logs.slice(0, 200)));
 
+/**
+ * Ports the panel itself owns. An inbound on one of these passes `xray -test`
+ * and then kills the service on start, because the address is already taken.
+ */
+function reservedPorts() {
+  const s = db.settings;
+  return [
+    { port: Number(s.panelPort || 2087), what: 'the panel' },
+    // NEXV_PORT overrides the stored setting at run time; reserve both, since a
+    // restart can move the panel back onto the configured one
+    { port: Number(process.env.NEXV_PORT || 0), what: 'the panel' },
+    { port: Number(s.subPort || 0), what: 'the subscription server' },
+    { port: xray.API_PORT, what: "Xray's own stats API" }
+  ].filter((entry) => entry.port > 0);
+}
+
+function portConflict(port, listen, selfId) {
+  const taken = reservedPorts().find((entry) => entry.port === Number(port));
+  if (taken) return `port ${port} is used by ${taken.what}; pick another one`;
+  const clash = db.data.inbounds.find(
+    (i) => i.id !== selfId && i.port === Number(port) && (i.listen || '0.0.0.0') === (listen || '0.0.0.0')
+  );
+  if (clash) return `port ${port} is already used by inbound "${clash.remark}"`;
+  return null;
+}
+
 router.get('/protocols', (req, res) => res.json({
   inbound: xray.INBOUND_PROTOCOLS,
   outbound: xray.OUTBOUND_PROTOCOLS,
@@ -186,9 +212,8 @@ router.post('/inbounds', async (req, res) => {
   const body = req.body || {};
   const inb = normalizeInbound(body, null);
   if (!inb.port || inb.port < 1 || inb.port > 65535) return bad(res, 'port must be between 1 and 65535');
-  if (db.data.inbounds.some((i) => i.port === inb.port && (i.listen || '0.0.0.0') === inb.listen)) {
-    return bad(res, `port ${inb.port} is already used by another inbound`);
-  }
+  const clash = portConflict(inb.port, inb.listen, null);
+  if (clash) return bad(res, clash);
   inb.id = db.id();
   inb.tag = `inbound-${inb.port}-${inb.id.slice(0, 4)}`;
   if (inb.protocol === 'shadowsocks' && !inb.password) inb.password = ssKey(inb.method);
@@ -225,9 +250,8 @@ router.put('/inbounds/:id', async (req, res) => {
   const updated = normalizeInbound(req.body || {}, before);
   updated.id = before.id;
   updated.tag = before.tag;
-  if (d.inbounds.some((i) => i.id !== updated.id && i.port === updated.port)) {
-    return bad(res, `port ${updated.port} is already used by another inbound`);
-  }
+  const clash = portConflict(updated.port, updated.listen, updated.id);
+  if (clash) return bad(res, clash);
   d.inbounds[idx] = updated;
   db.saveNow();
   const applied = await xray.apply();

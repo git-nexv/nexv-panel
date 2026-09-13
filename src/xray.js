@@ -421,9 +421,37 @@ async function apply() {
     return { ok: false, error: test.stderr.trim() || 'invalid xray config' };
   }
   if (!hasSystemd()) return { ok: true, warning: 'systemd unavailable; xray was not restarted' };
+
   const restart = await run('systemctl', ['restart', XRAY_SERVICE], 30000);
-  if (!restart.ok) return { ok: false, error: restart.stderr.trim() || 'failed to restart xray' };
-  return { ok: true };
+  if (restart.ok) return { ok: true };
+
+  /*
+   * `xray run -test` only parses the config; it cannot know that a port is
+   * already taken. Such a config passes the test and then kills the service on
+   * start - and until now it stayed on disk, so every later `systemctl start`
+   * failed too and xray looked permanently dead. Put the working config back
+   * and bring the service up on it, then report the failure.
+   */
+  if (previous !== null) {
+    fs.writeFileSync(XRAY_CONFIG, previous, { mode: 0o600 });
+    const recovered = await run('systemctl', ['restart', XRAY_SERVICE], 30000);
+    const detail = await lastServiceError();
+    return {
+      ok: false,
+      error: `${detail || restart.stderr.trim() || 'xray failed to start'}${recovered.ok ? ' (previous configuration restored)' : ''}`
+    };
+  }
+  return { ok: false, error: (await lastServiceError()) || restart.stderr.trim() || 'failed to restart xray' };
+}
+
+/** The journal line that actually says why xray refused to start. */
+async function lastServiceError() {
+  const log = await run('journalctl', ['-u', XRAY_SERVICE, '-n', '25', '--no-pager'], 8000);
+  if (!log.ok) return '';
+  const lines = log.stdout.split('\n').filter((l) => /failed|error|address already in use|panic/i.test(l));
+  const line = lines[lines.length - 1] || '';
+  // strip the syslog prefix, keep the part a human needs
+  return line.replace(/^.*?(?:xray\[\d+\]|systemd\[\d+\]):\s*/, '').trim().slice(0, 200);
 }
 
 let versionCache = null;
