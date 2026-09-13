@@ -170,13 +170,20 @@ button, input, select, textarea { font: inherit; color: inherit; }
   animation: chip-pop .5s var(--spring) both;
   transition: transform .3s var(--spring), background .24s var(--glide), color .24s var(--glide), border-color .24s var(--glide);
 }
+/* orange, because it is asking to be acted on rather than reporting good news */
 .update-chip.ready {
-  border-color: color-mix(in srgb, var(--ok) 42%, transparent);
-  background: color-mix(in srgb, var(--ok) 16%, transparent);
-  color: var(--ok);
+  border-color: color-mix(in srgb, var(--warn) 46%, transparent);
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
+  animation: chip-pop .5s var(--spring) both, update-nudge 2.6s var(--glide) .6s infinite;
+}
+@keyframes update-nudge {
+  0%, 88%, 100% { transform: none; }
+  92%           { transform: translateY(-2px); }
+  96%           { transform: translateY(0); }
 }
 .update-chip:hover { background: var(--surface); }
-.update-chip.ready:hover { background: color-mix(in srgb, var(--ok) 24%, transparent); }
+.update-chip.ready:hover { background: color-mix(in srgb, var(--warn) 26%, transparent); }
 .update-chip:active { transform: scale(.95); }
 .update-chip svg { width: 15px; height: 15px; }
 @keyframes chip-pop {

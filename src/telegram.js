@@ -90,6 +90,12 @@ function defaults() {
       card: { enable: true, number: '', holder: '', note: '' },
       crypto: { enable: false, wallets: [] }
     },
+    channel: {
+      enable: false,
+      id: '',
+      link: '',
+      text: 'برای استفاده از ربات، ابتدا در کانال زیر عضو شوید 👇'
+    },
     ai: { provider: 'anthropic', apiKey: '', model: '', baseUrl: '' }
   };
 }
@@ -159,6 +165,14 @@ function send(chatId, text, keyboard) {
     disable_web_page_preview: true,
     reply_markup: keyboard ? { inline_keyboard: keyboard } : undefined
   }).catch((err) => { runtime.error = err.message; });
+}
+
+function answer(queryId, text, alert) {
+  return call('answerCallbackQuery', {
+    callback_query_id: queryId,
+    text: text || undefined,
+    show_alert: !!alert
+  }).catch(() => {});
 }
 
 function sendPhoto(chatId, fileId, caption, keyboard) {
@@ -557,6 +571,75 @@ async function rejectOrder(ctx, orderId) {
   return send(ctx.chatId, 'رد شد و به خریدار اطلاع داده شد.');
 }
 
+
+/* --------------------------- the channel gate ---------------------------- */
+
+/* userId -> { member, at }; a membership check per message would be rude. */
+const members = new Map();
+const MEMBER_TTL = 60 * 1000;
+
+function channel() {
+  const b = bot();
+  if (!b.channel) b.channel = defaults().channel;
+  return b.channel;
+}
+
+/** Is the gate switched on and pointed at something? */
+function gateOn() {
+  const c = channel();
+  return !!(c.enable && String(c.id || '').trim());
+}
+
+/** Where someone joins: an @name needs no lookup, an id needs an invite link. */
+function joinLink() {
+  const c = channel();
+  const id = String(c.id || '').trim();
+  if (c.link) return c.link;
+  if (id.startsWith('@')) return `https://t.me/${id.slice(1)}`;
+  return '';
+}
+
+/**
+ * Has this user joined? Telegram answers for a channel only when the bot is an
+ * administrator there, which is why the Bot page insists on that and tests it.
+ */
+async function isMember(userId, force) {
+  const c = channel();
+  const cached = members.get(userId);
+  if (!force && cached && Date.now() - cached.at < MEMBER_TTL) return cached.member;
+
+  let member = false;
+  try {
+    const result = await call('getChatMember', { chat_id: c.id, user_id: userId });
+    member = ['creator', 'administrator', 'member'].includes(result.status)
+      || (result.status === 'restricted' && result.is_member);
+  } catch (err) {
+    // the bot was removed, or was never an admin: do not lock everyone out
+    runtime.error = `channel check failed: ${err.message}`;
+    member = true;
+  }
+  members.set(userId, { member, at: Date.now() });
+  return member;
+}
+
+/** The wall: the admin's own text, a join button, and a button to re-check. */
+function gateScreen(ctx) {
+  const c = channel();
+  const link = joinLink();
+  const rows = [];
+  if (link) rows.push([{ text: '📢 عضویت در کانال', url: link }]);
+  rows.push([{ text: '✅ بررسی عضویت', callback_data: 'b:joined:' }]);
+  return reply(ctx, fill(c.text || 'برای استفاده از ربات، ابتدا در کانال زیر عضو شوید 👇', ctx), rows);
+}
+
+/** Returns true when the gate handled this update and nothing else should. */
+async function gate(ctx, force) {
+  if (!gateOn() || ctx.isAdmin) return false;
+  if (await isMember(ctx.userId, force)) return false;
+  await gateScreen(ctx);
+  return true;
+}
+
 /* ------------------------------ the dispatcher --------------------------- */
 
 /** Answer in place when the tap came from a button, otherwise send anew. */
@@ -575,6 +658,15 @@ async function act(ctx, action, value) {
       const screen = screenByKey('support');
       if (screen) return showScreen(ctx, 'support');
       return reply(ctx, `به ${escapeHtml(adminHandle())} پیام بدهید.`, backRow());
+    }
+    case 'joined': {
+      const ok = await isMember(ctx.userId, true);
+      if (!ok) {
+        if (ctx.answer) ctx.answer('هنوز عضو کانال نشده‌اید. بعد از عضویت دوباره بزنید.', true);
+        return null;
+      }
+      if (ctx.answer) ctx.answer('عضویت تایید شد ✅');
+      return showScreen(ctx, 'start');
     }
     case 'buy': return placeOrder(ctx, value);
     case 'pay': {
@@ -637,6 +729,8 @@ async function handle(update) {
         `سفارش در انتظار: ${b.orders.filter((o) => o.status === 'pending').length}`
       ].join('\n'));
     }
+    if (await gate(ctx)) return null;
+
     const command = text.split(' ')[0].replace('/', '');
     const screen = screenByKey(command);
     return showScreen(ctx, screen ? screen.key : 'start');
@@ -653,8 +747,15 @@ async function handle(update) {
       name: from.first_name || from.username || '',
       isAdmin: isAdmin(from)
     };
-    call('answerCallbackQuery', { callback_query_id: query.id }).catch(() => {});
+    // held until the gate has spoken, so its message can be the alert
+    ctx.answer = (text, alert) => answer(query.id, text, alert);
     const [, action, ...rest] = String(query.data || '').split(':');
+    // the re-check button has to work from behind the gate
+    if (action !== 'joined' && await gate(ctx)) {
+      if (ctx.answer) ctx.answer();
+      return null;
+    }
+    if (action !== 'joined' && ctx.answer) ctx.answer();
     return act(ctx, action, rest.join(':'));
   }
   return null;
@@ -731,4 +832,7 @@ function resume() {
   if (b.enabled && b.token) start().catch((err) => { runtime.error = err.message; });
 }
 
-module.exports = { bot, defaults, starterScreens, migrateStarter, start, stop, status, whoAmI, resume, send, escapeHtml, payWays };
+module.exports = {
+  bot, defaults, starterScreens, migrateStarter, start, stop, status, whoAmI, resume,
+  send, escapeHtml, payWays, call, channel, gateOn, joinLink
+};

@@ -147,6 +147,7 @@ const ICONS = {
   logs: '<path d="M4 4h16v2H4V4Zm0 5h16v2H4V9Zm0 5h11v2H4v-2Zm0 5h11v2H4v-2Z"/>',
   account: '<path d="M12 12a5 5 0 1 0-5-5 5 5 0 0 0 5 5Zm0 2c-4 0-9 2-9 5v3h18v-3c0-3-5-5-9-5Z"/>',
   logout: '<path d="M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h5v-2H5V5h5V3Zm7.3 4.3-1.4 1.4L18.2 11H9v2h9.2l-2.3 2.3 1.4 1.4L22 12l-4.7-4.7Z"/>',
+  update: '<path d="M12 3 4.8 10.2l1.4 1.4L11 6.8V17h2V6.8l4.8 4.8 1.4-1.4L12 3ZM5 19h14v2H5v-2Z"/>',
   sun: '<path d="M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10Zm0 2.5a1 1 0 0 1 1 1V22a1 1 0 1 1-2 0v-1.5a1 1 0 0 1 1-1Zm0-18a1 1 0 0 1 1 1V4a1 1 0 1 1-2 0V2.5a1 1 0 0 1 1-1ZM22 11a1 1 0 1 1 0 2h-1.5a1 1 0 1 1 0-2H22ZM3.5 11a1 1 0 1 1 0 2H2a1 1 0 1 1 0-2h1.5Zm15.4 6.5a1 1 0 0 1 1.4 1.4l-1 1a1 1 0 0 1-1.5-1.4l1.1-1Zm-14.9-13a1 1 0 0 1 1.4 0l1 1.1A1 1 0 0 1 5 7L3.9 6a1 1 0 0 1 0-1.4Zm14.9 0a1 1 0 0 1 1.4 1.4L19.3 7a1 1 0 0 1-1.5-1.4l1.1-1.1ZM5 17.5l1 1a1 1 0 0 1-1.4 1.4l-1-1A1 1 0 0 1 5 17.5Z"/>',
   bot: '<path d="M12 2a1 1 0 0 1 1 1v2h3a4 4 0 0 1 4 4v7a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V9a4 4 0 0 1 4-4h3V3a1 1 0 0 1 1-1Zm-2.5 9A1.5 1.5 0 1 0 9.5 14a1.5 1.5 0 0 0 0-3Zm5 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3ZM2 10h1.2v5H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1Zm19 0a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1.2v-5H21Z"/>',
   theme: '<path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/>',
@@ -2234,17 +2235,18 @@ async function renderBot(view) {
     adminId: data.adminId,
     screens: JSON.parse(JSON.stringify(data.screens || [])),
     plans: JSON.parse(JSON.stringify(data.plans || [])),
-    pay: JSON.parse(JSON.stringify(data.pay || { card: {}, crypto: { wallets: [] } }))
+    pay: JSON.parse(JSON.stringify(data.pay || { card: {}, crypto: { wallets: [] } })),
+    channel: JSON.parse(JSON.stringify(data.channel || { enable: false, id: '', link: '', text: '' }))
   };
 
-  const { wrap, panels } = tabbed(['Setup', 'Screens', 'Plans', 'Payment', 'Orders', 'AI']);
+  const { wrap, panels } = tabbed(['Setup', 'Screens', 'Plans', 'Payment', 'Channel', 'Orders', 'AI']);
   for (const panel of Object.values(panels)) panel.className = 'tab-panel';
   view.append(wrap);
 
   const save = async (extra) => {
     const payload = Object.assign({
       brand: draft.brand, currency: draft.currency, adminId: draft.adminId,
-      screens: draft.screens, plans: draft.plans, pay: draft.pay
+      screens: draft.screens, plans: draft.plans, pay: draft.pay, channel: draft.channel
     }, extra || {});
     try {
       await api.put('/bot', payload);
@@ -2507,6 +2509,71 @@ async function renderBot(view) {
   drawPay();
   panels.Payment.append(payBox);
 
+  /* ---- Channel ---- */
+  const chan = draft.channel;
+  const chanGrid = el('div', { class: 'form-grid' });
+  const chanId = el('input', { value: chan.id || '', placeholder: '@mychannel  or  -1001234567890' });
+  chanId.addEventListener('input', () => { chan.id = chanId.value.trim(); });
+  const chanLink = el('input', { value: chan.link || '', placeholder: 'https://t.me/… (only needed for a private channel)' });
+  chanLink.addEventListener('input', () => { chan.link = chanLink.value.trim(); });
+  const chanText = el('textarea', { style: 'min-height:110px' }, [chan.text || '']);
+  chanText.addEventListener('input', () => { chan.text = chanText.value; });
+
+  formField(chanGrid, 'Channel', chanId, {
+    hint: 'A public channel by @name, or the numeric id of a private one'
+  });
+  formField(chanGrid, 'Join link', chanLink, { hint: 'Left empty, an @name builds its own' });
+  formField(chanGrid, 'Message', chanText, {
+    full: true,
+    hint: 'Shown to anyone who has not joined. Placeholders: {name} {brand}'
+  });
+
+  const chanVerdict = el('div', { class: 'hint', style: 'margin-top:12px' });
+  const chanSwitch = onOffSwitch(chan.enable === true, async (on) => {
+    chan.enable = on;
+    await save();
+  }, 'Require joining the channel');
+
+  panels.Channel.append(el('div', { class: 'card' }, [
+    el('div', { class: 'between', style: 'margin-bottom:14px' }, [
+      el('strong', { text: '📢 Join the channel first' }), chanSwitch
+    ]),
+    el('div', { class: 'muted', style: 'margin-bottom:16px' }, [
+      'While this is on, anyone who opens the bot sees your message with a Join button and a Check button, and gets no further until they have joined.'
+    ]),
+    chanGrid,
+    el('div', { class: 'row', style: 'margin-top:8px' }, [
+      el('button', { class: 'btn primary', text: 'Save', onclick: () => save() }),
+      el('button', {
+        class: 'btn', text: 'Test the channel',
+        onclick: async function () {
+          const button = this;
+          button.disabled = true;
+          chanVerdict.textContent = 'Asking Telegram…';
+          try {
+            const result = await api.post('/bot/channel/test', { id: chanId.value.trim() });
+            chanVerdict.textContent = result.message;
+            chanVerdict.style.color = result.ok ? 'var(--ok)' : 'var(--danger)';
+            if (result.link && !chanLink.value) {
+              chanLink.value = result.link;
+              chan.link = result.link;
+            }
+            toast(result.ok ? 'The bot is an admin there' : 'The bot is not an admin there', result.ok ? '' : 'err');
+          } catch (err) {
+            chanVerdict.textContent = err.message;
+            chanVerdict.style.color = 'var(--danger)';
+            toast(err.message, 'err');
+          }
+          button.disabled = false;
+        }
+      })
+    ]),
+    chanVerdict,
+    el('div', { class: 'hint', style: 'margin-top:14px' }, [
+      'The bot must be an administrator of the channel — Telegram will not say who is a member otherwise. Add it in the channel’s Administrators list, then press Test.'
+    ])
+  ]));
+
   /* ---- Orders ---- */
   if (!data.orders.length) {
     panels.Orders.append(el('div', { class: 'card empty', html: `${icon('empty', 42)}<div>No orders yet.</div>` }));
@@ -2696,6 +2763,7 @@ async function renderAccount(view) {
  */
 function updateDialog(info) {
   if (!info) return;
+  // the dialog re-checks as it opens, so a stale chip is never acted on
   const fresh = !info.updateAvailable;
   const note = el('p', { class: 'muted' });
   const progress = el('div', { class: 'link-box', hidden: true, style: 'margin-top:12px; max-height:150px' });
@@ -2719,35 +2787,40 @@ function updateDialog(info) {
   }
 
   note.textContent = fresh
-    ? 'No newer version was found. You can install the latest build again anyway.'
+    ? 'Nothing to install \u2014 this is the newest version.'
     : 'Your inbounds, clients and settings are left alone.';
 
-  const run = async (button, force) => {
-    button.disabled = true;
+  const run = async () => {
+    primary.disabled = true;
     say('Starting the update\u2026');
     try {
-      await api.post('/update', force ? { force: true } : {});
+      await api.post('/update', {});
     } catch (err) {
-      button.disabled = false;
+      primary.disabled = false;
       return say(`Could not start: ${err.message}`);
     }
     say('Downloading and installing. The panel restarts on its own \u2014 keep this page open.');
-    watchUpdate(info.latest, say, force);
+    watchUpdate(info.latest, say, false);
   };
 
+  // there is nothing to press when the panel is already current
   const primary = el('button', {
-    class: 'btn primary',
-    html: `${icon('sparkle')} ${fresh ? 'Reinstall this version' : 'Update now'}`,
-    onclick: () => run(primary, fresh)
+    class: 'btn primary', html: `${icon('update')} Update`, onclick: run
   });
+  primary.disabled = fresh;
+
   const recheck = el('button', {
     class: 'btn', text: 'Check again',
     onclick: async () => {
       recheck.disabled = true;
+      say('Checking\u2026');
       const next = await checkForUpdate(true);
       recheck.disabled = false;
       if (next && next.updateAvailable) {
-        say(`Version ${next.latest} is available \u2014 close this and open it again to install it.`);
+        info = next;
+        primary.disabled = false;
+        note.textContent = 'Your inbounds, clients and settings are left alone.';
+        say(`Version ${next.latest} is available. Press Update to install it.`);
       } else {
         say(next ? `Still the newest: ${next.current}` : 'The server could not reach the repository.');
       }
@@ -2804,7 +2877,8 @@ async function checkForUpdate(force) {
     // where you go to update the panel, not just where a notice appears
     chip = el('button', {
       id: 'updateChip', class: 'update-chip', type: 'button',
-      onclick: () => updateDialog(state.version)
+      // ask again as it opens, so what the dialog offers is never stale
+      onclick: async () => updateDialog(await checkForUpdate(true) || state.version)
     });
     bar.insertBefore(chip, document.getElementById('xrayChip'));
   }
@@ -2812,7 +2886,7 @@ async function checkForUpdate(force) {
   chip.title = info.updateAvailable
     ? `Version ${info.latest} is available`
     : `Up to date · ${info.current}`;
-  chip.innerHTML = `${icon('sparkle', 15)}<span>${info.updateAvailable ? `Update ${info.latest}` : info.current}</span>`;
+  chip.innerHTML = `${icon('update', 15)}<span>${info.updateAvailable ? `Update ${info.latest}` : info.current}</span>`;
   return info;
 }
 

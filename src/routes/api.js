@@ -129,6 +129,7 @@ function botView() {
     orders: (b.orders || []).slice(0, 60),
     pay: b.pay || telegram.defaults().pay,
     payWays: telegram.payWays(),
+    channel: telegram.channel(),
     ai: {
       hasKey: !!(b.ai && b.ai.apiKey),
       provider: (b.ai && b.ai.provider) || 'anthropic',
@@ -190,6 +191,13 @@ router.put('/bot', async (req, res) => {
     }
     b.pay = pay;
   }
+  if (body.channel && typeof body.channel === 'object') {
+    const c = telegram.channel();
+    if (body.channel.enable !== undefined) c.enable = !!body.channel.enable;
+    if (body.channel.id !== undefined) c.id = String(body.channel.id).trim().slice(0, 80);
+    if (body.channel.link !== undefined) c.link = String(body.channel.link).trim().slice(0, 200);
+    if (body.channel.text !== undefined) c.text = String(body.channel.text).slice(0, 1000);
+  }
   if (body.ai && typeof body.ai === 'object') {
     b.ai = b.ai || {};
     if (typeof body.ai.apiKey === 'string' && body.ai.apiKey.trim()) b.ai.apiKey = body.ai.apiKey.trim();
@@ -246,6 +254,49 @@ router.post('/bot/ping', async (req, res) => {
   }
   await telegram.send(target, 'Test message from the NexV panel ✅');
   res.json({ ok: true });
+});
+
+/**
+ * Is the gate actually going to work?
+ *
+ * Telegram only answers "is this user in that channel" for a bot that is an
+ * administrator there, so a gate on a channel the bot cannot see would lock
+ * every user out. This says which of the two is wrong before it can happen.
+ */
+router.post('/bot/channel/test', async (req, res) => {
+  const c = telegram.channel();
+  const id = String((req.body && req.body.id) || c.id || '').trim();
+  if (!id) return bad(res, 'enter the channel id or @username first');
+  if (!telegram.bot().token) return bad(res, 'set the bot token first');
+
+  let chat;
+  try {
+    chat = await telegram.call('getChat', { chat_id: id });
+  } catch (err) {
+    return bad(res, `the bot cannot see that channel: ${err.message}. Add it to the channel as an administrator.`);
+  }
+
+  let me;
+  try { me = await telegram.whoAmI(telegram.bot().token); } catch (err) { return bad(res, err.message); }
+
+  let membership;
+  try {
+    membership = await telegram.call('getChatMember', { chat_id: id, user_id: me.id });
+  } catch (err) {
+    return bad(res, `the bot is not in that channel: ${err.message}`);
+  }
+  const isAdmin = ['administrator', 'creator'].includes(membership.status);
+
+  res.json({
+    ok: isAdmin,
+    title: chat.title || '',
+    username: chat.username ? `@${chat.username}` : '',
+    link: chat.invite_link || (chat.username ? `https://t.me/${chat.username}` : ''),
+    status: membership.status,
+    message: isAdmin
+      ? `The bot is an administrator of "${chat.title || id}" and can check members.`
+      : `The bot is in "${chat.title || id}" but only as "${membership.status}". Make it an administrator, or membership cannot be checked.`
+  });
 });
 
 router.post('/bot/ai', async (req, res) => {
