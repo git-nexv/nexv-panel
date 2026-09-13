@@ -370,7 +370,10 @@ act_firewall_install() {
     return 0
   fi
   if command -v apt-get >/dev/null 2>&1; then
-    DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq ufw >/dev/null
+    # the same lock a fresh server holds on first boot can still be held here
+    local opts=(-o DPkg::Lock::Timeout=300 -o Dpkg::Use-Pty=0)
+    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" update -qq \
+      && DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" install -y -qq ufw >/dev/null
   elif command -v dnf >/dev/null 2>&1; then
     dnf install -y -q ufw >/dev/null
   elif command -v yum >/dev/null 2>&1; then

@@ -43,12 +43,63 @@ detect_os() {
   ok "Operating system: ${PRETTY_NAME:-$OS_ID}"
 }
 
+# A fresh cloud server runs cloud-init and unattended-upgrades on first boot,
+# and they hold the dpkg lock for a minute or two. Waiting is the whole fix:
+# failing here used to leave a half-installed machine and an apt error nobody
+# outside Debian recognises.
+APT_OPTS=(-o DPkg::Lock::Timeout=300 -o Dpkg::Use-Pty=0)
+
+apt_busy() {
+  # no extra packages: the lock holder is whoever has the file open
+  if command -v fuser >/dev/null 2>&1; then
+    fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock >/dev/null 2>&1
+    return $?
+  fi
+  command -v lsof >/dev/null 2>&1 && lsof /var/lib/dpkg/lock-frontend >/dev/null 2>&1
+}
+
+wait_for_apt() {
+  local waited=0
+  while apt_busy; do
+    if [[ $waited -eq 0 ]]; then
+      info "Another package manager is running (a fresh server updates itself on first boot)."
+      info "Waiting for it to finish - this usually takes a minute..."
+    fi
+    sleep 5
+    waited=$((waited + 5))
+    if [[ $waited -ge 300 ]]; then
+      warn "apt is still busy after five minutes; trying anyway"
+      return 0
+    fi
+  done
+  [[ $waited -gt 0 ]] && ok "apt is free again (waited ${waited}s)"
+  return 0
+}
+
+# apt, but patient: it waits for the lock and gives the reason when it cannot
+apt_do() {
+  local tries=0
+  wait_for_apt
+  until apt-get "${APT_OPTS[@]}" "$@"; do
+    tries=$((tries + 1))
+    if [[ $tries -ge 4 ]]; then
+      fail "apt could not run: $*
+    Something else is holding the package manager. Check it with:
+      ps aux | grep -E 'apt|dpkg|unattended' | grep -v grep
+    then run the installer again."
+    fi
+    warn "apt did not go through, retrying in 15s (${tries}/4)..."
+    sleep 15
+    wait_for_apt
+  done
+}
+
 install_packages() {
   info "Installing prerequisites..."
   if [[ $PKG == apt ]]; then
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq
-    apt-get install -y -qq curl wget git tar unzip ca-certificates openssl cron >/dev/null
+    apt_do update -qq
+    apt_do install -y -qq curl wget git tar unzip ca-certificates openssl cron psmisc >/dev/null
   else
     $PKG install -y -q curl wget git tar unzip ca-certificates openssl cronie >/dev/null
   fi
@@ -62,8 +113,9 @@ install_node() {
   fi
   info "Installing Node.js 20 LTS..."
   if [[ $PKG == apt ]]; then
+    wait_for_apt
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1
-    apt-get install -y -qq nodejs >/dev/null
+    apt_do install -y -qq nodejs >/dev/null
   else
     curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - >/dev/null 2>&1
     $PKG install -y -q nodejs >/dev/null
