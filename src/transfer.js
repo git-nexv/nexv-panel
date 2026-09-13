@@ -121,15 +121,20 @@ function exportInbound(inb, clients) {
     listen: inb.listen === '0.0.0.0' ? '' : clean(inb.listen),
     port: Number(inb.port),
     protocol: inb.protocol,
-    settings,
-    streamSettings: stream,
+    /*
+     * These three go out as JSON *strings*, not objects. 3x-ui's Inbound model
+     * declares them as Go `string` fields, so an object fails to unmarshal and
+     * the panel reports "inbound settings is empty" on import.
+     */
+    settings: JSON.stringify(settings),
+    streamSettings: JSON.stringify(stream),
     tag: clean(inb.tag) || `in-${inb.port}-${inb.protocol}`,
-    sniffing: {
+    sniffing: JSON.stringify({
       enabled: inb.sniffing !== false,
       destOverride: inb.sniffDestOverride || ['http', 'tls', 'quic'],
       metadataOnly: !!inb.sniffMetadataOnly,
       routeOnly: !!inb.sniffRouteOnly
-    },
+    }),
     clientStats: clients.map((c, index) => ({
       id: index + 1,
       inboundId: 1,

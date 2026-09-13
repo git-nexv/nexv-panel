@@ -306,6 +306,67 @@ td .row-actions { display: flex; gap: 6px; }
 [dir="rtl"] .mono { text-align: right; }
 .link-box { direction: ltr; text-align: left; }
 
+/* Below the table's own min-width there is nothing left to scroll to, so each
+   row becomes a card: the name heads it and the columns pair up underneath. */
+@media (max-width: 760px) {
+  .table-wrap {
+    overflow-x: visible;
+    border: none; border-radius: 0; background: none;
+  }
+  table { display: block; min-width: 0; width: 100%; }
+  thead { display: none; }
+  tbody { display: block; }
+  tbody tr {
+    display: grid; grid-template-columns: 1fr 1fr;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 10px;
+    padding-bottom: 2px;
+  }
+  tbody tr:last-child { margin-bottom: 0; }
+  tbody tr:hover { background: var(--surface); }
+  td {
+    display: block; min-width: 0;
+    padding: 8px 14px; border-bottom: none;
+    overflow-wrap: anywhere;
+  }
+  td::before {
+    content: attr(data-label);
+    display: block; margin-bottom: 1px;
+    color: var(--faint); font-size: 11px; font-weight: 600;
+    letter-spacing: .02em;
+  }
+  td .bar { width: auto !important; }
+
+  td.cell-title {
+    grid-column: 1 / -1; order: -1;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  td.cell-title::before { content: none; }
+  td.cell-title strong { font-size: 14.5px; }
+  tbody tr:has(.cell-status) .cell-title { padding-inline-end: 104px; }
+
+  /* the status chip rides the card's heading instead of costing a whole line */
+  tbody tr { position: relative; }
+  td.cell-status {
+    position: absolute; inset-block-start: 12px; inset-inline-end: 12px;
+    padding: 0; width: auto;
+  }
+  td.cell-status::before { content: none; }
+
+  td.cell-actions {
+    grid-column: 1 / -1;
+    margin-top: 4px; padding: 9px 10px;
+    border-top: 1px solid var(--border);
+  }
+  td.cell-actions::before { content: none; }
+  /* a row with no heading (the log) has its payload in the last column */
+  tbody tr:not(:has(.cell-title)) td:last-child { grid-column: 1 / -1; }
+  .row-actions { justify-content: flex-end; flex-wrap: wrap; }
+}
+
 .empty { padding: 48px 20px; text-align: center; color: var(--faint); }
 .empty svg { width: 42px; height: 42px; opacity: .35; margin-bottom: 10px; }
 
@@ -521,18 +582,19 @@ td .row-actions { display: flex; gap: 6px; }
 .dock {
   --dock-h: 52px;
   --dock-gap: 8px;
+  --dock-inset: 16px;
   position: fixed; z-index: 90;
-  left: 50%; bottom: calc(10px + env(safe-area-inset-bottom));
-  width: min(430px, calc(100vw - 20px));
-  transform: translateX(-50%);
-  display: flex; align-items: center; gap: var(--dock-gap);
+  bottom: calc(10px + env(safe-area-inset-bottom));
+  left: max(var(--dock-inset), env(safe-area-inset-left));
+  right: max(var(--dock-inset), env(safe-area-inset-right));
+  display: flex; align-items: center; justify-content: center; gap: var(--dock-gap);
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
 .dock * { -webkit-user-select: none; user-select: none; }
 
 .dock-bar {
-  position: relative; flex: 1 1 auto; min-width: 0;
+  position: relative; flex: 1 1 auto; min-width: 0; max-width: 100%;
   /* box-sizing keeps the pill exactly --dock-h tall, border and all, so the
      round More key beside it is the same size rather than a pixel short */
   height: var(--dock-h); box-sizing: border-box;
@@ -549,7 +611,10 @@ td .row-actions { display: flex; gap: 6px; }
   transition: color .25s var(--glide), transform .45s var(--spring);
 }
 .dock-item svg { width: 19px; height: 19px; transition: transform .35s var(--spring); }
-.dock-item span { white-space: nowrap; }
+.dock-item span {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 100%;
+}
 .dock-item.active, .dock-item.under { color: var(--brand); }
 .dock-item.under svg { transform: scale(1.14); }
 
@@ -608,7 +673,7 @@ td .row-actions { display: flex; gap: 6px; }
   bottom: calc(10px + env(safe-area-inset-bottom) + var(--dock-h, 52px) + 10px);
   display: flex; flex-direction: column;
   /* the rounded caps eat into the corners, so the end rows need clearance */
-  padding: 18px 4px;
+  padding: 14px 4px;
   border-radius: 999px;
   transform-origin: bottom right;
   opacity: 0;
@@ -644,12 +709,13 @@ td .row-actions { display: flex; gap: 6px; }
 
 .dock-row {
   position: relative; z-index: 2;
-  display: flex; align-items: center; gap: 11px;
-  padding: 12px 22px 12px 16px; min-width: 190px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  padding: 11px 10px; width: 96px;
   border: 0; border-radius: 999px; background: none; cursor: pointer;
-  color: var(--muted); font: inherit; font-size: 13.5px; font-weight: 650; text-align: start;
+  color: var(--muted); font: inherit; font-size: 9.5px; font-weight: 650; line-height: 1; text-align: center;
   transition: color .25s var(--glide), transform .45s var(--spring);
 }
+.dock-row span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .dock-row svg { width: 19px; height: 19px; flex: 0 0 auto; transition: transform .35s var(--spring); }
 .dock-row.active, .dock-row.under { color: var(--brand); }
 .dock-row.under svg { transform: scale(1.14); }
@@ -662,7 +728,8 @@ td .row-actions { display: flex; gap: 6px; }
 
 /* a wide screen shows every page at once, so the bar gets more room */
 @media (min-width: 981px) {
-  .dock { --dock-h: 56px; width: min(760px, calc(100vw - 40px)); }
+  .dock { --dock-h: 56px; --dock-inset: 24px; }
+  .dock-bar { max-width: 780px; }
   .dock-item { font-size: 10.5px; }
   .dock-item svg { width: 20px; height: 20px; }
 }

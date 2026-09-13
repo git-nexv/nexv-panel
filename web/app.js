@@ -396,6 +396,29 @@ function tableShell(view, { intro, addLabel, onAdd }) {
   return wrap;
 }
 
+/*
+ * Phones get one card per row instead of a table you have to drag sideways.
+ * The layout is CSS, but it needs every cell to carry its column name, which
+ * only the header row knows.
+ */
+function mountTable(wrap, table) {
+  const heads = [...table.querySelectorAll('thead th')].map(th => th.textContent.trim());
+  for (const tr of table.querySelectorAll('tbody tr')) {
+    [...tr.children].forEach((td, i) => {
+      if (!heads[i]) td.classList.add('cell-actions');
+      else {
+        td.setAttribute('data-label', heads[i]);
+        if (heads[i] === 'Status') td.classList.add('cell-status');
+      }
+    });
+    // the row's own name heads its card; a table without one (the log) gets no heading
+    const title = [...tr.children].find((td) => td.querySelector('strong'));
+    if (title) title.classList.add('cell-title');
+  }
+  wrap.innerHTML = '';
+  wrap.append(table);
+}
+
 function emptyState(wrap, message) {
   wrap.innerHTML = `<div class="empty">${icon('empty', 42)}<div>${message}</div></div>`;
 }
@@ -642,8 +665,7 @@ async function renderInbounds(view) {
     ]));
   }
   table.append(tbody);
-  wrap.innerHTML = '';
-  wrap.append(table);
+  mountTable(wrap, table);
 }
 
 const PROTOCOL_LABELS = {
@@ -1136,8 +1158,7 @@ async function renderClients(view) {
     ]));
   }
   table.append(tbody);
-  wrap.innerHTML = '';
-  wrap.append(table);
+  mountTable(wrap, table);
 }
 
 async function showClientLink(client) {
@@ -1289,8 +1310,7 @@ async function renderOutbounds(view) {
     ]));
   }
   table.append(tbody);
-  wrap.innerHTML = '';
-  wrap.append(table);
+  mountTable(wrap, table);
 }
 
 function outboundForm(existing) {
@@ -1534,8 +1554,7 @@ async function renderRouting(view) {
     ]));
   });
   table.append(tbody);
-  wrap.innerHTML = '';
-  wrap.append(table);
+  mountTable(wrap, table);
 }
 
 async function routingForm(existing, tags) {
@@ -1742,7 +1761,7 @@ async function renderLogs(view) {
     ]));
   }
   table.append(tbody);
-  wrap.append(table);
+  mountTable(wrap, table);
   view.append(wrap);
 }
 
