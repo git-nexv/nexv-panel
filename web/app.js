@@ -1989,11 +1989,11 @@ function openMore() {
   dock.more.style.right = `${Math.round(window.innerWidth - solo.right)}px`;
   dock.more.style.left = 'auto';
   dock.more.classList.add('open');
-  dock.moreItem.classList.add('active');
+  dock.moreItem.classList.add('active', 'open');
 
   // bottom row first, so the sheet unrolls up out of the button
   const rows = Array.from(dock.more.querySelectorAll('.dock-row'));
-  rows.forEach((row, i) => { row.style.animationDelay = `${(rows.length - 1 - i) * 18}ms`; });
+  rows.forEach((row, i) => { row.style.animationDelay = `${(rows.length - 1 - i) * 12}ms`; });
 
   requestAnimationFrame(() => dock.moreLens.select(state.page, false));
 }
@@ -2002,7 +2002,7 @@ function closeMore() {
   if (!dock.moreOpen) return;
   dock.moreOpen = false;
   dock.more.classList.remove('open');
-  dock.moreItem.classList.remove('active');
+  dock.moreItem.classList.remove('active', 'open');
 }
 
 /** Park both capsules on the current page. */

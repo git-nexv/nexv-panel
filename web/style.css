@@ -596,7 +596,7 @@ td .row-actions { display: flex; gap: 6px; }
 .dock * { -webkit-user-select: none; user-select: none; }
 
 .dock-bar {
-  position: relative; flex: 1 1 auto; min-width: 0; max-width: 100%;
+  position: relative; flex: 0 1 auto; min-width: 0; max-width: 100%;
   /* box-sizing keeps the pill exactly --dock-h tall, border and all, so the
      round More key beside it is the same size rather than a pixel short */
   height: var(--dock-h); box-sizing: border-box;
@@ -604,10 +604,16 @@ td .row-actions { display: flex; gap: 6px; }
   border-radius: 999px;
   touch-action: none;
 }
-.dock.no-more .dock-bar { flex: 1 1 100%; }
+/* with no More key beside it the bar is still only as wide as its keys */
+.dock.no-more .dock-bar { flex: 0 1 auto; }
 .dock-item {
-  position: relative; z-index: 2; flex: 1 1 0; min-width: 0;
+  /* one key is exactly as wide as a row of the More sheet, so the two bars
+     read as the same object stood on end; it only shrinks when the screen
+     cannot hold four of them */
+  position: relative; z-index: 2; flex: 0 1 70px; width: 70px; min-width: 0;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  /* a button's own 6px of padding would eat the label; the key is the width */
+  padding: 0 2px;
   border: 0; background: none; border-radius: 999px; cursor: pointer;
   color: var(--muted); font: inherit; font-size: 9.5px; font-weight: 650; line-height: 1;
   transition: color .25s var(--glide), transform .45s var(--spring);
@@ -665,7 +671,8 @@ td .row-actions { display: flex; gap: 6px; }
   color: var(--muted); font: inherit;
   transition: color .24s var(--glide), transform .34s var(--spring), background .24s var(--glide);
 }
-.dock-solo svg { width: 19px; height: 19px; }
+.dock-solo svg { width: 19px; height: 19px; transition: transform .4s var(--spring); }
+.dock-solo.open svg { transform: rotate(45deg); }
 .dock-solo:active { transform: scale(.92); }
 .dock-solo.active { color: var(--brand); background: color-mix(in srgb, var(--brand) 18%, transparent); }
 
@@ -679,14 +686,17 @@ td .row-actions { display: flex; gap: 6px; }
   border-radius: 999px;
   transform-origin: bottom right;
   opacity: 0;
-  transform: scale(.74) translateY(10px);
-  transition: opacity .16s var(--glide), transform .34s var(--spring);
+  transform: scale(.9) translateY(12px);
+  /* closing springs back into the button and would wobble on the way, so the
+     exit is a plain ease and the two properties finish together */
+  transition: opacity .17s var(--glide), transform .2s cubic-bezier(.4, 0, 1, 1);
+  will-change: transform, opacity;
   pointer-events: none;
   touch-action: none;
 }
 .dock-more.open {
   opacity: 1; transform: none; pointer-events: auto;
-  transition: opacity .14s linear, transform .4s var(--spring);
+  transition: opacity .15s linear, transform .42s var(--spring);
 }
 .dock-more .dock-thumb {
   top: 0; bottom: auto; left: 3px; right: 3px;
@@ -712,9 +722,11 @@ td .row-actions { display: flex; gap: 6px; }
 .dock-row {
   position: relative; z-index: 2;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
-  padding: 9px 6px; width: 72px;
+  padding: 9px 3px; width: 62px;
   border: 0; border-radius: 999px; background: none; cursor: pointer;
-  color: var(--muted); font: inherit; font-size: 9.5px; font-weight: 650; line-height: 1; text-align: center;
+  /* a touch smaller than a bar key: the sheet is narrower, and Outbounds
+     has to fit on one line */
+  color: var(--muted); font: inherit; font-size: 9px; font-weight: 650; line-height: 1; text-align: center;
   transition: color .25s var(--glide), transform .45s var(--spring);
 }
 .dock-row span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
@@ -722,17 +734,18 @@ td .row-actions { display: flex; gap: 6px; }
 .dock-row.active, .dock-row.under { color: var(--brand); }
 .dock-row.under svg { transform: scale(1.14); }
 
-.dock-more.open .dock-row { animation: dock-row-in .22s var(--glide) both; }
+.dock-more.open .dock-row { animation: dock-row-in .2s var(--glide) both; }
 @keyframes dock-row-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: none; }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 /* a wide screen shows every page at once, so the bar gets more room */
 @media (min-width: 981px) {
   .dock { --dock-h: 56px; --dock-inset: 24px; }
   .dock-bar { max-width: 780px; }
-  .dock-item { font-size: 10.5px; }
+  /* the key stays 70px wide here too, so the label keeps the phone's size */
+  .dock-item svg + span { font-size: 9.5px; }
   .dock-item svg { width: 20px; height: 20px; }
 }
 /* the dock is the navigation, so every layout leaves room for it */
