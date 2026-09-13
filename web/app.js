@@ -60,18 +60,41 @@ const api = {
   del: (p) => api.request('DELETE', p)
 };
 
+/*
+ * Everything a person reads is set here, which is why the translation hooks in
+ * here rather than at four hundred call sites: `text`, `title` and
+ * `placeholder`, the strings passed as children, and the plain text inside an
+ * `html` fragment. A string with no entry in the table comes back untouched.
+ */
+const t = (value) => (window.NEXV_I18N ? window.NEXV_I18N.t(value) : value);
+
+/*
+ * The words in a small markup fragment, leaving the tags alone. Text runs come
+ * in three shapes and all three carry labels: before the first tag, between
+ * two tags, and after the last one - `<i></i>Active` and `<svg…/> New client`
+ * are both the third.
+ */
+const tHtml = (value) => String(value).replace(/(^|>)([^<>]+)(?=<|$)/g, (whole, lead, inner) => {
+  const translated = t(inner);
+  return translated === inner ? whole : lead + translated;
+});
+
+const TRANSLATED_ATTRS = ['title', 'placeholder', 'aria-label'];
+
 const el = (tag, attrs = {}, children = []) => {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
     if (key === 'class') node.className = value;
-    else if (key === 'html') node.innerHTML = value;
-    else if (key === 'text') node.textContent = value;
+    else if (key === 'html') node.innerHTML = tHtml(value);
+    else if (key === 'text') node.textContent = t(value);
     else if (key.startsWith('on') && typeof value === 'function') node.addEventListener(key.slice(2), value);
-    else if (value !== null && value !== undefined && value !== false) node.setAttribute(key, value);
+    else if (value !== null && value !== undefined && value !== false) {
+      node.setAttribute(key, TRANSLATED_ATTRS.includes(key) ? t(value) : value);
+    }
   }
   for (const child of [].concat(children)) {
     if (child === null || child === undefined || child === false) continue;
-    node.append(child.nodeType ? child : document.createTextNode(String(child)));
+    node.append(child.nodeType ? child : document.createTextNode(t(String(child))));
   }
   return node;
 };
@@ -211,8 +234,8 @@ function modal({ title, subtitle, body, actions, width }) {
   const close = () => { backdrop.remove(); document.removeEventListener('keydown', onKey); };
   const onKey = (e) => { if (e.key === 'Escape') close(); };
 
-  box.append(el('h2', { text: title }));
-  if (subtitle) box.append(el('div', { class: 'modal-sub', text: subtitle }));
+  box.append(el('h2', { text: t(title) }));
+  if (subtitle) box.append(el('div', { class: 'modal-sub', text: t(subtitle) }));
   box.append(body);
 
   if (actions !== false) {
@@ -284,7 +307,7 @@ function navigate(page) {
   if (!PAGES.some((p) => p.id === page)) page = 'dashboard';
   state.page = page;
   location.hash = page;
-  document.getElementById('pageTitle').textContent = (PAGES.find((p) => p.id === page) || {}).label || '';
+  document.getElementById('pageTitle').textContent = t((PAGES.find((p) => p.id === page) || {}).label || '');
   syncDock(true);
   render();
 }
@@ -492,7 +515,14 @@ function tableShell(view, { intro, addLabel, onAdd }) {
  * only the header row knows.
  */
 function mountTable(wrap, table) {
-  const heads = [...table.querySelectorAll('thead th')].map(th => th.textContent.trim());
+  /* a table's header is written as one lump of markup rather than through el(),
+     so this is where its column names are translated - once for the header
+     itself, and again as the label each cell carries on a phone */
+  const heads = [...table.querySelectorAll('thead th')].map((th) => {
+    const name = t(th.textContent.trim());
+    if (name !== th.textContent.trim()) th.textContent = name;
+    return name;
+  });
   for (const tr of table.querySelectorAll('tbody tr')) {
     [...tr.children].forEach((td, i) => {
       if (!heads[i]) td.classList.add('cell-actions');
@@ -1724,7 +1754,7 @@ async function drawSites(client, into) {
 
   const used = bytes(data.used || 0);
   into.append(el('div', { class: 'muted', style: 'margin-bottom:12px' }, [
-    `${used} used in total, across ${data.hits.toLocaleString()} connections to ${data.hostCount} hosts`,
+    `${used} used in total, across ${data.hits.toLocaleString()} connections to ${(data.apps || []).length} apps and sites`,
     data.since ? el('div', { class: 'faint', style: 'font-size:11.5px', text: `since ${fmtDate(data.since)}` }) : null
   ]));
 
@@ -1742,22 +1772,55 @@ async function drawSites(client, into) {
   });
   into.append(bar, legend);
 
-  /* and the hosts behind them */
+  /*
+   * Apps first, hostnames behind them. Forty googlevideo.com machines are one
+   * thing to the person reading this, and that thing is YouTube; the raw hosts
+   * are still a click away for anything the table does not recognise.
+   */
   const wrap = el('div', { class: 'table-wrap', style: 'margin-top:14px' });
   const table = el('table');
-  table.innerHTML = '<thead><tr><th>Host</th><th>Kind</th><th>Connections</th><th>Share</th></tr></thead>';
+  table.innerHTML = '<thead><tr><th>App or site</th><th>Kind</th><th>Connections</th><th>Share</th></tr></thead>';
   const tbody = el('tbody');
-  for (const site of data.sites) {
+  for (const app of (data.apps || [])) {
     tbody.append(el('tr', {}, [
-      el('td', {}, [el('strong', { class: 'mono', style: 'font-size:12px', text: site.host })]),
-      el('td', { class: 'muted', text: site.kindLabel }),
-      el('td', { class: 'num', text: site.hits.toLocaleString() }),
-      el('td', { class: 'muted num', text: `${site.share.toFixed(share1(site.share))}%` })
+      el('td', {}, [
+        el('strong', { class: app.known ? '' : 'mono', style: app.known ? '' : 'font-size:12px', text: app.app }),
+        app.hosts > 1 ? el('div', { class: 'faint', style: 'font-size:11px', text: `${app.hosts} hosts` }) : null
+      ]),
+      el('td', { class: 'muted', text: app.kindLabel }),
+      el('td', { class: 'num', text: app.hits.toLocaleString() }),
+      el('td', { class: 'muted num', text: `${app.share.toFixed(share1(app.share))}%` })
     ]));
   }
   table.append(tbody);
   mountTable(wrap, table);
   into.append(wrap);
+
+  /* the hostnames themselves, for when the app name is not enough */
+  const hosts = el('div', { class: 'table-wrap', hidden: 'hidden', style: 'margin-top:10px' });
+  const hostTable = el('table');
+  hostTable.innerHTML = '<thead><tr><th>Host</th><th>App</th><th>Connections</th><th>Share</th></tr></thead>';
+  const hostBody = el('tbody');
+  for (const site of data.sites) {
+    hostBody.append(el('tr', {}, [
+      el('td', {}, [el('strong', { class: 'mono', style: 'font-size:12px', text: site.host })]),
+      el('td', { class: 'muted', text: site.app || '—' }),
+      el('td', { class: 'num', text: site.hits.toLocaleString() }),
+      el('td', { class: 'muted num', text: `${site.share.toFixed(share1(site.share))}%` })
+    ]));
+  }
+  hostTable.append(hostBody);
+  mountTable(hosts, hostTable);
+
+  const toggle = el('button', {
+    class: 'btn ghost', type: 'button', style: 'margin-top:10px',
+    text: `Show all ${data.hostCount} hostnames`,
+    onclick: () => {
+      hosts.hidden = !hosts.hidden;
+      toggle.textContent = hosts.hidden ? `Show all ${data.hostCount} hostnames` : 'Hide hostnames';
+    }
+  });
+  into.append(toggle, hosts);
 
   into.append(
     el('div', { class: 'hint', style: 'margin-top:12px', text: 'These are connection counts, not traffic. Xray records which host a connection went to but never how many bytes went through it, so there is no per-site figure to show — one video stream is a single connection carrying gigabytes, while a page of adverts is two hundred carrying almost nothing.' }),
@@ -1835,14 +1898,25 @@ function clientForm(existing) {
   }
   formField(form, 'Inbound', inboundSel);
 
-  const uuidRow = generatedField(v.uuid || '', 'uuid', { placeholder: 'leave empty to generate on save' });
+  const uuidRow = generatedField(v.uuid || '', 'uuid', { placeholder: 'generated when you save' });
   formField(form, 'UUID', uuidRow, { full: true });
   const uuid = uuidRow.input;
-  const passwordRow = generatedField(v.password || '', 'password', { placeholder: 'leave empty to generate on save' });
+  const passwordRow = generatedField(v.password || '', 'password', { placeholder: 'generated when you save' });
   formField(form, 'Password / key', passwordRow,
     { full: true, hint: 'Used by Trojan, Shadowsocks, SOCKS and HTTP inbounds' });
   const password = passwordRow.input;
-  const totalGB = formField(form, 'Quota (GB)', el('input', { type: 'number', min: '0', value: v.totalGB || 0 }), { hint: '0 means unlimited' });
+
+  /* a new client arrives with its key and password already made: pressing
+     Generate twice for every account is a chore, and the fields were never
+     going to be filled in by hand anyway */
+  if (!existing) {
+    api.get('/generate/uuid').then((r) => { if (!uuid.value) uuid.value = r.value; }).catch(() => {});
+    api.get('/generate/password').then((r) => { if (!password.value) password.value = r.value; }).catch(() => {});
+  }
+
+  const totalGB = formField(form, 'Quota (GB)', el('input', { type: 'number', min: '0', value: v.totalGB || 0 }), {
+    hint: 'How much traffic this client may use in total. 0 means unlimited.'
+  });
 
   const days = el('input', { type: 'number', min: '0', value: v.expiryTime ? Math.max(0, daysLeft(v.expiryTime)) : 30 });
   formField(form, 'Valid for (days)', days, { hint: '0 means no expiry' });
@@ -2298,7 +2372,24 @@ async function renderSettings(view) {
   add(general, 'panelPort', 'Panel port', s.panelPort, { type: 'number', hint: 'Changing this needs a panel restart (nexv restart)' });
   add(general, 'subPort', 'Subscription port', s.subPort, { type: 'number' });
   add(general, 'subPath', 'Subscription path', s.subPath);
-  add(general, 'subTitle', 'Subscription title', s.subTitle || 'NexV');
+
+  const langSel = selectOf(
+    (window.NEXV_I18N ? window.NEXV_I18N.LANGS : [{ code: 'en', label: 'English' }])
+      .map((l) => ({ value: l.code, label: l.label })),
+    window.NEXV_I18N ? window.NEXV_I18N.lang() : 'en'
+  );
+  langSel.addEventListener('change', () => {
+    if (!window.NEXV_I18N) return;
+    window.NEXV_I18N.setLang(langSel.value);
+    api.put('/settings', { lang: langSel.value }).catch(() => {});
+    const key = document.getElementById('langToggle');
+    if (key) key.textContent = langSel.value === 'fa' ? 'FA' : 'EN';
+    navigate(state.page);
+  });
+  general.append(el('div', { class: 'field' }, [
+    el('label', { text: 'Language' }), langSel,
+    el('div', { class: 'hint', text: 'Takes effect at once, on this browser and on the sign-in page.' })
+  ]));
 
   const logLevel = selectOf(['none', 'error', 'warning', 'info', 'debug'], s.xrayLogLevel || 'warning');
   general.append(el('div', { class: 'field' }, [el('label', { text: 'Xray log level' }), logLevel]));
@@ -2376,9 +2467,16 @@ async function renderSettings(view) {
     }));
   }
 
+  const subTitle = el('input', { type: 'text', value: s.subTitle || 'NexV', placeholder: 'NexV' });
+  inputs.subTitle = subTitle;
+
   naming.append(
     el('div', { class: 'muted', style: 'margin-bottom:14px' }, [
-      'The name each config carries in the client app. Anything outside the braces is kept exactly as you type it.'
+      'What the client app calls things: the subscription itself, and each config inside it.'
+    ]),
+    el('div', { class: 'field full' }, [
+      el('label', { text: 'Subscription title' }), subTitle,
+      el('div', { class: 'hint', text: 'The name the whole subscription is filed under in the client app, and what {{panel}} stands for below. Apps only pick up a new title when they refresh the subscription.' })
     ]),
     el('div', { class: 'field full' }, [
       el('label', { text: 'Name template' }), template,
@@ -3791,8 +3889,32 @@ function trackTopbar() {
   window.addEventListener('resize', set);
 }
 
+/*
+ * The language key in the header: two languages, so it is a toggle rather than
+ * a menu. The choice is kept in the browser and saved to the panel, so a new
+ * device gets the language this panel is run in rather than English.
+ */
+function languageKey() {
+  const key = document.getElementById('langToggle');
+  if (!key || !window.NEXV_I18N) return;
+  const paint = () => { key.textContent = window.NEXV_I18N.lang() === 'fa' ? 'FA' : 'EN'; };
+  paint();
+  key.addEventListener('click', () => {
+    const next = window.NEXV_I18N.lang() === 'fa' ? 'en' : 'fa';
+    window.NEXV_I18N.setLang(next);
+    paint();
+    api.put('/settings', { lang: next }).catch(() => { /* the browser remembers either way */ });
+    /* through navigate, not render: the header's page title is written there
+       and would otherwise keep the language you just left */
+    navigate(state.page);
+  });
+}
+
 function boot() {
+  /* language before anything is drawn, so nothing is drawn twice */
+  if (window.NEXV_I18N) window.NEXV_I18N.setLang(window.NEXV_I18N.stored() || document.documentElement.dataset.lang || 'en');
   themeSwitch(document.getElementById('themeToggle'));
+  languageKey();
   trackTopbar();
 
   document.getElementById('logoutBtn').addEventListener('click', async () => {

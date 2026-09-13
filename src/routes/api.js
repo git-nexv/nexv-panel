@@ -1037,15 +1037,29 @@ router.get('/clients/:id/sites', (req, res) => {
   const raw = online.sitesFor(xray.clientTag(client));
   const labels = sitekind.labels();
   const byKind = new Map();
+  const byApp = new Map();
 
   const sites = raw.sites.map((site) => {
     const kind = sitekind.kindOf(site.host);
+    const app = sitekind.appOf(site.host);
+
     const group = byKind.get(kind.kind) || { kind: kind.kind, label: kind.label, hits: 0, hosts: 0 };
     group.hits += site.hits;
     group.hosts++;
     byKind.set(kind.kind, group);
+
+    /* one row per app rather than per CDN hostname: forty googlevideo.com
+       machines are one thing to a person, and that thing is YouTube */
+    const name = app || site.host;
+    const entry = byApp.get(name) || { app: name, known: !!app, kind: kind.kind, kindLabel: kind.label, hits: 0, hosts: 0, at: 0 };
+    entry.hits += site.hits;
+    entry.hosts++;
+    entry.at = Math.max(entry.at, site.at);
+    byApp.set(name, entry);
+
     return {
       host: site.host,
+      app,
       kind: kind.kind,
       kindLabel: kind.label,
       hits: site.hits,
@@ -1058,12 +1072,18 @@ router.get('/clients/:id/sites', (req, res) => {
     .map((group) => Object.assign(group, { share: raw.hits ? (group.hits / raw.hits) * 100 : 0 }))
     .sort((a, b) => b.hits - a.hits);
 
+  const apps = [...byApp.values()]
+    .map((entry) => Object.assign(entry, { share: raw.hits ? (entry.hits / raw.hits) * 100 : 0 }))
+    .sort((a, b) => b.hits - a.hits)
+    .slice(0, 60);
+
   /* names come from sniffing; without it the log holds addresses and nothing
      else, which is worth saying rather than leaving the admin to wonder */
   const inbound = d.inbounds.find((i) => i.id === client.inboundId);
   const sniffing = inbound ? inbound.sniffing !== false : true;
 
   res.json({
+    apps,
     sites: sites.slice(0, 120),
     kinds,
     labels,

@@ -112,6 +112,15 @@ across.
 Page changes, table rows, dialogs, menus and toasts all animate on a spring, and
 everything collapses to an instant change under `prefers-reduced-motion`.
 
+## Language
+
+English and Persian, switched from the key in the header, from Settings, or
+from the sign-in page before you are even signed in. Persian lays the panel
+out right to left. The choice is kept in the browser and saved to the panel,
+so a new device starts in the language the panel is run in. A string with no
+translation falls back to English rather than to nothing, so an untranslated
+corner still reads - `web/i18n.js` is one table and a line fixes one.
+
 ## Panel sections
 
 - **Dashboard** — CPU, memory, disk, live network speed, Xray state, totals.

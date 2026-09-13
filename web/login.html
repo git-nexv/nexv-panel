@@ -9,34 +9,97 @@
 </head>
 <body dir="ltr">
 <div class="login-wrap">
+  <!-- the two things a person may want before they can reach Settings -->
+  <div class="login-keys">
+    <button class="lang-key" id="langToggle" type="button" title="Language">EN</button>
+    <button class="theme-switch" id="themeToggle" type="button" role="switch" title="Light or dark">
+      <span class="ts-mark ts-sun" data-icon="sun"></span>
+      <span class="ts-mark ts-moon" data-icon="theme"></span>
+      <span class="ts-knob"><span class="ts-face"></span></span>
+    </button>
+  </div>
   <form class="login-card" id="loginForm" autocomplete="on">
     <div class="brand">
       <div class="brand-mark">N</div>
       <div>
         <div class="brand-name">NexV Panel</div>
-        <div class="brand-sub">Xray-core management</div>
+        <div class="brand-sub" data-en="Xray-core management">Xray-core management</div>
       </div>
     </div>
-    <div class="login-title">Welcome back</div>
-    <div class="login-sub">Sign in to manage your server</div>
+    <div class="login-title" data-en="Welcome back">Welcome back</div>
+    <div class="login-sub" data-en="Sign in to manage your server">Sign in to manage your server</div>
 
     <div class="field">
-      <label for="username">Username</label>
+      <label for="username" data-en="Username">Username</label>
       <input id="username" name="username" autocomplete="username" required autofocus>
     </div>
     <div class="field">
-      <label for="password">Password</label>
+      <label for="password" data-en="Password">Password</label>
       <input id="password" name="password" type="password" autocomplete="current-password" required>
     </div>
 
     <div id="error" class="chip danger hidden" style="width:100%;justify-content:center;margin-bottom:14px"></div>
-    <button class="btn primary" type="submit" style="width:100%" id="submitBtn">Sign in</button>
+    <button class="btn primary" type="submit" style="width:100%" id="submitBtn" data-en="Sign in">Sign in</button>
   </form>
 </div>
 
+<script src="i18n.js"></script>
 <script>
 /* The panel may live under a secret base path, injected by the server. */
 const BASE = window.__NEXV_BASE__ || './';
+
+/* ---- the same two keys the panel's header carries ---- */
+const I18N = window.NEXV_I18N;
+const SIGN_IN = { en: 'Sign in', fa: 'ورود' };
+const SIGNING = { en: 'Signing in…', fa: 'در حال ورود…' };
+const LOGIN_TEXT = {
+  fa: {
+    'Welcome back': 'خوش آمدید',
+    'Sign in to manage your server': 'برای مدیریت سرورتان وارد شوید',
+    'Username': 'نام کاربری',
+    'Password': 'رمز عبور',
+    'Xray-core management': 'مدیریت هسته Xray'
+  }
+};
+
+function paintLanguage() {
+  const code = I18N.lang();
+  document.getElementById('langToggle').textContent = code === 'fa' ? 'FA' : 'EN';
+  const words = LOGIN_TEXT[code];
+  for (const node of document.querySelectorAll('[data-en]')) {
+    const english = node.getAttribute('data-en');
+    node.textContent = (words && words[english]) || english;
+  }
+  const button = document.getElementById('submitBtn');
+  if (!button.disabled) button.textContent = SIGN_IN[code] || SIGN_IN.en;
+}
+
+I18N.setLang(I18N.stored() || (document.documentElement.dataset.lang || 'en'));
+document.getElementById('langToggle').addEventListener('click', () => {
+  I18N.setLang(I18N.lang() === 'fa' ? 'en' : 'fa');
+  paintLanguage();
+});
+
+/* the theme switch, in the small form the login page needs */
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem('nexv-theme', theme); } catch (_) { /* private window */ }
+  const face = document.querySelector('#themeToggle .ts-face');
+  if (face) face.innerHTML = theme === 'light' ? SUN : MOON;
+  document.getElementById('themeToggle').setAttribute('aria-checked', theme === 'light' ? 'false' : 'true');
+}
+const SUN = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10Zm0 2.5a1 1 0 0 1 1 1V22a1 1 0 1 1-2 0v-1.5a1 1 0 0 1 1-1Zm0-18a1 1 0 0 1 1 1V4a1 1 0 1 1-2 0V2.5a1 1 0 0 1 1-1ZM22 11a1 1 0 1 1 0 2h-1.5a1 1 0 1 1 0-2H22ZM3.5 11a1 1 0 1 1 0 2H2a1 1 0 1 1 0-2h1.5Z"/></svg>';
+const MOON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/></svg>';
+for (const holder of document.querySelectorAll('[data-icon]')) {
+  holder.innerHTML = holder.dataset.icon === 'sun' ? SUN : MOON;
+}
+let theme = 'dark';
+try { theme = localStorage.getItem('nexv-theme') || 'dark'; } catch (_) { /* default */ }
+applyTheme(theme);
+document.getElementById('themeToggle').addEventListener('click', () => {
+  applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+});
+paintLanguage();
 const form = document.getElementById('loginForm');
 const errorBox = document.getElementById('error');
 const submitBtn = document.getElementById('submitBtn');
@@ -45,14 +108,14 @@ function fail(message) {
   errorBox.textContent = message;
   errorBox.classList.remove('hidden');
   submitBtn.disabled = false;
-  submitBtn.textContent = 'Sign in';
+  submitBtn.textContent = SIGN_IN[I18N.lang()] || SIGN_IN.en;
 }
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   errorBox.classList.add('hidden');
   submitBtn.disabled = true;
-  submitBtn.textContent = 'Signing in…';
+  submitBtn.textContent = SIGNING[I18N.lang()] || SIGNING.en;
 
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), 20000);

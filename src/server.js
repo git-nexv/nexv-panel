@@ -97,7 +97,15 @@ function serveSubscription(req, res) {
     `upload=${clients.reduce((a, c) => a + (c.up || 0), 0)}; ` +
     `download=${clients.reduce((a, c) => a + (c.down || 0), 0)}; ` +
     `total=${totalGB * 1024 ** 3}; expire=${expiry ? Math.floor(expiry / 1000) : 0}`);
-  res.setHeader('Profile-Title', Buffer.from(db.settings.subTitle || 'NexV', 'utf8').toString('base64'));
+  /*
+   * The name the client app files this subscription under. It was sent as bare
+   * base64, which is not a form any client reads: the convention is plain text
+   * or the string prefixed with "base64:", and without the prefix v2rayNG and
+   * the rest either ignore the header or show the encoded gibberish. This is
+   * why the subscription title never appeared on anybody's configs.
+   */
+  const title = db.settings.subTitle || 'NexV';
+  res.setHeader('Profile-Title', `base64:${Buffer.from(title, 'utf8').toString('base64')}`);
 
   const body = list.join('\n');
   // most clients expect the base64 form; ?plain=1 returns the raw links
@@ -276,7 +284,8 @@ const pageCache = new Map();
 const ASSET_VERSION = require('../package.json').version;
 
 function renderPage(file, base) {
-  const key = `${file}|${base}`;
+  // the language is baked into the page, so a change to it must miss the cache
+  const key = `${file}|${base}|${db.settings.lang || 'en'}`;
   const cached = pageCache.get(key);
   const stat = fs.statSync(path.join(WEB_DIR, file));
   if (cached && cached.mtime === stat.mtimeMs) return cached.html;
@@ -285,11 +294,14 @@ function renderPage(file, base) {
   const html = fs.readFileSync(path.join(WEB_DIR, file), 'utf8')
     // static assets are cached for an hour, so an update has to change the URL
     // or browsers keep running the previous panel against the new server
-    .replace(/(href|src)="(app\.js|style\.css)"/g, `$1="$2?v=${ASSET_VERSION}"`)
+    .replace(/(href|src)="(app\.js|style\.css|i18n\.js)"/g, `$1="$2?v=${ASSET_VERSION}"`)
     .replace(
       '</head>',
       `<base href="${prefix}">\n<script>window.__NEXV_BASE__=${JSON.stringify(prefix)};</script>\n</head>`
-    );
+    )
+    /* the language this panel is run in, so a browser that has never been here
+       starts in it rather than in English */
+    .replace('<html lang="en"', `<html lang="en" data-lang="${db.settings.lang === 'fa' ? 'fa' : 'en'}"`);
   pageCache.set(key, { mtime: stat.mtimeMs, html });
   return html;
 }

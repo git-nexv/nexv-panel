@@ -1200,6 +1200,27 @@ tbody tr:nth-child(n+6) { animation-delay: 110ms; }
   to   { opacity: 1; transform: none; }
 }
 
+/* the language key: two letters, the same size as the keys beside it */
+.lang-key {
+  flex: 0 0 auto;
+  height: 30px; min-width: 38px; padding: 0 9px;
+  border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border-strong); background: var(--surface-2);
+  color: var(--muted); font: inherit; font-size: 11.5px; font-weight: 700;
+  letter-spacing: .04em;
+  transition: color .16s var(--ease), border-color .16s var(--ease), transform .16s var(--spring);
+}
+.lang-key:hover { color: var(--text); border-color: var(--brand); }
+.lang-key:active { transform: scale(.93); }
+
+/* the sign-in page carries the same two keys, above the card */
+.login-keys {
+  position: fixed; z-index: 5;
+  top: max(14px, env(safe-area-inset-top));
+  inset-inline-end: 16px;
+  display: flex; align-items: center; gap: 8px;
+}
+
 /* ------------------------------- motion --------------------------------- */
 /*
  * The panel used to arrive fully formed and change pages with a cut. Enough

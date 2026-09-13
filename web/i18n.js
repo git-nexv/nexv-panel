@@ -1,0 +1,299 @@
+'use strict';
+/*
+ * Persian for the panel.
+ *
+ * Every string a person reads is set through one of three helpers - el()'s
+ * `text` and `html`, a field's label, or a dialog's title - so the translation
+ * hooks in there rather than at four hundred call sites. A string with no entry
+ * comes back exactly as it was written, which means an untranslated corner is
+ * English rather than blank, and adding a line here is all it takes to fix one.
+ *
+ * Sentences that carry a number or a name are handled by PATTERNS: the English
+ * is matched by shape and rebuilt in Persian with the pieces in the right
+ * order, because Persian does not put them where English does.
+ */
+
+/* a classic script shares one global scope with app.js, so everything in here
+   stays inside the closure and only NEXV_I18N comes out */
+(function () {
+
+const LANGS = [
+  { code: 'en', label: 'English', dir: 'ltr' },
+  { code: 'fa', label: 'فارسی', dir: 'rtl' }
+];
+
+const FA = {
+  /* ---------------------------- navigation ---------------------------- */
+  'Dashboard': 'داشبورد',
+  'Inbounds': 'اینباندها',
+  'Clients': 'کلاینت‌ها',
+  'Outbounds': 'اوت‌باندها',
+  'Routing': 'مسیریابی',
+  'Bot': 'ربات',
+  'Settings': 'تنظیمات',
+  'Account': 'حساب کاربری',
+  'Logs': 'رویدادها',
+  'More': 'بیشتر',
+  'Sign out': 'خروج',
+  'Light or dark': 'روشن یا تیره',
+  'Language': 'زبان',
+
+  /* ----------------------------- dashboard ---------------------------- */
+  'CPU': 'پردازنده',
+  'Memory': 'حافظه',
+  'Disk': 'دیسک',
+  'Network': 'شبکه',
+  'Active clients': 'کلاینت‌های فعال',
+  'Total traffic': 'ترافیک کل',
+  'Uptime': 'مدت روشن بودن',
+  'Xray-core': 'هسته Xray',
+  'Server': 'سرور',
+  'Restart': 'راه‌اندازی دوباره',
+  'Stop': 'توقف',
+  'Start': 'شروع',
+  'Running': 'در حال اجرا',
+  'Stopped': 'متوقف',
+  'version unknown': 'نسخه نامشخص',
+  'Xray up': 'Xray روشن',
+  'Xray down': 'Xray خاموش',
+
+  /* ------------------------------ common ------------------------------ */
+  'Save': 'ذخیره',
+  'Save settings': 'ذخیره تنظیمات',
+  'Save account': 'ذخیره حساب',
+  'Delete': 'حذف',
+  'Edit': 'ویرایش',
+  'Close': 'بستن',
+  'Cancel': 'انصراف',
+  'Apply': 'اعمال',
+  'Generate': 'ساختن',
+  'Import': 'ورودی',
+  'Remove': 'حذف',
+  'Discard': 'دور انداختن',
+  'Reload': 'بارگذاری دوباره',
+  'Please confirm': 'تایید کنید',
+  'Yes, continue': 'بله، ادامه بده',
+  'Dismiss': 'بستن',
+  'Preview': 'پیش‌نمایش',
+  'Copy': 'کپی',
+  'Copied': 'کپی شد',
+  'Never': 'هیچ‌وقت',
+  'Unlimited': 'نامحدود',
+  'None': 'هیچ‌کدام',
+  'Any': 'همه',
+  'Auto': 'خودکار',
+  'Enable / disable': 'روشن / خاموش',
+  'On / off': 'روشن / خاموش',
+  'Nothing logged yet.': 'هنوز رویدادی ثبت نشده.',
+  'Time': 'زمان',
+  'Type': 'نوع',
+  'Event': 'رویداد',
+  'days left': 'روز مانده',
+  'past due': 'گذشته',
+  'not attached': 'بدون اینباند',
+  'offline': 'آفلاین',
+  'idle': 'بیکار',
+
+  /* ------------------------------ inbounds ---------------------------- */
+  'Each inbound is one port and one protocol that clients connect to.':
+    'هر اینباند یک پورت و یک پروتکل است که کلاینت‌ها به آن وصل می‌شوند.',
+  'New inbound': 'اینباند جدید',
+  'Inbound actions': 'کارهای اینباند',
+  'Import an inbound': 'ورود اینباند',
+  'Export inbound': 'خروجی گرفتن از اینباند',
+  'Export all URLs': 'خروجی همه لینک‌ها',
+  'Export all URLs — subscription': 'خروجی همه لینک‌ها — سابسکریپشن',
+  'Reset traffic': 'صفر کردن مصرف',
+  'Reset traffic for all inbounds': 'صفر کردن مصرف همه اینباندها',
+  'Attach clients…': 'اتصال کلاینت‌ها…',
+  'Name': 'نام',
+  'Protocol': 'پروتکل',
+  'Port': 'پورت',
+  'Transport': 'انتقال',
+  'Traffic': 'مصرف',
+  'Status': 'وضعیت',
+  'Enabled': 'فعال',
+  'Disabled': 'غیرفعال',
+  'No inbounds yet. Create one to start accepting connections.':
+    'هنوز اینباندی نیست. یکی بسازید تا اتصال‌ها را بپذیرد.',
+  'From this panel or from 3x-ui.': 'از همین پنل یا از 3x-ui.',
+  'Paste the inbound JSON here, clients and all': 'JSON اینباند را اینجا بچسبانید، همراه کلاینت‌ها',
+  'Take over clients whose names already exist': 'کلاینت‌هایی که نامشان تکراری است جایگزین شوند',
+
+  /* ------------------------------ clients ----------------------------- */
+  'Clients of each inbound, with their quota and expiry.':
+    'کلاینت‌های هر اینباند، با حجم و تاریخ انقضایشان.',
+  'New client': 'کلاینت جدید',
+  'Client actions': 'کارهای کلاینت',
+  'Client': 'کلاینت',
+  'Inbound': 'اینباند',
+  'Now': 'الان',
+  'Used': 'مصرف‌شده',
+  'Quota': 'حجم',
+  'Expires': 'انقضا',
+  'Total': 'همه',
+  'Active': 'فعال',
+  'Expired': 'منقضی',
+  'Out of quota': 'حجم تمام',
+  'Too many IPs': 'آی‌پی بیش از حد',
+  'Search clients by name…': 'جست‌وجوی کلاینت با نام…',
+  'No client matches that.': 'کلاینتی با این نام پیدا نشد.',
+  'No clients yet.': 'هنوز کلاینتی نیست.',
+  'Create an inbound first, then add clients to it.': 'اول یک اینباند بسازید، بعد کلاینت اضافه کنید.',
+  'Delete expired clients': 'حذف کلاینت‌های منقضی',
+  'Delete clients out of quota': 'حذف کلاینت‌هایی که حجمشان تمام شده',
+  'Delete expired and out of quota': 'حذف منقضی‌ها و کسانی که حجمشان تمام شده',
+  'Delete disabled clients': 'حذف کلاینت‌های غیرفعال',
+  'Delete every client': 'حذف همه کلاینت‌ها',
+  'QR code and links': 'کد QR و لینک‌ها',
+  'Copy config link': 'کپی لینک کانفیگ',
+  'Where its traffic goes': 'ترافیکش کجا می‌رود',
+  'Client name': 'نام کلاینت',
+  'UUID': 'شناسه UUID',
+  'Password / key': 'رمز / کلید',
+  'Quota (GB)': 'حجم (گیگابایت)',
+  'Valid for (days)': 'اعتبار (روز)',
+  'Concurrent IP limit': 'حداکثر آی‌پی هم‌زمان',
+  'Note': 'یادداشت',
+  'generated when you save': 'هنگام ذخیره ساخته می‌شود',
+  '0 means no expiry': '۰ یعنی بدون انقضا',
+  'How much traffic this client may use in total. 0 means unlimited.':
+    'مجموع ترافیکی که این کلاینت می‌تواند مصرف کند. ۰ یعنی نامحدود.',
+
+  /* ----------------------------- activity ----------------------------- */
+  'Sites': 'سایت‌ها',
+  'Addresses': 'آی‌پی‌ها',
+  'App or site': 'اپ یا سایت',
+  'Kind': 'دسته',
+  'Connections': 'اتصال‌ها',
+  'Share': 'سهم',
+  'Host': 'هاست',
+  'App': 'اپ',
+  'Clear this history': 'پاک کردن این تاریخچه',
+  'Forget these addresses': 'فراموش کردن این آی‌پی‌ها',
+  'Nothing recorded yet.': 'هنوز چیزی ثبت نشده.',
+  'No connection in the last five minutes.': 'در پنج دقیقه اخیر اتصالی نبوده.',
+  'Video': 'ویدیو',
+  'Social': 'شبکه اجتماعی',
+  'Messaging & calls': 'پیام‌رسان و تماس',
+  'AI': 'هوش مصنوعی',
+  'Games': 'بازی',
+  'Downloads & torrents': 'دانلود و تورنت',
+  'Ads & trackers': 'تبلیغات و ردیاب',
+  'Cloud & updates': 'کلود و آپدیت',
+  'Web & search': 'وب و جست‌وجو',
+  'Something else': 'چیز دیگر',
+  'Plain addresses': 'آی‌پی خام',
+
+  /* ----------------------------- settings ----------------------------- */
+  'General': 'عمومی',
+  'Config names': 'نام کانفیگ‌ها',
+  'TLS': 'TLS',
+  'Backup': 'پشتیبان',
+  'Panel domain': 'دامنه پنل',
+  'Secret web path': 'مسیر مخفی پنل',
+  'Panel port': 'پورت پنل',
+  'Subscription port': 'پورت سابسکریپشن',
+  'Subscription path': 'مسیر سابسکریپشن',
+  'Subscription title': 'عنوان سابسکریپشن',
+  'Xray log level': 'سطح لاگ Xray',
+  'BitTorrent': 'تورنت',
+  'Block torrent traffic': 'مسدود کردن ترافیک تورنت',
+  'Client addresses': 'آی‌پی کلاینت‌ها',
+  'Record which IPs each client connects from': 'ثبت آی‌پی‌هایی که هر کلاینت با آن وصل می‌شود',
+  'Redirect port 80': 'هدایت پورت ۸۰',
+  'Answer on port 80 and redirect here': 'پاسخ روی پورت ۸۰ و هدایت به اینجا',
+  'Name template': 'قالب نام',
+  'Available pieces': 'اجزای در دسترس',
+  'Click one to drop it in where the cursor is.': 'روی هرکدام بزنید تا همان‌جا که مکان‌نما هست اضافه شود.',
+  'Username': 'نام کاربری',
+  'Password': 'رمز عبور',
+  'Current password': 'رمز فعلی',
+  'New password': 'رمز جدید',
+  'Leave empty to keep the current password': 'خالی بگذارید تا رمز فعلی نگه داشته شود',
+  'Show backup as text': 'نمایش پشتیبان به‌صورت متن',
+  'Restore from text': 'بازیابی از متن',
+  'Download as a file': 'دانلود به‌صورت فایل',
+  'Restore from a file': 'بازیابی از فایل',
+  'View config.json': 'دیدن config.json',
+  'Restore the panel': 'بازیابی پنل',
+  'Restore': 'بازیابی',
+  'Paste a panel backup here': 'پشتیبان پنل را اینجا بچسبانید',
+
+  /* ------------------------------- bot -------------------------------- */
+  'Setup': 'راه‌اندازی',
+  'Screens': 'صفحه‌ها',
+  'Plans': 'پلن‌ها',
+  'Payment': 'پرداخت',
+  'Channel': 'کانال',
+  'Orders': 'سفارش‌ها',
+  'Connection': 'اتصال',
+
+  /* ------------------------------ update ------------------------------ */
+  'Update': 'به‌روزرسانی',
+  'Check again': 'بررسی دوباره'
+};
+
+/*
+ * Sentences built around a value. Each entry is a regular expression over the
+ * English, and a function that puts the captured pieces back in Persian order.
+ */
+const PATTERNS = [
+  [/^(\d+) cores?$/, (m) => `${m[1]} هسته`],
+  [/^of (\d+) total$/, (m) => `از ${m[1]}`],
+  [/^(.+) of (.+)$/, (m) => `${m[1]} از ${m[2]}`],
+  [/^(\d+) days? left$/, (m) => `${m[1]} روز مانده`],
+  [/^Delete client "(.+)"\?$/, (m) => `کلاینت «${m[1]}» حذف شود؟`],
+  [/^Delete inbound "(.+)"\?$/, (m) => `اینباند «${m[1]}» حذف شود؟`],
+  [/^Delete its (\d+) client\(s\) as well$/, (m) => `${m[1]} کلاینتش هم حذف شوند`],
+  [/^Delete (\d+) (.+)\?$/, (m) => `${m[1]} مورد حذف شود؟`],
+  [/^Deleted (\d+) client\(s\)$/, (m) => `${m[1]} کلاینت حذف شد`],
+  [/^Client deleted$/, () => 'کلاینت حذف شد'],
+  [/^Inbound deleted$/, () => 'اینباند حذف شد'],
+  [/^Settings saved$/, () => 'تنظیمات ذخیره شد'],
+  [/^Bot saved$/, () => 'ربات ذخیره شد'],
+  [/^What (.+) is doing$/, (m) => `${m[1]} مشغول چه کاری است`],
+  [/^Addresses for (.+)$/, (m) => `آی‌پی‌های ${m[1]}`],
+  [/^Show all (\d+) hostnames$/, (m) => `نمایش هر ${m[1]} هاست`],
+  [/^Hide hostnames$/, () => 'پنهان کردن هاست‌ها'],
+  [/^(\d+) hosts$/, (m) => `${m[1]} هاست`],
+  [/^Show everyone$/, () => 'نمایش همه'],
+  [/^Show only the (.+) ones$/, () => 'فقط همین‌ها را نشان بده']
+];
+
+let current = 'en';
+
+function lang() { return current; }
+
+function setLang(code) {
+  current = LANGS.some((l) => l.code === code) ? code : 'en';
+  const meta = LANGS.find((l) => l.code === current);
+  document.documentElement.lang = current;
+  document.documentElement.dir = meta.dir;
+  document.body.dir = meta.dir;
+  try { localStorage.setItem('nexv-lang', current); } catch (_) { /* private window */ }
+  return current;
+}
+
+function stored() {
+  try { return localStorage.getItem('nexv-lang') || ''; } catch (_) { return ''; }
+}
+
+/** English in, the current language out - unchanged when there is no entry. */
+function t(value) {
+  if (current === 'en' || typeof value !== 'string' || !value) return value;
+  const key = value.trim();
+  if (Object.prototype.hasOwnProperty.call(FA, key)) {
+    // keep whatever spacing the caller had around it
+    return value.replace(key, FA[key]);
+  }
+  for (const [re, build] of PATTERNS) {
+    const m = re.exec(key);
+    if (m) return build(m);
+  }
+  return value;
+}
+
+window.NEXV_I18N = { t, setLang, lang, stored, LANGS };
+
+}());
