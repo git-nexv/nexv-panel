@@ -109,15 +109,35 @@ function daysLeft(ts) {
   return Math.ceil((ts - Date.now()) / 86400000);
 }
 
+/* an error is worth reading twice; a "Saved" is not */
+const TOAST_LIFE = { ok: 3000, err: 5200 };
+const TOAST_MAX = 4;
+
 function toast(message, kind = 'ok') {
-  const node = el('div', { class: `toast ${kind}`, text: message });
-  document.getElementById('toasts').append(node);
-  setTimeout(() => {
-    node.style.transition = 'opacity .25s, transform .25s';
-    node.style.opacity = '0';
-    node.style.transform = 'translateY(8px)';
-    setTimeout(() => node.remove(), 260);
-  }, 3600);
+  const box = document.getElementById('toasts');
+  const node = el('div', { class: `toast ${kind}`, role: 'status', title: 'Dismiss' }, [
+    el('span', { text: message })
+  ]);
+  // newest on top, and a burst of them does not become a wall
+  box.prepend(node);
+  /* the ones already on their way out do not count, and must not be counted:
+     dismissing takes a moment, so counting every child would spin forever */
+  const live = [...box.children].filter((n) => !n.dataset.going);
+  for (const extra of live.slice(TOAST_MAX)) dismissToast(extra);
+
+  const timer = setTimeout(() => dismissToast(node), TOAST_LIFE[kind] || TOAST_LIFE.ok);
+  node.addEventListener('click', () => { clearTimeout(timer); dismissToast(node); });
+  return node;
+}
+
+function dismissToast(node) {
+  if (!node || node.dataset.going) return;
+  node.dataset.going = '1';
+  node.style.animation = 'none';
+  node.style.transition = 'opacity .2s var(--ease), transform .24s var(--ease)';
+  node.style.opacity = '0';
+  node.style.transform = 'translateY(-10px) scale(.96)';
+  setTimeout(() => node.remove(), 250);
 }
 
 async function copy(text) {
@@ -3506,8 +3526,26 @@ window.addEventListener('error', (event) => {
   if (view && !view.children.length) bootFailure(event.message || 'unexpected script error');
 });
 
+/*
+ * The notice strip hangs below the header, and the header is not always the
+ * same height - it grows a line on a narrow screen. One observer keeps its
+ * bottom edge in a variable the stylesheet reads, so the two never drift.
+ */
+function trackTopbar() {
+  const bar = document.querySelector('.topbar');
+  if (!bar) return;
+  const set = () => {
+    const bottom = Math.round(bar.getBoundingClientRect().bottom);
+    document.documentElement.style.setProperty('--topbar-b', `${bottom}px`);
+  };
+  set();
+  if (window.ResizeObserver) new ResizeObserver(set).observe(bar);
+  window.addEventListener('resize', set);
+}
+
 function boot() {
   themeSwitch(document.getElementById('themeToggle'));
+  trackTopbar();
 
   document.getElementById('logoutBtn').addEventListener('click', async () => {
     try { await api.post('/logout'); } catch (_) { /* sign out locally anyway */ }
