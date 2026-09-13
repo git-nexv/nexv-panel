@@ -31,7 +31,16 @@ const trail = new Map();
 function bot() {
   const d = db.data;
   if (!d.bot) d.bot = defaults();
-  if (!d.bot.pay) d.bot.pay = defaults().pay;
+  /*
+   * A bot saved by an older panel - or brought back in a restored backup - can
+   * be missing whole sections that arrived later. Fill in whatever is absent
+   * here, in the one place everything goes through, rather than letting the
+   * first .filter on an array that is not there take the Bot page down.
+   */
+  const base = defaults();
+  for (const key of Object.keys(base)) {
+    if (d.bot[key] === undefined || d.bot[key] === null) d.bot[key] = base[key];
+  }
   return d.bot;
 }
 

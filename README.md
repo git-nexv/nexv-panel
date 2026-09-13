@@ -117,7 +117,9 @@ everything collapses to an instant change under `prefers-reduced-motion`.
 - **Dashboard** — CPU, memory, disk, live network speed, Xray state, totals.
 - **Inbounds** — a tabbed editor (Basics, Protocol, Stream, Security, Sniffing)
   covering transport options, TLS and REALITY, certificates and sniffing.
-- **Clients** — accounts per inbound, with quota, expiry, QR codes and links.
+- **Clients** — accounts per inbound, with quota, expiry, QR codes and links,
+  a live count of who is active, disabled, expired or out of quota, a search
+  box, and one menu that clears out everyone a quota or a date has finished.
 - **Outbounds** — where traffic leaves: direct, blocked, or your own proxies.
 - **Routing** — ordered rules that pick an outbound per domain, IP, port or user.
 - **Settings** — domain, ports, secret path, TLS files, backup and restore.

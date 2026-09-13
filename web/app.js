@@ -165,6 +165,7 @@ const ICONS = {
   sparkle: '<path d="M12 2.5 13.6 8 19 9.6 13.6 11.2 12 16.6 10.4 11.2 5 9.6 10.4 8 12 2.5ZM18.5 14l.8 2.7 2.7.8-2.7.8-.8 2.7-.8-2.7-2.7-.8 2.7-.8.8-2.7Z"/>',
   upload: '<path d="M11 21h2v-9.2l3.3 3.3 1.4-1.4L12 8l-5.7 5.7 1.4 1.4L11 11.8V21ZM5 3h14v2H5V3Z"/>',
   down: '<path d="m12 17-6-6 1.4-1.4L12 14.2l4.6-4.6L18 11l-6 6Z"/>',
+  search: '<path d="M10 3a7 7 0 1 1-4.2 12.6l-3.1 3.1-1.4-1.4 3.1-3.1A7 7 0 0 1 10 3Zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10Z"/>',
   empty: '<path d="M4 6h16v12H4V6Zm2 2v8h12V8H6Z" opacity=".7"/>'
 };
 
@@ -806,6 +807,55 @@ async function resetTraffic(inboundId, label) {
   });
 }
 
+/**
+ * Deleting an inbound asks what should happen to the people on it. Keeping them
+ * is the safe answer and stays the default: they keep their quota and their
+ * subId, so a replacement inbound can adopt them and nobody's subscription link
+ * breaks. Ticking the switch is the admin saying they are done with them too.
+ */
+function deleteInbound(inb) {
+  const count = inb.clientCount || 0;
+
+  const run = async (withClients) => {
+    try {
+      const result = await api.del(`/inbounds/${inb.id}${withClients ? '?withClients=1' : ''}`);
+      toast(result.deleted
+        ? `Inbound and ${result.deleted} client(s) deleted`
+        : result.detached ? `Inbound deleted - ${result.detached} client(s) kept` : 'Inbound deleted');
+      render();
+    } catch (err) { toast(err.message, 'err'); }
+  };
+
+  if (!count) return confirmDialog(`Delete inbound "${inb.remark}"?`, () => run(false));
+
+  const alsoClients = el('input', { type: 'checkbox' });
+  const note = el('div', { class: 'hint', style: 'margin-top:8px' });
+  const describe = () => {
+    note.textContent = alsoClients.checked
+      ? `The ${count} client(s) go with it. Their configs and subscription links stop working.`
+      : `The ${count} client(s) are kept and become unattached, so another inbound can take them over.`;
+  };
+  alsoClients.addEventListener('change', describe);
+  describe();
+
+  modal({
+    title: 'Please confirm',
+    body: el('div', {}, [
+      el('p', { class: 'muted', text: `Delete inbound "${inb.remark}"?` }),
+      el('label', { class: 'switch', style: 'margin-top:12px' }, [
+        alsoClients, el('span', { class: 'track' }),
+        el('span', { class: 'muted', text: `Delete its ${count} client(s) as well` })
+      ]),
+      note
+    ]),
+    actions: [{
+      label: 'Yes, continue',
+      kind: 'danger',
+      onClick: (close) => { close(); run(alsoClients.checked); }
+    }]
+  });
+}
+
 async function renderInbounds(view) {
   view.append(el('div', { class: 'between', style: 'margin-bottom:16px' }, [
     el('div', { class: 'muted', text: 'Each inbound is one port and one protocol that clients connect to.' }),
@@ -866,17 +916,7 @@ async function renderInbounds(view) {
           { label: 'Attach clients…', onClick: () => attachClients(inb) },
           { label: 'Reset traffic', onClick: () => resetTraffic(inb.id, `"${inb.remark}"`) },
           'sep',
-          {
-            label: 'Delete',
-            danger: true,
-            onClick: () => confirmDialog(`Delete inbound "${inb.remark}"? Its clients are kept and become unattached.`, async () => {
-              try {
-                await api.del(`/inbounds/${inb.id}`);
-                toast('Inbound deleted');
-                render();
-              } catch (err) { toast(err.message, 'err'); }
-            })
-          }
+          { label: 'Delete', danger: true, onClick: () => deleteInbound(inb) }
         ])
       ])])
     ]));
@@ -1301,12 +1341,118 @@ function inboundForm(existing) {
 
 /* ------------------------------ page: clients ---------------------------- */
 
-async function renderClients(view) {
-  const wrap = tableShell(view, {
-    intro: 'Clients of each inbound, with their quota and expiry.',
-    addLabel: 'New client',
-    onAdd: () => clientForm(null)
+/*
+ * One word for where a client stands, for the chip at the end of its row. Only
+ * one can be shown, so the order decides: a client the admin switched off reads
+ * as Disabled even when its time also ran out.
+ */
+function clientState(c) {
+  if (c.enable === false) return 'disabled';
+  if (c.expired) return 'expired';
+  if (c.depleted) return 'depleted';
+  return 'active';
+}
+
+/*
+ * The boxes across the top of the list, each also the filter for what it counts.
+ * They deliberately overlap - a client switched off after its time ran out is
+ * both disabled and expired - so that the box, the filter and the bulk delete
+ * of the same name always cover exactly the same people.
+ */
+const CLIENT_STATES = [
+  { id: 'all', label: 'Total', tone: '', match: () => true },
+  { id: 'active', label: 'Active', tone: 'ok', match: (c) => clientState(c) === 'active' },
+  { id: 'disabled', label: 'Disabled', tone: 'off', match: (c) => c.enable === false },
+  { id: 'expired', label: 'Expired', tone: 'bad', match: (c) => !!c.expired },
+  { id: 'depleted', label: 'Out of quota', tone: 'bad', match: (c) => !!c.depleted }
+];
+
+/** What each bulk action sweeps up, matching the server's own scopes. */
+const PURGE_SCOPES = {
+  expired: { one: 'expired client', many: 'expired clients', match: (c) => c.expired },
+  depleted: { one: 'client out of quota', many: 'clients out of quota', match: (c) => c.depleted },
+  finished: {
+    one: 'expired or out-of-quota client', many: 'expired and out-of-quota clients',
+    match: (c) => c.expired || c.depleted
+  },
+  disabled: { one: 'disabled client', many: 'disabled clients', match: (c) => c.enable === false },
+  all: { one: 'client', many: 'clients', match: () => true }
+};
+
+/** The chip at the end of a row, one per state clientState can return. */
+const CLIENT_CHIPS = {
+  disabled: { class: 'chip', label: 'Disabled' },
+  expired: { class: 'chip danger', label: 'Expired' },
+  depleted: { class: 'chip danger', label: 'Out of quota' },
+  active: { class: 'chip ok', label: 'Active' }
+};
+
+/**
+ * Delete everyone a scope matches, after saying out loud how many that is and
+ * naming a few of them - "delete all clients" is not a button anybody should be
+ * able to press without seeing whose configs are about to stop working.
+ */
+function purgeClients(scope) {
+  const spec = PURGE_SCOPES[scope];
+  const doomed = (state.clients || []).filter(spec.match);
+  if (!doomed.length) return toast(`No ${spec.many} to delete`);
+  const label = doomed.length === 1 ? spec.one : spec.many;
+
+  const names = doomed.map((c) => c.email);
+  const shown = names.slice(0, 6).join(', ') + (names.length > 6 ? `, and ${names.length - 6} more` : '');
+
+  modal({
+    title: 'Please confirm',
+    body: el('div', {}, [
+      el('p', { class: 'muted', text: `Delete ${doomed.length} ${label}?` }),
+      el('div', { class: 'hint', style: 'margin-top:8px', text: shown }),
+      el('div', { class: 'hint', style: 'margin-top:8px', text: 'Their configs and subscription links stop working at once. This cannot be undone.' })
+    ]),
+    actions: [{
+      label: `Delete ${doomed.length}`,
+      kind: 'danger',
+      onClick: async (close) => {
+        close();
+        try {
+          const result = await api.post('/clients/purge', { scope });
+          toast(result.deleted ? `Deleted ${result.deleted} client(s)` : 'Nothing matched');
+          render();
+        } catch (err) { toast(err.message, 'err'); }
+      }
+    }]
   });
+}
+
+async function renderClients(view) {
+  view.append(el('div', { class: 'between', style: 'margin-bottom:16px' }, [
+    el('div', { class: 'muted', text: 'Clients of each inbound, with their quota and expiry.' }),
+    el('div', { class: 'row' }, [
+      popupMenu([
+        { label: 'Delete expired clients', danger: true, onClick: () => purgeClients('expired') },
+        { label: 'Delete clients out of quota', danger: true, onClick: () => purgeClients('depleted') },
+        { label: 'Delete expired and out of quota', danger: true, onClick: () => purgeClients('finished') },
+        { label: 'Delete disabled clients', danger: true, onClick: () => purgeClients('disabled') },
+        'sep',
+        { label: 'Delete every client', danger: true, onClick: () => purgeClients('all') }
+      ], { class: 'btn ghost', html: icon('menu'), title: 'Client actions' }),
+      el('button', { class: 'btn primary', html: `${icon('plus')} New client`, onclick: () => clientForm(null) })
+    ])
+  ]));
+
+  const stats = el('div', { class: 'stat-strip' });
+  const search = el('input', {
+    type: 'search', class: 'search-input', placeholder: 'Search clients by name…',
+    autocomplete: 'off', spellcheck: 'false'
+  });
+  const tools = el('div', { class: 'list-tools', hidden: 'hidden' }, [
+    stats,
+    el('div', { class: 'search-box' }, [el('span', { class: 'search-icon', html: icon('search', 16) }), search])
+  ]);
+  view.append(tools);
+
+  const wrap = el('div', { class: 'table-wrap' });
+  wrap.innerHTML = '<div class="empty"><div class="skeleton" style="height:120px"></div></div>';
+  view.append(wrap);
 
   await loadProtocols();
   const [inbounds, clients] = await Promise.all([api.get('/inbounds'), api.get('/clients')]);
@@ -1315,6 +1461,25 @@ async function renderClients(view) {
 
   if (!inbounds.length) return emptyState(wrap, 'Create an inbound first, then add clients to it.');
   if (!clients.length) return emptyState(wrap, 'No clients yet.');
+
+  /* the summary box, and the same boxes double as filters */
+  let picked = CLIENT_STATES.some((s) => s.id === state.clientFilter) ? state.clientFilter : 'all';
+  const buttons = new Map();
+  for (const spec of CLIENT_STATES) {
+    const count = clients.filter(spec.match).length;
+    if (spec.id !== 'all' && !count) continue;   // no empty boxes to read past
+    const button = el('button', {
+      type: 'button', class: `stat ${spec.tone}`,
+      title: spec.id === 'all' ? 'Show everyone' : `Show only the ${spec.label.toLowerCase()} ones`,
+      onclick: () => { picked = picked === spec.id ? 'all' : spec.id; state.clientFilter = picked; applyFilter(); }
+    }, [
+      el('div', { class: 'stat-num', text: String(count) }),
+      el('div', { class: 'stat-label', text: spec.label })
+    ]);
+    buttons.set(spec.id, button);
+    stats.append(button);
+  }
+  tools.hidden = false;
 
   const withLinks = (state.protocols && state.protocols.withLinks) || [];
   const table = el('table');
@@ -1331,13 +1496,10 @@ async function renderClients(view) {
     const left = daysLeft(c.expiryTime);
     const shareable = withLinks.includes(c.protocol) && !!c.link;
 
-    let statusChip;
-    if (c.enable === false) statusChip = el('span', { class: 'chip', html: '<i></i>Disabled' });
-    else if (c.expired) statusChip = el('span', { class: 'chip danger', html: '<i></i>Expired' });
-    else if (c.depleted) statusChip = el('span', { class: 'chip danger', html: '<i></i>Out of quota' });
-    else statusChip = el('span', { class: 'chip ok', html: '<i></i>Active' });
+    const chip = CLIENT_CHIPS[clientState(c)];
+    const statusChip = el('span', { class: chip.class, html: `<i></i>${chip.label}` });
 
-    tbody.append(el('tr', {}, [
+    const row = el('tr', {}, [
       el('td', {}, [
         el('strong', { text: c.email }),
         el('div', { class: 'faint mono', style: 'font-size:11px', text: c.protocol })
@@ -1381,10 +1543,39 @@ async function renderClients(view) {
           })
         })
       ])])
-    ]));
+    ]);
+    row.dataset.name = c.email.toLowerCase();
+    row.dataset.buckets = CLIENT_STATES.filter((spec) => spec.match(c)).map((spec) => spec.id).join(' ');
+    tbody.append(row);
   }
+
+  /*
+   * Filtering hides rows rather than rebuilding the table: a rebuild on every
+   * keystroke would cost a round of link building per client and throw away
+   * the scroll position while the admin is still typing.
+   */
+  const nothing = el('tr', { class: 'filter-empty', hidden: 'hidden' }, [
+    el('td', { colspan: '8', class: 'muted', text: 'No client matches that.' })
+  ]);
+
+  function applyFilter() {
+    const needle = search.value.trim().toLowerCase();
+    let shown = 0;
+    for (const row of tbody.querySelectorAll('tr[data-name]')) {
+      const ok = row.dataset.buckets.split(' ').includes(picked)
+        && (!needle || row.dataset.name.includes(needle));
+      row.hidden = !ok;
+      if (ok) shown++;
+    }
+    nothing.hidden = shown > 0;
+    for (const [id, button] of buttons) button.classList.toggle('on', id === picked);
+  }
+
+  search.addEventListener('input', applyFilter);
   table.append(tbody);
   mountTable(wrap, table);
+  tbody.append(nothing);   // after mountTable: it is a notice, not a row with columns
+  applyFilter();
 }
 
 

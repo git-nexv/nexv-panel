@@ -560,21 +560,36 @@ router.delete('/inbounds/:id', async (req, res) => {
   const d = db.data;
   const inb = d.inbounds.find((i) => i.id === req.params.id);
   if (!inb) return bad(res, 'inbound not found', 404);
-  d.inbounds = d.inbounds.filter((i) => i.id !== inb.id);
   /*
-   * The clients outlive it. Deleting an inbound used to delete everybody on it,
-   * which is not what "delete this inbound" means to anyone: the people, their
-   * quotas and - above all - their subId stay, so a new inbound can take them
-   * over and every subscription link they hold keeps working.
+   * By default the clients outlive it. Deleting an inbound used to delete
+   * everybody on it, which is not what "delete this inbound" means to anyone:
+   * the people, their quotas and - above all - their subId stay, so a new
+   * inbound can take them over and every subscription link they hold keeps
+   * working. ?withClients=1 is the admin saying otherwise, in so many words.
    */
+  const withClients = ['1', 'true', 'yes'].includes(String(req.query.withClients || ''));
+  d.inbounds = d.inbounds.filter((i) => i.id !== inb.id);
+
   let detached = 0;
-  for (const client of d.clients) {
-    if (client.inboundId === inb.id) { client.inboundId = ''; detached++; }
+  let deleted = 0;
+  if (withClients) {
+    const doomed = d.clients.filter((c) => c.inboundId === inb.id);
+    deleted = doomed.length;
+    for (const c of doomed) online.forget(xray.clientTag(c));
+    d.clients = d.clients.filter((c) => c.inboundId !== inb.id);
+  } else {
+    for (const client of d.clients) {
+      if (client.inboundId === inb.id) { client.inboundId = ''; detached++; }
+    }
   }
+
   db.saveNow();
   await xray.apply();
-  logEvent('inbound', `deleted inbound ${inb.remark}${detached ? ` - ${detached} client(s) kept, now unattached` : ''}`);
-  res.json({ ok: true, detached });
+  const fate = deleted
+    ? ` - ${deleted} client(s) deleted with it`
+    : detached ? ` - ${detached} client(s) kept, now unattached` : '';
+  logEvent('inbound', `deleted inbound ${inb.remark}${fate}`);
+  res.json({ ok: true, detached, deleted });
 });
 
 /**
@@ -938,10 +953,48 @@ router.delete('/clients/:id', async (req, res) => {
   const client = d.clients.find((c) => c.id === req.params.id);
   if (!client) return bad(res, 'client not found', 404);
   d.clients = d.clients.filter((c) => c.id !== client.id);
+  online.forget(xray.clientTag(client));
   db.saveNow();
   await xray.apply();
   logEvent('client', `deleted client ${client.email}`);
   res.json({ ok: true });
+});
+
+/*
+ * Clearing out the dead wood. Picking off finished clients one row at a time is
+ * the chore this replaces, so each scope is deliberately narrow and the server
+ * decides who matches - the browser's copy of the list can be minutes old.
+ */
+const PURGE_SCOPES = {
+  expired: { label: 'expired', match: (c) => xray.isExpired(c) },
+  depleted: { label: 'out of quota', match: (c) => xray.isOverQuota(c) },
+  finished: { label: 'expired or out of quota', match: (c) => xray.isExpired(c) || xray.isOverQuota(c) },
+  disabled: { label: 'disabled', match: (c) => c.enable === false },
+  all: { label: '', match: () => true }
+};
+
+router.post('/clients/purge', async (req, res) => {
+  const body = req.body || {};
+  const scope = PURGE_SCOPES[body.scope];
+  if (!scope) return bad(res, `unknown scope - use one of ${Object.keys(PURGE_SCOPES).join(', ')}`);
+
+  const d = db.data;
+  const scoped = body.inboundId
+    ? d.clients.filter((c) => c.inboundId === body.inboundId)
+    : d.clients;
+  const doomed = scoped.filter(scope.match);
+  if (!doomed.length) return res.json({ ok: true, deleted: 0, names: [] });
+
+  const ids = new Set(doomed.map((c) => c.id));
+  for (const c of doomed) online.forget(xray.clientTag(c));
+  d.clients = d.clients.filter((c) => !ids.has(c.id));
+  db.saveNow();
+  await xray.apply();
+
+  const names = doomed.map((c) => c.email);
+  const kind = scope.label ? `${scope.label} ` : '';
+  logEvent('client', `deleted ${doomed.length} ${kind}client(s): ${names.slice(0, 8).join(', ')}${names.length > 8 ? '\u2026' : ''}`);
+  res.json({ ok: true, deleted: doomed.length, names });
 });
 
 router.post('/clients/:id/toggle', async (req, res) => {
