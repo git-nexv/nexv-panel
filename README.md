@@ -84,9 +84,11 @@ a bright top edge — shared by the top bar, cards, dialogs and menus.
 
 On a phone the sidebar gives way to a floating dock: Dashboard, Inbounds,
 Clients and Account in a glass pill with a bubble that slides between them, and
-a separate round **More** button beside it that opens the remaining pages in a
-second pill above the bar. Dragging a finger across the dock carries the bubble
-with it and commits on release, the way the iOS call bar behaves.
+a separate round **More** button beside it. More opens the same bar stood on
+end — same pill, same glass, same bubble behind the current row — growing out
+of the button it came from, right-aligned above it. Dragging a finger along
+either bar carries the bubble with it and commits on release, the way the iOS
+call bar behaves.
 
 Page changes, table rows, dialogs, menus and toasts all animate on a spring, and
 everything collapses to an instant change under `prefers-reduced-motion`.

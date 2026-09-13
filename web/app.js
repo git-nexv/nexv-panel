@@ -1801,7 +1801,8 @@ async function renderAccount(view) {
 const DOCK_PAGES = ['dashboard', 'inbounds', 'clients', 'account'];
 
 const dock = {
-  bar: null, bubble: null, items: [], more: null, moreItem: null, moreOpen: false
+  bar: null, bubble: null, items: [], more: null, moreItem: null,
+  moreBubble: null, moreRows: [], moreOpen: false
 };
 
 /**
@@ -1833,43 +1834,48 @@ function buildDock() {
     title: 'More', html: icon('more', 22)
   });
 
-  /* the More sheet: the same pill, grown upward */
+  /* the More sheet: the same pill, stood on end */
   const more = el('div', { class: 'dock-more glass' });
-  for (const page of rest) {
-    more.append(el('button', {
-      type: 'button', 'data-page': page.id,
-      html: `${icon(page.icon, 18)}<span>${page.label}</span>`,
-      onclick: () => { closeMore(); navigate(page.id); }
-    }));
-  }
-  more.append(
-    el('button', {
-      type: 'button',
-      html: `${icon('theme', 18)}<span>Toggle theme</span>`,
-      onclick: () => {
-        closeMore();
-        applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
-      }
-    }),
-    el('button', {
-      type: 'button',
-      html: `${icon('logout', 18)}<span>Sign out</span>`,
-      onclick: async () => {
-        closeMore();
+  const moreBubble = el('div', { class: 'dock-bubble' });
+  more.append(moreBubble);
+
+  const moreEntries = [
+    ...rest.map((page) => ({ page: page.id, icon: page.icon, label: page.label })),
+    {
+      icon: 'theme',
+      label: 'Toggle theme',
+      run: () => applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light')
+    },
+    {
+      icon: 'logout',
+      label: 'Sign out',
+      run: async () => {
         try { await api.post('/logout'); } catch (_) { /* sign out locally anyway */ }
         location.href = `${BASE}login`;
       }
-    })
-  );
+    }
+  ];
+
+  const moreRows = moreEntries.map((entry) => {
+    const row = el('button', {
+      class: 'dock-row', type: 'button',
+      'data-page': entry.page || '',
+      html: `${icon(entry.icon, 18)}<span>${entry.label}</span>`
+    });
+    row.run = entry.run;
+    more.append(row);
+    return row;
+  });
 
   host.append(bar, moreItem);
   document.body.append(host, more);
   moreItem.addEventListener('click', (event) => { event.stopPropagation(); toggleMore(); });
 
-  Object.assign(dock, { bar, bubble, items, more, moreItem });
+  Object.assign(dock, { bar, bubble, items, more, moreItem, moreBubble, moreRows });
   attachDrag(bar, items);
+  attachDrag(more, moreRows, 'y');
   document.addEventListener('click', (event) => {
-    if (dock.moreOpen && !more.contains(event.target) && !bar.contains(event.target)) closeMore();
+    if (dock.moreOpen && !more.contains(event.target) && !moreItem.contains(event.target)) closeMore();
   });
   window.addEventListener('resize', () => moveBubble(state.page, false));
 }
@@ -1878,12 +1884,34 @@ function toggleMore() { dock.moreOpen ? closeMore() : openMore(); }
 
 function openMore() {
   dock.moreOpen = true;
+  // anchor the sheet's right edge to the three-dot button it grows from
+  const solo = dock.moreItem.getBoundingClientRect();
+  dock.more.style.right = `${Math.round(window.innerWidth - solo.right)}px`;
+  dock.more.style.left = 'auto';
   dock.more.classList.add('open');
-  // stagger the rows so the sheet unfolds rather than appearing
-  Array.from(dock.more.children).forEach((row, i) => {
-    row.style.animationDelay = `${i * 28}ms`;
+
+  // bottom row first: the sheet unrolls upward out of the button
+  const rows = dock.moreRows;
+  rows.forEach((row, i) => {
+    row.style.animationDelay = `${(rows.length - 1 - i) * 18}ms`;
   });
+
+  moveMoreBubble(false);
   moveBubble(state.page, true);
+}
+
+/** Park the sheet's bubble behind whichever row is the current page. */
+function moveMoreBubble(animate = true, target) {
+  if (!dock.moreBubble) return;
+  const row = target || dock.moreRows.find((r) => r.dataset.page === state.page);
+  for (const other of dock.moreRows) other.classList.toggle('active', other === row);
+  if (!row) { dock.moreBubble.style.opacity = '0'; return; }
+  dock.moreBubble.style.opacity = '1';
+
+  if (!animate) dock.more.classList.add('dragging');
+  dock.moreBubble.style.height = `${row.offsetHeight}px`;
+  dock.moreBubble.style.transform = `translateY(${row.offsetTop - dock.moreBubble.offsetTop}px)`;
+  if (!animate) requestAnimationFrame(() => dock.more.classList.remove('dragging'));
 }
 
 function closeMore() {
@@ -1906,11 +1934,9 @@ function moveBubble(pageId, animate = true) {
   }
   dock.bubble.style.opacity = '1';
 
-  const on = dock.bar.getBoundingClientRect();
-  const box = item.getBoundingClientRect();
   if (!animate) dock.bar.classList.add('dragging');
-  dock.bubble.style.width = `${box.width}px`;
-  dock.bubble.style.transform = `translateX(${box.left - on.left}px)`;
+  dock.bubble.style.width = `${item.offsetWidth}px`;
+  dock.bubble.style.transform = `translateX(${item.offsetLeft - dock.bubble.offsetLeft}px)`;
   if (!animate) requestAnimationFrame(() => dock.bar.classList.remove('dragging'));
 
   for (const other of dock.items) other.classList.toggle('active', other === item);
@@ -1920,20 +1946,24 @@ function moveBubble(pageId, animate = true) {
  * Drag across the bar to preview a tab, release to commit - the gesture the
  * iOS call bar uses. A tap is just a zero-length drag, so both paths agree.
  */
-function attachDrag(bar, items) {
+function attachDrag(bar, items, axis = 'x') {
   let dragging = false;
   let hovered = null;
+  const vertical = axis === 'y';
 
-  const itemAt = (clientX) => items.find((item) => {
+  const itemAt = (event) => items.find((item) => {
     const box = item.getBoundingClientRect();
-    return clientX >= box.left && clientX <= box.right;
+    return vertical
+      ? event.clientY >= box.top && event.clientY <= box.bottom
+      : event.clientX >= box.left && event.clientX <= box.right;
   });
 
-  const slide = (clientX) => {
-    const item = itemAt(clientX);
+  const slide = (event) => {
+    const item = itemAt(event);
     if (!item || item === hovered) return;
     hovered = item;
-    moveBubble(item.dataset.page, true);
+    if (vertical) moveMoreBubble(true, item);
+    else moveBubble(item.dataset.page, true);
     // a short tick under the finger, where the platform supports it
     if (navigator.vibrate) navigator.vibrate(4);
   };
@@ -1944,11 +1974,11 @@ function attachDrag(bar, items) {
     hovered = null;
     bar.setPointerCapture(event.pointerId);
     bar.classList.add('dragging');
-    slide(event.clientX);
+    slide(event);
   });
 
   bar.addEventListener('pointermove', (event) => {
-    if (dragging) slide(event.clientX);
+    if (dragging) slide(event);
   });
 
   /*
@@ -1957,19 +1987,20 @@ function attachDrag(bar, items) {
    * which also keeps tap and drag on exactly the same path.
    */
   const activate = (item) => {
-    if (!item) return moveBubble(state.page, true);
+    if (!item) return vertical ? moveMoreBubble(true) : moveBubble(state.page, true);
+    if (typeof item.run === 'function') { closeMore(); return item.run(); }
     const target = item.dataset.page;
     if (target === '__more') return toggleMore();
     closeMore();
     if (target !== state.page) navigate(target);
-    else moveBubble(state.page, true);
+    else if (!vertical) moveBubble(state.page, true);
   };
 
   const finish = (event) => {
     if (!dragging) return;
     dragging = false;
     bar.classList.remove('dragging');
-    const item = itemAt(event.clientX) || hovered;
+    const item = itemAt(event) || hovered;
     hovered = null;
     activate(item);
   };
@@ -1987,7 +2018,8 @@ function attachDrag(bar, items) {
   bar.addEventListener('pointercancel', () => {
     dragging = false;
     bar.classList.remove('dragging');
-    moveBubble(state.page, true);
+    if (vertical) moveMoreBubble(true);
+    else moveBubble(state.page, true);
   });
 }
 

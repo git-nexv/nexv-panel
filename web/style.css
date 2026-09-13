@@ -528,32 +528,54 @@ td .row-actions { display: flex; gap: 6px; }
   border: 1px solid color-mix(in srgb, var(--brand) 34%, transparent);
 }
 
+/*
+ * The More sheet is the same bar, stood on end: same pill, same glass, same
+ * bubble behind the current row. It grows out of the three-dot button rather
+ * than fading in, so the button reads as the thing that opened.
+ */
 .dock-more {
   position: fixed; z-index: 89;
-  left: 50%; transform-origin: bottom center;
-  bottom: calc(max(14px, env(safe-area-inset-bottom)) + 76px);
+  bottom: calc(max(14px, env(safe-area-inset-bottom)) + 82px);
   display: flex; flex-direction: column; gap: 2px;
   padding: 7px;
-  border-radius: 26px;
-  opacity: 0; transform: translateX(-50%) translateY(14px) scale(.86);
-  transition: opacity .26s var(--glide), transform .4s var(--spring);
+  border-radius: 30px;
+  transform-origin: bottom right;
+  opacity: 0;
+  transform: scale(.72) translateY(10px);
+  transition: opacity .16s var(--glide), transform .34s var(--spring);
   pointer-events: none;
 }
-.dock-more.open { opacity: 1; transform: translateX(-50%); pointer-events: auto; }
-.dock-more button {
-  display: flex; align-items: center; gap: 11px;
-  padding: 11px 18px 11px 14px; min-width: 190px;
-  border: 0; border-radius: 999px; background: transparent; cursor: pointer;
-  color: var(--text); font: inherit; font-size: 13.5px; font-weight: 600; text-align: start;
-  transition: background .2s var(--glide), transform .3s var(--spring);
+.dock-more.open {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  transition: opacity .14s linear, transform .38s var(--spring);
 }
-.dock-more button:hover { background: var(--surface-2); }
-.dock-more button:active { transform: scale(.97); }
-.dock-more button.active { color: var(--brand); }
-/* each row eases in just after the one above it */
-.dock-more.open button { animation: dock-rise .42s var(--spring) both; }
-@keyframes dock-rise {
-  from { opacity: 0; transform: translateY(10px) scale(.96); }
+
+.dock-more .dock-bubble {
+  top: 7px; bottom: auto; left: 7px; right: 7px;
+  width: auto !important;
+  transition: transform .34s var(--spring), height .34s var(--spring);
+}
+.dock-more.dragging .dock-bubble { transition: transform .09s linear, height .09s linear; }
+
+.dock-row {
+  position: relative; z-index: 1;
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 20px 11px 15px; min-width: 196px;
+  border: 0; border-radius: 999px; background: transparent; cursor: pointer;
+  color: var(--muted); font: inherit; font-size: 13.5px; font-weight: 600; text-align: start;
+  transition: color .2s var(--glide), transform .3s var(--spring);
+}
+.dock-row svg { flex: 0 0 auto; transition: transform .34s var(--spring); }
+.dock-row.active { color: var(--brand); }
+.dock-row.active svg { transform: scale(1.08); }
+.dock-row:active { transform: scale(.97); }
+
+/* rows arrive just behind the pill, quickly, bottom-up like a menu unrolling */
+.dock-more.open .dock-row { animation: dock-row-in .22s var(--glide) both; }
+@keyframes dock-row-in {
+  from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: none; }
 }
 
@@ -564,7 +586,7 @@ td .row-actions { display: flex; gap: 6px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dock-item, .dock-bubble, .dock-more, .dock-more button, .dock-item svg {
+  .dock-item, .dock-bubble, .dock-more, .dock-row, .dock-item svg, .dock-row svg {
     transition-duration: .01ms !important;
     animation-duration: .01ms !important;
   }
