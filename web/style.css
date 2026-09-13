@@ -162,13 +162,21 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .update-chip {
   display: inline-flex; align-items: center; gap: 7px;
   padding: 6px 13px 6px 10px; border-radius: 999px; cursor: pointer;
-  border: 1px solid color-mix(in srgb, var(--ok) 42%, transparent);
-  background: color-mix(in srgb, var(--ok) 16%, transparent);
-  color: var(--ok); font: inherit; font-size: 12px; font-weight: 700;
+  /* quiet while the panel is current, and green the moment there is something
+     to install - the key itself is always there */
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--muted); font: inherit; font-size: 12px; font-weight: 700;
   animation: chip-pop .5s var(--spring) both;
-  transition: transform .3s var(--spring), background .24s var(--glide);
+  transition: transform .3s var(--spring), background .24s var(--glide), color .24s var(--glide), border-color .24s var(--glide);
 }
-.update-chip:hover { background: color-mix(in srgb, var(--ok) 24%, transparent); }
+.update-chip.ready {
+  border-color: color-mix(in srgb, var(--ok) 42%, transparent);
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+  color: var(--ok);
+}
+.update-chip:hover { background: var(--surface); }
+.update-chip.ready:hover { background: color-mix(in srgb, var(--ok) 24%, transparent); }
 .update-chip:active { transform: scale(.95); }
 .update-chip svg { width: 15px; height: 15px; }
 @keyframes chip-pop {

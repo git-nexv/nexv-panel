@@ -53,19 +53,30 @@ function netTotals() {
 }
 
 let lastNet = null;
+let lastSpeed = { rx: 0, tx: 0 };
+
 function network() {
   const now = Date.now();
   const totals = netTotals();
-  let rxSpeed = 0, txSpeed = 0;
-  if (lastNet) {
-    const dt = (now - lastNet.at) / 1000;
-    if (dt > 0) {
-      rxSpeed = Math.max(0, (totals.rx - lastNet.rx) / dt);
-      txSpeed = Math.max(0, (totals.tx - lastNet.tx) / dt);
-    }
+  if (!lastNet) {
+    lastNet = { at: now, rx: totals.rx, tx: totals.tx };
+    return { total: totals, speed: lastSpeed };
   }
-  lastNet = { at: now, rx: totals.rx, tx: totals.tx };
-  return { total: totals, speed: { rx: rxSpeed, tx: txSpeed } };
+  /*
+   * The window belongs to whoever asked last, not to this caller. A second
+   * dashboard - another tab, a reload, the CLI - asking a moment later used to
+   * divide a whole window's bytes by a sliver of a second and report an
+   * impossible rate, so a window shorter than a second keeps the last figure.
+   */
+  const dt = (now - lastNet.at) / 1000;
+  if (dt >= 1) {
+    lastSpeed = {
+      rx: Math.max(0, (totals.rx - lastNet.rx) / dt),
+      tx: Math.max(0, (totals.tx - lastNet.tx) / dt)
+    };
+    lastNet = { at: now, rx: totals.rx, tx: totals.tx };
+  }
+  return { total: totals, speed: lastSpeed };
 }
 
 let diskCache = { at: 0, value: { total: 0, used: 0, percent: 0 } };

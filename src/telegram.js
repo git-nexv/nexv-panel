@@ -136,7 +136,10 @@ function escapeHtml(value) {
 
 function bytes(n) {
   n = Number(n) || 0;
-  if (n < 1024) return `${n} B`;
+  // a per-second rate is rarely a whole number, and 833.3333333333334 B/s
+  // is not something anyone wants to read; rounding first also stops 1023.7
+  // printing as "1024 B" instead of tipping over into KB
+  if (Math.round(n) < 1024) return `${Math.round(n)} B`;
   const units = ['KB', 'MB', 'GB', 'TB'];
   let i = -1;
   do { n /= 1024; i++; } while (n >= 1024 && i < units.length - 1);

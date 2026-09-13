@@ -78,7 +78,10 @@ const el = (tag, attrs = {}, children = []) => {
 
 function bytes(n) {
   n = Number(n) || 0;
-  if (n < 1024) return `${n} B`;
+  // a per-second rate is rarely a whole number, and 833.3333333333334 B/s
+  // is not something anyone wants to read; rounding first also stops 1023.7
+  // printing as "1024 B" instead of tipping over into KB
+  if (Math.round(n) < 1024) return `${Math.round(n)} B`;
   const units = ['KB', 'MB', 'GB', 'TB', 'PB'];
   let i = -1;
   do { n /= 1024; i++; } while (n >= 1024 && i < units.length - 1);
@@ -252,7 +255,7 @@ const PAGES = [
 const state = {
   page: 'dashboard',
   inbounds: [], clients: [], outbounds: [], routing: [], settings: {},
-  protocols: null, timer: null
+  protocols: null, timer: null, version: null
 };
 
 function navigate(page) {
@@ -2271,9 +2274,12 @@ async function renderAccount(view) {
  * itself, so the browser watches /health until the new version answers.
  */
 function updateDialog(info) {
-  const note = el('p', { class: 'muted', text: 'Your inbounds, clients and settings are left alone.' });
+  if (!info) return;
+  const fresh = !info.updateAvailable;
+  const note = el('p', { class: 'muted' });
   const progress = el('div', { class: 'link-box', hidden: true, style: 'margin-top:12px; max-height:150px' });
   const body = el('div', {}, [note, progress]);
+  const say = (text) => { progress.hidden = false; progress.textContent = text; };
 
   if (!info.canUpdate) {
     note.textContent = info.updateBlockedBy || 'Update from the server\u2019s terminal.';
@@ -2283,39 +2289,73 @@ function updateDialog(info) {
         el('button', { class: 'btn', html: `${icon('copy')} Copy command`, onclick: () => copy('nexv update') })
       ])
     );
-    return modal({ title: `Version ${info.latest} is available`, subtitle: `This panel is running ${info.current}.`, body, width: 460 });
+    return modal({
+      title: fresh ? `You are on ${info.current}` : `Version ${info.latest} is available`,
+      subtitle: fresh ? '' : `This panel is running ${info.current}.`,
+      body,
+      width: 460
+    });
   }
 
-  const say = (text) => { progress.hidden = false; progress.textContent = text; };
-  const button = el('button', {
-    class: 'btn primary', html: `${icon('sparkle')} Update now`,
+  note.textContent = fresh
+    ? 'No newer version was found. You can install the latest build again anyway.'
+    : 'Your inbounds, clients and settings are left alone.';
+
+  const run = async (button, force) => {
+    button.disabled = true;
+    say('Starting the update\u2026');
+    try {
+      await api.post('/update', force ? { force: true } : {});
+    } catch (err) {
+      button.disabled = false;
+      return say(`Could not start: ${err.message}`);
+    }
+    say('Downloading and installing. The panel restarts on its own \u2014 keep this page open.');
+    watchUpdate(info.latest, say, force);
+  };
+
+  const primary = el('button', {
+    class: 'btn primary',
+    html: `${icon('sparkle')} ${fresh ? 'Reinstall this version' : 'Update now'}`,
+    onclick: () => run(primary, fresh)
+  });
+  const recheck = el('button', {
+    class: 'btn', text: 'Check again',
     onclick: async () => {
-      button.disabled = true;
-      say('Starting the update\u2026');
-      try {
-        await api.post('/update', {});
-      } catch (err) {
-        button.disabled = false;
-        return say(`Could not start: ${err.message}`);
+      recheck.disabled = true;
+      const next = await checkForUpdate(true);
+      recheck.disabled = false;
+      if (next && next.updateAvailable) {
+        say(`Version ${next.latest} is available \u2014 close this and open it again to install it.`);
+      } else {
+        say(next ? `Still the newest: ${next.current}` : 'The server could not reach the repository.');
       }
-      say('Downloading and installing. The panel restarts on its own \u2014 keep this page open.');
-      watchUpdate(info.latest, say);
     }
   });
-  body.insertBefore(el('div', { class: 'row', style: 'margin-top:14px' }, [button]), progress);
-  return modal({ title: `Version ${info.latest} is available`, subtitle: `This panel is running ${info.current}.`, body, width: 460 });
+  body.insertBefore(el('div', { class: 'row', style: 'margin-top:14px' }, [primary, recheck]), progress);
+
+  return modal({
+    title: fresh ? `You are on ${info.current}` : `Version ${info.latest} is available`,
+    subtitle: fresh ? 'The panel checks for itself every six hours.' : `This panel is running ${info.current}.`,
+    body,
+    width: 460
+  });
 }
 
 /** Poll until the restarted panel reports the new version, then reload. */
-async function watchUpdate(target, say) {
+async function watchUpdate(target, say, sameVersion) {
   const deadline = Date.now() + 5 * 60 * 1000;
+  let wentDown = false;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 3000));
     let health = null;
     // the panel is restarting for part of this, so a failed probe is expected
-    try { health = await api.get('/health'); } catch (_) { /* still down */ }
-    if (health && health.version === target) {
-      say(`Updated to ${target}. Reloading\u2026`);
+    try { health = await api.get('/health'); } catch (_) { wentDown = true; }
+    // a reinstall comes back on the same version, so watch for the restart:
+    // the panel is new when its uptime is shorter than this dialog has waited
+    const restarted = health && (sameVersion ? (wentDown || health.uptime < 20) : health.version === target);
+    if (restarted) {
+      say(`Updated to ${health.version}. Reloading\u2026`);
       return setTimeout(() => location.reload(), 1200);
     }
     let tail = '';
@@ -2330,21 +2370,29 @@ async function watchUpdate(target, say) {
  * Announce a newer panel in the header. Checked once per session and then
  * every six hours; a server that cannot reach GitHub simply never shows it.
  */
-async function checkForUpdate() {
+async function checkForUpdate(force) {
   let info;
-  try { info = await api.get('/version'); } catch (_) { return; }
-  const bar = document.querySelector('.topbar');
-  const existing = document.getElementById('updateChip');
-  if (existing) existing.remove();
-  if (!info.updateAvailable || !bar) return;
+  try { info = await api.get(`/version${force ? '?force=1' : ''}`); } catch (_) { return null; }
+  state.version = info;
 
-  const chip = el('button', {
-    id: 'updateChip', class: 'update-chip', type: 'button',
-    title: `Version ${info.latest} is available`,
-    html: `${icon('sparkle', 15)}<span>Update ${info.latest}</span>`,
-    onclick: () => updateDialog(info)
-  });
-  bar.insertBefore(chip, document.getElementById('xrayChip'));
+  const bar = document.querySelector('.topbar');
+  if (!bar) return info;
+  let chip = document.getElementById('updateChip');
+  if (!chip) {
+    // the key stays in the header whether or not there is an update: it is
+    // where you go to update the panel, not just where a notice appears
+    chip = el('button', {
+      id: 'updateChip', class: 'update-chip', type: 'button',
+      onclick: () => updateDialog(state.version)
+    });
+    bar.insertBefore(chip, document.getElementById('xrayChip'));
+  }
+  chip.classList.toggle('ready', !!info.updateAvailable);
+  chip.title = info.updateAvailable
+    ? `Version ${info.latest} is available`
+    : `Up to date · ${info.current}`;
+  chip.innerHTML = `${icon('sparkle', 15)}<span>${info.updateAvailable ? `Update ${info.latest}` : info.current}</span>`;
+  return info;
 }
 
 /* --------------------------------- dock ---------------------------------- */
@@ -2790,7 +2838,7 @@ function boot() {
   buildDock();
   navigate(location.hash.slice(1) || 'dashboard');
   checkForUpdate();
-  setInterval(checkForUpdate, 6 * 60 * 60 * 1000);
+  setInterval(() => checkForUpdate(), 6 * 60 * 60 * 1000);
   // the bar has just been laid out; park the capsule without a flight
   requestAnimationFrame(() => syncDock(false));
 }
