@@ -640,8 +640,17 @@ router.get('/inbounds/:id/export', (req, res) => {
   const inb = db.data.inbounds.find((i) => i.id === req.params.id);
   if (!inb) return bad(res, 'inbound not found', 404);
   const clients = db.data.clients.filter((c) => c.inboundId === inb.id);
-  // text, to be read and copied - the panel shows it rather than saving a file
-  res.json({ text: JSON.stringify(transfer.exportInbound(inb, clients), null, 2), clients: clients.length });
+  /*
+   * Both shapes, because the two things you might do with it want different
+   * ones: reading it, or pasting it where another panel's export would go,
+   * wants the objects 3x-ui's own export prints; posting it to that panel's
+   * API wants them encoded as strings, which is how its Go model is declared.
+   */
+  res.json({
+    panel: JSON.stringify(transfer.exportInbound(inb, clients, { asObjects: true }), null, 2),
+    api: JSON.stringify(transfer.exportInbound(inb, clients), null, 2),
+    clients: clients.length
+  });
 });
 
 router.post('/inbounds/import', async (req, res) => {

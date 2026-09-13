@@ -48,7 +48,7 @@ function asObject(value) {
 
 /* ------------------------------- export --------------------------------- */
 
-function exportInbound(inb, clients) {
+function exportInbound(inb, clients, options = {}) {
   const stream = { network: inb.network || 'tcp', security: inb.security || 'none' };
 
   if (stream.network === 'ws') {
@@ -114,6 +114,13 @@ function exportInbound(inb, clients) {
   if (inb.protocol === 'vless') { settings.decryption = 'none'; settings.encryption = 'none'; }
   if (inb.protocol === 'shadowsocks') { settings.method = inb.method || ''; settings.password = inb.password || ''; }
 
+  const sniffing = {
+    enabled: inb.sniffing !== false,
+    destOverride: inb.sniffDestOverride || ['http', 'tls', 'quic'],
+    metadataOnly: !!inb.sniffMetadataOnly,
+    routeOnly: !!inb.sniffRouteOnly
+  };
+
   // The field set mirrors a 3x-ui export exactly, including the keys it does
   // not strictly need, so a file written here imports there unchanged.
   return {
@@ -132,19 +139,19 @@ function exportInbound(inb, clients) {
     port: Number(inb.port),
     protocol: inb.protocol,
     /*
-     * These three go out as JSON *strings*, not objects. 3x-ui's Inbound model
-     * declares them as Go `string` fields, so an object fails to unmarshal and
-     * the panel reports "inbound settings is empty" on import.
+     * Two readers, two shapes, and they disagree.
+     *
+     * 3x-ui's Go model declares settings, streamSettings and sniffing as
+     * `string`, so anything posted to its API must carry them encoded - an
+     * object there fails to unmarshal and the panel says "inbound settings is
+     * empty". Its own Export Inbound, on the other hand, prints what the
+     * browser holds, which is the parsed objects. `asObjects` picks the second,
+     * so an export from here reads exactly like an export from there.
      */
-    settings: JSON.stringify(settings),
-    streamSettings: JSON.stringify(stream),
+    settings: options.asObjects ? settings : JSON.stringify(settings),
+    streamSettings: options.asObjects ? stream : JSON.stringify(stream),
     tag: clean(inb.tag) || `in-${inb.port}-${inb.protocol}`,
-    sniffing: JSON.stringify({
-      enabled: inb.sniffing !== false,
-      destOverride: inb.sniffDestOverride || ['http', 'tls', 'quic'],
-      metadataOnly: !!inb.sniffMetadataOnly,
-      routeOnly: !!inb.sniffRouteOnly
-    }),
+    sniffing: options.asObjects ? sniffing : JSON.stringify(sniffing),
     clientStats: clients.map((c, index) => ({
       id: index + 1,
       inboundId: 1,

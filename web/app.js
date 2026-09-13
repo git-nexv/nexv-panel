@@ -679,16 +679,46 @@ function importInboundText() {
 }
 
 async function exportInboundText(inb) {
-  try {
-    const result = await api.get(`/inbounds/${inb.id}/export`);
-    textDialog(
-      `Export "${inb.remark}"`,
-      `${result.clients} client(s) included. Paste this into another panel - 3x-ui reads it too.`,
-      result.text
-    );
-  } catch (err) {
-    toast(err.message, 'err');
-  }
+  let result;
+  try { result = await api.get(`/inbounds/${inb.id}/export`); } catch (err) { return toast(err.message, 'err'); }
+
+  const area = el('textarea', { readonly: 'readonly', style: 'min-height:300px' }, [result.panel]);
+  const note = el('div', { class: 'hint', style: 'margin-top:10px' });
+  const shapes = {
+    Panel: {
+      text: result.panel,
+      hint: 'Exactly what 3x-ui\u2019s own "Export Inbound" prints, field for field. Paste it into this panel, or keep it as your copy of the inbound.'
+    },
+    API: {
+      text: result.api,
+      hint: 'The same inbound with settings, streamSettings and sniffing encoded as strings \u2014 the shape 3x-ui\u2019s API needs when you POST an inbound to it.'
+    }
+  };
+
+  const pick = segmented(
+    [{ value: 'Panel', label: 'Panel format' }, { value: 'API', label: 'API format' }],
+    'Panel',
+    (name) => {
+      area.value = shapes[name].text;
+      note.textContent = shapes[name].hint;
+    }
+  );
+  note.textContent = shapes.Panel.hint;
+
+  modal({
+    title: `Export "${inb.remark}"`,
+    subtitle: `${result.clients} client(s) included, with their subIds.`,
+    body: el('div', {}, [
+      el('div', { class: 'row', style: 'margin-bottom:12px' }, [pick]),
+      area,
+      note,
+      el('div', { class: 'row', style: 'margin-top:12px' }, [
+        el('button', { class: 'btn', html: `${icon('copy')} Copy all`, onclick: () => copy(area.value) }),
+        el('button', { class: 'btn ghost', text: 'Select all', onclick: () => { area.focus(); area.select(); } })
+      ])
+    ]),
+    width: 760
+  });
 }
 
 /** Pick who sits on this inbound. Moving nobody's subId, nobody loses a link. */
