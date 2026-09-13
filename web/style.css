@@ -192,7 +192,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
   border-radius: var(--radius);
   padding: 18px;
   box-shadow: var(--shadow);
-  backdrop-filter: blur(10px);
+  /* no backdrop-filter here: a card sits on a smooth gradient, so blurring it
+     changes almost nothing on screen and costs one compositor layer per card.
+     A desktop page carries a dozen of them, which is where the lag came from.
+     The glass is kept for the floating chrome, where it reads against content. */
 }
 
 .grid { display: grid; gap: 16px; }
@@ -239,6 +242,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 .chip {
   display: inline-flex; align-items: center; gap: 6px;
+  /* a squeezed chip used to break its label over two lines and grow the
+     header to twice its height; it gives ground to the page title instead */
+  white-space: nowrap; flex: 0 0 auto;
   padding: 3px 10px; border-radius: 99px;
   font-size: 11.5px; font-weight: 600;
   background: var(--surface-2); border: 1px solid var(--border);
@@ -449,6 +455,10 @@ td .row-actions { display: flex; gap: 6px; }
   font-size: 11.5px; background: var(--bg); border: 1px solid var(--border);
   border-radius: var(--radius-sm); padding: 11px; color: var(--muted); max-height: 120px; overflow-y: auto;
 }
+/* the refresh mark turns while the action it started is still running */
+.spin { animation: spin 1s linear infinite; transform-origin: 50% 50%; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 .skeleton { background: linear-gradient(90deg, var(--surface) 25%, var(--surface-2) 50%, var(--surface) 75%); background-size: 200% 100%; animation: shimmer 1.3s infinite; border-radius: 8px; height: 14px; }
 @keyframes shimmer { to { background-position: -200% 0; } }
 
@@ -463,9 +473,13 @@ td .row-actions { display: flex; gap: 6px; }
   .form-grid { grid-template-columns: 1fr; }
   .grid.stats { grid-template-columns: 1fr; }
   .qr-box img { width: min(230px, 68vw); height: auto; }
-  /* the topbar fits on one line once the button keeps only its icon */
-  #restartXray span:last-child { display: none; }
-  #restartXray { padding: 9px 11px; }
+  /* one line on a phone: both keys drop their labels and the title gives way
+     before anything wraps onto a second row */
+  #restartXray span:last-child, #updateChip span { display: none; }
+  #restartXray { padding: 8px; width: 34px; height: 34px; }
+  #updateChip { padding: 7px; gap: 0; }
+  .topbar h1 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .topbar { flex-wrap: nowrap; }
   .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 35; }
 }
 

@@ -241,9 +241,10 @@ const PAGES = [
   { id: 'clients', label: 'Clients', icon: 'clients' },
   { id: 'outbounds', label: 'Outbounds', icon: 'outbounds' },
   { id: 'routing', label: 'Routing', icon: 'routing' },
-  { id: 'settings', label: 'Settings', icon: 'settings' },
   { id: 'logs', label: 'Logs', icon: 'logs' },
-  { id: 'account', label: 'Account', icon: 'account' }
+  { id: 'account', label: 'Account', icon: 'account' },
+  // settings sits at the end of the bar, the way a settings key usually does
+  { id: 'settings', label: 'Settings', icon: 'settings' }
 ];
 
 const state = {
@@ -295,15 +296,31 @@ function render() {
 
 /* ----------------------------- page: dashboard --------------------------- */
 
-function statCard(label, value, sub, barPercent, barKind) {
-  return el('div', { class: 'card stat' }, [
-    el('div', { class: 'label', text: label }),
-    el('div', { class: 'value', text: value }),
-    sub ? el('div', { class: 'sub', text: sub }) : null,
-    barPercent !== undefined
-      ? el('div', { class: `bar ${barKind || ''}`, html: `<i style="width:${Math.min(100, barPercent)}%"></i>` })
-      : null
+/*
+ * A stat card built once and then written to. The dashboard refreshes every
+ * eight seconds and used to rebuild all ten cards each time, which reflowed
+ * the page under the reader's cursor; now only the text that changed moves.
+ */
+function statCard(label, withBar) {
+  const value = el('div', { class: 'value' });
+  const sub = el('div', { class: 'sub' });
+  const bar = withBar ? el('div', { class: 'bar', html: '<i></i>' }) : null;
+  const node = el('div', { class: 'card stat' }, [
+    el('div', { class: 'label', text: label }), value, sub, bar
   ]);
+  return {
+    node,
+    set(nextValue, nextSub, percent, kind) {
+      if (value.textContent !== nextValue) value.textContent = nextValue;
+      const subText = nextSub || '';
+      if (sub.textContent !== subText) sub.textContent = subText;
+      if (!bar) return;
+      const width = `${Math.min(100, percent || 0)}%`;
+      const cls = `bar ${kind || ''}`.trim();
+      if (bar.className !== cls) bar.className = cls;
+      if (bar.firstChild.style.width !== width) bar.firstChild.style.width = width;
+    }
+  };
 }
 
 async function renderDashboard(view) {
@@ -311,63 +328,80 @@ async function renderDashboard(view) {
   const info = el('div', { class: 'grid two', style: 'margin-top:16px' });
   view.append(grid, info);
 
+  const stats = {
+    cpu: statCard('CPU', true),
+    memory: statCard('Memory', true),
+    disk: statCard('Disk', true),
+    network: statCard('Network'),
+    active: statCard('Active clients'),
+    inbounds: statCard('Inbounds'),
+    traffic: statCard('Total traffic'),
+    uptime: statCard('Uptime')
+  };
+  grid.append(...Object.values(stats).map((card) => card.node));
+
+  const xrayState = el('span', { class: 'chip' });
+  const xrayVersion = el('div', { class: 'muted' });
+  const restart = el('button', { class: 'btn', html: `${icon('refresh')} Restart` });
+  restart.onclick = () => xrayAction('restart', restart);
+  const stop = el('button', { class: 'btn', html: `${icon('power')} Stop` });
+  stop.onclick = () => xrayAction('stop', stop);
+  const start = el('button', { class: 'btn', html: `${icon('power')} Start` });
+  start.onclick = () => xrayAction('start', start);
+
+  const serverLines = ['hostname', 'domain', 'load', 'counts', 'clients'].reduce((acc, key) => {
+    acc[key] = el('div');
+    return acc;
+  }, {});
+
+  info.append(
+    el('div', { class: 'card' }, [
+      el('div', { class: 'between', style: 'margin-bottom:14px' }, [
+        el('strong', { text: 'Xray-core' }), xrayState
+      ]),
+      xrayVersion,
+      el('div', { class: 'row', style: 'margin-top:16px' }, [restart, stop, start])
+    ]),
+    el('div', { class: 'card' }, [
+      el('strong', { text: 'Server' }),
+      el('div', { class: 'muted', style: 'margin-top:12px;line-height:2' }, Object.values(serverLines))
+    ])
+  );
+
+  const write = (node, text) => { if (node.textContent !== text) node.textContent = text; };
+
   const paint = async () => {
     let status;
     try { status = await api.get('/status'); } catch (_) { return; }
     const s = status.system;
 
-    grid.innerHTML = '';
-    grid.append(
-      statCard('CPU', `${s.cpu.percent}%`, `${s.cpu.cores} cores`, s.cpu.percent,
-        s.cpu.percent > 85 ? 'danger' : s.cpu.percent > 60 ? 'warn' : ''),
-      statCard('Memory', `${s.memory.percent}%`, `${bytes(s.memory.used)} of ${bytes(s.memory.total)}`,
-        s.memory.percent, s.memory.percent > 85 ? 'danger' : s.memory.percent > 60 ? 'warn' : ''),
-      statCard('Disk', `${s.disk.percent}%`, `${bytes(s.disk.used)} of ${bytes(s.disk.total)}`,
-        s.disk.percent, s.disk.percent > 85 ? 'danger' : ''),
-      statCard('Network', `${bytes(s.network.speed.rx)}/s ↓`, `${bytes(s.network.speed.tx)}/s ↑`),
-      statCard('Active clients', String(status.counts.clientsActive), `of ${status.counts.clients} total`),
-      statCard('Inbounds', String(status.counts.inboundsEnabled), `of ${status.counts.inbounds} total`),
-      statCard('Total traffic', bytes(status.traffic.up + status.traffic.down),
-        `${bytes(status.traffic.down)} ↓ · ${bytes(status.traffic.up)} ↑`),
-      statCard('Uptime', duration(s.uptime), s.platform)
-    );
+    stats.cpu.set(`${s.cpu.percent}%`, `${s.cpu.cores} cores`, s.cpu.percent,
+      s.cpu.percent > 85 ? 'danger' : s.cpu.percent > 60 ? 'warn' : '');
+    stats.memory.set(`${s.memory.percent}%`, `${bytes(s.memory.used)} of ${bytes(s.memory.total)}`,
+      s.memory.percent, s.memory.percent > 85 ? 'danger' : s.memory.percent > 60 ? 'warn' : '');
+    stats.disk.set(`${s.disk.percent}%`, `${bytes(s.disk.used)} of ${bytes(s.disk.total)}`,
+      s.disk.percent, s.disk.percent > 85 ? 'danger' : '');
+    stats.network.set(`${bytes(s.network.speed.rx)}/s \u2193`, `${bytes(s.network.speed.tx)}/s \u2191`);
+    stats.active.set(String(status.counts.clientsActive), `of ${status.counts.clients} total`);
+    stats.inbounds.set(String(status.counts.inboundsEnabled), `of ${status.counts.inbounds} total`);
+    stats.traffic.set(bytes(status.traffic.up + status.traffic.down),
+      `${bytes(status.traffic.down)} \u2193 \u00b7 ${bytes(status.traffic.up)} \u2191`);
+    stats.uptime.set(duration(s.uptime), s.platform);
 
-    info.innerHTML = '';
-    info.append(
-      el('div', { class: 'card' }, [
-        el('div', { class: 'between', style: 'margin-bottom:14px' }, [
-          el('strong', { text: 'Xray-core' }),
-          el('span', {
-            class: `chip ${status.xray.running ? 'ok' : 'danger'}`,
-            html: `<i></i>${status.xray.running ? 'Running' : 'Stopped'}`
-          })
-        ]),
-        el('div', { class: 'muted', text: status.xray.version || 'version unknown' }),
-        el('div', { class: 'row', style: 'margin-top:16px' }, [
-          el('button', { class: 'btn', html: `${icon('refresh')} Restart`, onclick: () => xrayAction('restart') }),
-          el('button', { class: 'btn', html: `${icon('power')} Stop`, onclick: () => xrayAction('stop') }),
-          el('button', { class: 'btn', html: `${icon('power')} Start`, onclick: () => xrayAction('start') })
-        ])
-      ]),
-      el('div', { class: 'card' }, [
-        el('strong', { text: 'Server' }),
-        el('div', { class: 'muted', style: 'margin-top:12px;line-height:2' }, [
-          el('div', { text: `Hostname: ${s.hostname}` }),
-          el('div', { text: `Panel domain: ${status.settings.domain || 'not set'}` }),
-          el('div', { text: `Load average: ${s.loadavg.map((n) => n.toFixed(2)).join(' / ')}` }),
-          el('div', { text: `Outbounds: ${status.counts.outbounds} · Routing rules: ${status.counts.routingRules}` }),
-          el('div', { text: `Expired: ${status.counts.clientsExpired} · Out of quota: ${status.counts.clientsDepleted}` })
-        ])
-      ])
-    );
+    const running = status.xray.running;
+    const stateClass = `chip ${running ? 'ok' : 'danger'}`;
+    if (xrayState.className !== stateClass) xrayState.className = stateClass;
+    const stateHtml = `<i></i>${running ? 'Running' : 'Stopped'}`;
+    if (xrayState.innerHTML !== stateHtml) xrayState.innerHTML = stateHtml;
+    write(xrayVersion, status.xray.version || 'version unknown');
 
-    const chip = document.getElementById('xrayChip');
-    chip.className = `chip ${status.xray.running ? 'ok' : 'danger'}`;
-    chip.innerHTML = `<i></i><span>Xray ${status.xray.running ? 'up' : 'down'}</span>`;
-    // keep just "Xray x.y.z"; the full build string is too long for the chip
-    const shortVersion = (status.xray.version || '').split('(')[0].trim();
-    const chipTitle = document.getElementById('xrayChip');
-    if (chipTitle) chipTitle.title = shortVersion || 'Xray-core';
+    write(serverLines.hostname, `Hostname: ${s.hostname}`);
+    write(serverLines.domain, `Panel domain: ${status.settings.domain || 'not set'}`);
+    write(serverLines.load, `Load average: ${s.loadavg.map((n) => n.toFixed(2)).join(' / ')}`);
+    write(serverLines.counts, `Outbounds: ${status.counts.outbounds} \u00b7 Routing rules: ${status.counts.routingRules}`);
+    write(serverLines.clients, `Expired: ${status.counts.clientsExpired} \u00b7 Out of quota: ${status.counts.clientsDepleted}`);
+
+    paintXrayChip(status.xray);
   };
 
   await paint();
@@ -375,13 +409,43 @@ async function renderDashboard(view) {
   state.timer = setInterval(() => { if (!document.hidden) paint(); }, 8000);
 }
 
-async function xrayAction(action) {
+/** The header chip, from a status payload the caller already has. */
+function paintXrayChip(xray) {
+  const chip = document.getElementById('xrayChip');
+  if (!chip) return;
+  const cls = `chip ${xray.running ? 'ok' : 'danger'}`;
+  if (chip.className !== cls) chip.className = cls;
+  const html = `<i></i><span>Xray ${xray.running ? 'up' : 'down'}</span>`;
+  if (chip.innerHTML !== html) chip.innerHTML = html;
+  // keep just "Xray x.y.z"; the full build string is too long for the chip
+  chip.title = (xray.version || '').split('(')[0].trim() || 'Xray-core';
+}
+
+/** Re-read the Xray state for the header, after an action changed it. */
+async function refreshXrayChip() {
+  try { paintXrayChip((await api.get('/status')).xray); } catch (_) { /* leave the chip as it is */ }
+}
+
+const XRAY_DONE = { restart: 'Xray restarted', stop: 'Xray stopped', start: 'Xray started' };
+
+/**
+ * Restarting takes a moment and used to give no sign it was working, which
+ * read as a dead button: the icon spins while it runs and the header chip is
+ * re-read straight afterwards, so the result is visible without a reload.
+ */
+async function xrayAction(action, button) {
+  const mark = button && button.querySelector('svg');
+  if (button) button.disabled = true;
+  if (mark) mark.classList.add('spin');
   try {
     await api.post(`/xray/${action}`);
-    toast('Done');
+    toast(XRAY_DONE[action] || 'Done');
   } catch (err) {
     toast(err.message, 'err');
   }
+  await refreshXrayChip();
+  if (mark) mark.classList.remove('spin');
+  if (button) button.disabled = false;
 }
 
 /** Shared table scaffolding: header row, loading state, empty state. */
@@ -2043,18 +2107,27 @@ function liquidLens(container, selector, axis, onPick) {
   let last = 0;
   let lensSize = 0;
   let raf = 0;
+  /*
+   * Item positions cannot change while a finger is down, so they are measured
+   * once on press. Reading offsetLeft inside the animation frame - right after
+   * writing the thumb's transform - forced a synchronous layout of the whole
+   * bar on every frame, which is what made dragging stutter on a desktop.
+   */
+  let held = null;
 
   const put = (pos, s) => {
     thumb.style.setProperty(vertical ? '--y' : '--x', `${pos.toFixed(2)}px`);
     if (s != null) thumb.style.setProperty(vertical ? '--h' : '--w', `${s.toFixed(2)}px`);
   };
 
+  const measure = () => items().map((item) => ({ item, start: start(item), size: size(item) }));
+
   const nearest = (pos) => {
-    const list = items();
+    const list = held || measure();
     let best = 0;
     let dist = Infinity;
-    list.forEach((item, i) => {
-      const d = Math.abs(centre(item) - pos);
+    list.forEach((entry, i) => {
+      const d = Math.abs(entry.start + entry.size / 2 - pos);
       if (d < dist) { dist = d; best = i; }
     });
     return best;
@@ -2092,7 +2165,7 @@ function liquidLens(container, selector, axis, onPick) {
     thumb.style.setProperty('--sy', (vertical ? 1 + stretch : 1 - stretch * 0.55).toFixed(3));
     put(cur);
     const under = nearest(cur + lensSize / 2);
-    items().forEach((item, i) => item.classList.toggle('under', i === under));
+    (held || measure()).forEach((entry, i) => entry.item.classList.toggle('under', i === under));
     if (pressing) raf = requestAnimationFrame(frame);
   }
 
@@ -2105,6 +2178,7 @@ function liquidLens(container, selector, axis, onPick) {
 
     pressing = true;
     dragging = false;
+    held = measure();
     pointerId = event.pointerId;
     try { container.setPointerCapture(event.pointerId); } catch (_) { /* older browsers */ }
 
@@ -2133,11 +2207,12 @@ function liquidLens(container, selector, axis, onPick) {
       raf = requestAnimationFrame(frame);
     }
     if (dragging) {
-      const list = items();
+      const list = held || measure();
       // clamp the lens CENTRE, not its edge: it is wider than an item, so
       // clamping the edge stops it short of the last one
-      const min = centre(list[0]);
-      const max = centre(list[list.length - 1]);
+      const min = list[0].start + list[0].size / 2;
+      const last2 = list[list.length - 1];
+      const max = last2.start + last2.size / 2;
       target = Math.max(min, Math.min(max, toLocal(event))) - lensSize / 2;
       event.preventDefault();
     }
@@ -2149,6 +2224,7 @@ function liquidLens(container, selector, axis, onPick) {
     cancelAnimationFrame(raf);
 
     const list = items();
+    held = null;
     let idx;
     if (dragging) {
       idx = nearest(cur + lensSize / 2);
@@ -2232,10 +2308,8 @@ function boot() {
     location.href = `${BASE}login`;
   });
 
-  document.getElementById('restartXray').addEventListener('click', async function () {
-    this.disabled = true;
-    await xrayAction('restart');
-    this.disabled = false;
+  document.getElementById('restartXray').addEventListener('click', function () {
+    xrayAction('restart', this);
   });
 
   window.addEventListener('hashchange', () => {
