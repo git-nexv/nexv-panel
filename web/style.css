@@ -501,8 +501,18 @@ td .row-actions { display: flex; gap: 6px; }
   width: 14px; height: 14px; color: var(--faint);
   transition: opacity .3s var(--glide);
 }
-.ts-sun { left: 7px; }
-.ts-moon { right: 7px; }
+/*
+ * These hold an icon whose size the hydrator picks, and a bare span puts it on
+ * the text baseline - which left the sun and moon 2px low and the knob's mark
+ * 3.5px high. Centring the box and letting the mark fill it pins all three.
+ */
+.ts-mark, .ts-face { display: grid; place-items: center; line-height: 0; }
+.ts-face { width: 14px; height: 14px; }
+.ts-mark svg, .ts-face svg { display: block; width: 100%; height: 100%; }
+/* the marks sit absolutely inside the padding box, so 6px from the edge puts
+   each one exactly in the middle of the half the knob is not covering */
+.ts-sun { left: 6px; }
+.ts-moon { right: 6px; }
 .ts-knob {
   position: absolute; top: 2px; left: 2px;
   width: 24px; height: 24px; border-radius: 999px;
