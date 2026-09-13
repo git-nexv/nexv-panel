@@ -8,6 +8,7 @@ const db = require('../db');
 const auth = require('../auth');
 const xray = require('../xray');
 const links = require('../links');
+const transfer = require('../transfer');
 const system = require('../system');
 
 const router = express.Router();
@@ -345,6 +346,114 @@ router.get('/reality-keys', async (req, res) => {
   } catch (err) {
     bad(res, `xray binary unavailable: ${err.message}`, 500);
   }
+});
+
+/* ------------------------- import / export ------------------------------ */
+
+/** Every share link for one inbound, newest client last. */
+function inboundLinks(inb) {
+  return db.data.clients
+    .filter((c) => c.inboundId === inb.id)
+    .map((c) => links.buildLink(inb, c))
+    .filter(Boolean);
+}
+
+router.get('/inbounds/:id/export', (req, res) => {
+  const inb = db.data.inbounds.find((i) => i.id === req.params.id);
+  if (!inb) return bad(res, 'inbound not found', 404);
+  const clients = db.data.clients.filter((c) => c.inboundId === inb.id);
+  const name = (inb.remark || 'inbound').replace(/[^\w.-]+/g, '-').slice(0, 40) || 'inbound';
+  res.setHeader('Content-Disposition', `attachment; filename="${name}-${inb.port}.json"`);
+  res.setHeader('Content-Type', 'application/json');
+  res.send(JSON.stringify(transfer.exportInbound(inb, clients), null, 2));
+});
+
+router.post('/inbounds/import', async (req, res) => {
+  let parsed;
+  try {
+    parsed = transfer.importInbound(req.body);
+  } catch (err) {
+    return bad(res, err.message);
+  }
+  const { inbound, clients } = parsed;
+
+  if (!inbound.port || inbound.port < 1 || inbound.port > 65535) {
+    return bad(res, 'the file has no usable port');
+  }
+  const clash = portConflict(inbound.port, inbound.listen, null);
+  if (clash) return bad(res, clash);
+
+  // a client name has to stay unique across the panel, and an import that
+  // renames people silently would break the links they already hold
+  const taken = new Set(db.data.clients.map((c) => c.email));
+  const collisions = clients.filter((c) => taken.has(c.email)).map((c) => c.email);
+  if (collisions.length) {
+    return bad(res, `these client names already exist: ${collisions.slice(0, 5).join(', ')}${collisions.length > 5 ? '…' : ''}`);
+  }
+
+  inbound.id = db.id();
+  inbound.tag = `inbound-${inbound.port}-${inbound.id.slice(0, 4)}`;
+  inbound.createdAt = Date.now();
+  const stored = clients.map((c) => Object.assign(c, {
+    id: db.id(),
+    inboundId: inbound.id,
+    createdAt: Date.now()
+  }));
+
+  db.data.inbounds.push(inbound);
+  db.data.clients.push(...stored);
+  db.saveNow();
+
+  const applied = await xray.apply();
+  if (!applied.ok) {
+    db.data.inbounds = db.data.inbounds.filter((i) => i.id !== inbound.id);
+    db.data.clients = db.data.clients.filter((c) => c.inboundId !== inbound.id);
+    db.saveNow();
+    await xray.apply();
+    return bad(res, applied.error);
+  }
+  logEvent('inbound', `imported ${inbound.protocol} inbound on port ${inbound.port} with ${stored.length} client(s)`);
+  res.json({ ok: true, inbound, clients: stored.length });
+});
+
+/** Share links as plain text, for one inbound or for all of them. */
+router.get('/urls', (req, res) => {
+  const wanted = req.query.inboundId;
+  const list = db.data.inbounds
+    .filter((inb) => !wanted || inb.id === wanted)
+    .flatMap(inboundLinks);
+  res.type('text/plain').send(list.join('\n'));
+});
+
+/** Subscription URLs, one per client. */
+router.get('/sub-urls', (req, res) => {
+  const wanted = req.query.inboundId;
+  const seen = new Set();
+  const list = [];
+  for (const c of db.data.clients) {
+    if (wanted && c.inboundId !== wanted) continue;
+    if (!c.subId || seen.has(c.subId)) continue;
+    seen.add(c.subId);
+    list.push(`${c.email}: ${subUrl(c.subId)}`);
+  }
+  res.type('text/plain').send(list.join('\n'));
+});
+
+/** Zero the counters of every client of an inbound, or of all inbounds. */
+router.post('/inbounds/reset-traffic', async (req, res) => {
+  const wanted = req.body && req.body.inboundId;
+  let count = 0;
+  for (const c of db.data.clients) {
+    if (wanted && c.inboundId !== wanted) continue;
+    c.up = 0;
+    c.down = 0;
+    c.autoDisabled = false;
+    count += 1;
+  }
+  db.saveNow();
+  await xray.apply();
+  logEvent('client', `reset traffic for ${count} client(s)`);
+  res.json({ ok: true, count });
 });
 
 /* -------------------------------- clients ------------------------------- */

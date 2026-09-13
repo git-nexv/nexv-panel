@@ -154,6 +154,9 @@ const ICONS = {
   copy: '<path d="M8 4h10a2 2 0 0 1 2 2v10h-2V6H8V4ZM5 8h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2Z"/>',
   power: '<path d="M11 3h2v10h-2V3Zm5.4 2.6 1.4-1.4A9 9 0 1 1 6.2 4.2l1.4 1.4a7 7 0 1 0 8.8 0Z"/>',
   up: '<path d="m12 7 6 6-1.4 1.4L12 9.8l-4.6 4.6L6 13l6-6Z"/>',
+  more: '<path d="M12 8a2 2 0 1 1 2-2 2 2 0 0 1-2 2Zm0 6a2 2 0 1 1 2-2 2 2 0 0 1-2 2Zm0 6a2 2 0 1 1 2-2 2 2 0 0 1-2 2Z"/>',
+  download: '<path d="M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16l-5.7-5.7 1.4-1.4L11 12.2V3ZM5 19h14v2H5v-2Z"/>',
+  upload: '<path d="M11 21h2v-9.2l3.3 3.3 1.4-1.4L12 8l-5.7 5.7 1.4 1.4L11 11.8V21ZM5 3h14v2H5V3Z"/>',
   down: '<path d="m12 17-6-6 1.4-1.4L12 14.2l4.6-4.6L18 11l-6 6Z"/>',
   empty: '<path d="M4 6h16v12H4V6Zm2 2v8h12V8H6Z" opacity=".7"/>'
 };
@@ -410,17 +413,190 @@ function emptyState(wrap, message) {
 
 /* ----------------------------- page: inbounds ---------------------------- */
 
+/**
+ * A "..." button with a drop-down of actions, the way 3x-ui presents them.
+ * Items are {label, onClick, danger} or the string 'sep'.
+ */
+function popupMenu(items, opts = {}) {
+  const wrap = el('div', { class: 'menu-wrap' });
+  const panel = el('div', { class: 'popup', hidden: 'hidden' });
+
+  for (const item of items) {
+    if (item === 'sep') { panel.append(el('div', { class: 'sep' })); continue; }
+    if (!item) continue;
+    panel.append(el('button', {
+      type: 'button',
+      class: item.danger ? 'danger' : '',
+      text: item.label,
+      onclick: (event) => { event.stopPropagation(); close(); item.onClick(); }
+    }));
+  }
+
+  const close = () => {
+    panel.hidden = true;
+    panel.remove();
+    document.removeEventListener('click', onOutside, true);
+    document.removeEventListener('keydown', onKey);
+    window.removeEventListener('resize', place);
+    window.removeEventListener('scroll', place, true);
+  };
+  const onOutside = (event) => {
+    if (!wrap.contains(event.target) && !panel.contains(event.target)) close();
+  };
+  const onKey = (event) => { if (event.key === 'Escape') close(); };
+
+  /*
+   * The menu lives on <body>, not next to its button: a row menu sits inside
+   * the table's horizontal scroller, which would clip it to a sliver.
+   */
+  /* Re-anchor rather than close: on a phone the button often has to be
+     scrolled into view, and a menu that shuts on every scroll cannot be used. */
+  const place = () => {
+    const box = button.getBoundingClientRect();
+    const width = panel.offsetWidth;
+    const height = panel.offsetHeight;
+    const margin = 8;
+    let left = box.right - width;
+    let top = box.bottom + 6;
+    left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
+    if (top + height > window.innerHeight - margin) top = Math.max(margin, box.top - height - 6);
+    panel.style.position = 'fixed';
+    panel.style.left = `${left}px`;
+    panel.style.top = `${top}px`;
+    panel.style.insetInlineEnd = 'auto';
+  };
+
+  const open = () => {
+    document.querySelectorAll('.popup').forEach((p) => p.remove());
+    document.body.append(panel);
+    panel.hidden = false;
+    place();
+    document.addEventListener('click', onOutside, true);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+  };
+
+  const button = el('button', {
+    class: opts.class || 'btn icon ghost',
+    title: opts.title || 'More actions',
+    html: opts.html || icon('more'),
+    onclick: (event) => {
+      event.stopPropagation();
+      if (panel.isConnected && !panel.hidden) close();
+      else open();
+    }
+  });
+
+  wrap.append(button);
+  return wrap;
+}
+
+/** Show text in a dialog the admin can copy or save. */
+function textDialog(title, subtitle, text) {
+  const area = el('textarea', { readonly: 'readonly', style: 'min-height:280px' }, [text]);
+  const body = el('div', {}, [
+    area,
+    el('div', { class: 'row', style: 'margin-top:12px' }, [
+      el('button', { class: 'btn', html: `${icon('copy')} Copy all`, onclick: () => copy(text) }),
+      el('button', {
+        class: 'btn ghost', text: 'Select all',
+        onclick: () => { area.focus(); area.select(); }
+      })
+    ])
+  ]);
+  modal({ title, subtitle, body, width: 720 });
+}
+
+async function fetchText(path) {
+  const res = await fetch(`${BASE}api${path}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+
 async function loadProtocols() {
   if (!state.protocols) state.protocols = await api.get('/protocols');
   return state.protocols;
 }
 
-async function renderInbounds(view) {
-  const wrap = tableShell(view, {
-    intro: 'Each inbound is one port and one protocol that clients connect to.',
-    addLabel: 'New inbound',
-    onAdd: () => inboundForm(null)
+/** Read a .json file the admin picks, and hand back the parsed contents. */
+function pickJsonFile() {
+  return new Promise((resolve) => {
+    const picker = el('input', { type: 'file', accept: 'application/json,.json', class: 'hidden' });
+    picker.addEventListener('change', async () => {
+      const file = picker.files[0];
+      picker.remove();
+      if (!file) return resolve(null);
+      try {
+        resolve(JSON.parse(await file.text()));
+      } catch (_) {
+        toast('That file is not valid JSON', 'err');
+        resolve(null);
+      }
+    });
+    document.body.append(picker);
+    picker.click();
   });
+}
+
+async function importInboundFile() {
+  const data = await pickJsonFile();
+  if (!data) return;
+  try {
+    const result = await api.post('/inbounds/import', data);
+    toast(`Imported with ${result.clients} client(s)`);
+    render();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+async function showUrls(kind, inboundId) {
+  const query = inboundId ? `?inboundId=${encodeURIComponent(inboundId)}` : '';
+  try {
+    const text = await fetchText(`/${kind === 'sub' ? 'sub-urls' : 'urls'}${query}`);
+    if (!text.trim()) return toast('Nothing to export yet');
+    textDialog(
+      kind === 'sub' ? 'Subscription URLs' : 'Share links',
+      kind === 'sub'
+        ? 'One per client. The same links keep working after an import, as long as the domain matches.'
+        : 'One per client, ready to paste into a client app.',
+      text
+    );
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+async function resetTraffic(inboundId, label) {
+  confirmDialog(`Reset the traffic counters for ${label}?`, async () => {
+    try {
+      const result = await api.post('/inbounds/reset-traffic', inboundId ? { inboundId } : {});
+      toast(`Traffic reset for ${result.count} client(s)`);
+      render();
+    } catch (err) { toast(err.message, 'err'); }
+  });
+}
+
+async function renderInbounds(view) {
+  view.append(el('div', { class: 'between', style: 'margin-bottom:16px' }, [
+    el('div', { class: 'muted', text: 'Each inbound is one port and one protocol that clients connect to.' }),
+    el('div', { class: 'row' }, [
+      popupMenu([
+        { label: 'Import an inbound', onClick: importInboundFile },
+        'sep',
+        { label: 'Export all URLs', onClick: () => showUrls('links', null) },
+        { label: 'Export all URLs — subscription', onClick: () => showUrls('sub', null) },
+        'sep',
+        { label: 'Reset traffic for all inbounds', danger: true, onClick: () => resetTraffic(null, 'every inbound') }
+      ], { class: 'btn ghost', html: icon('menu'), title: 'Inbound actions' }),
+      el('button', { class: 'btn primary', html: `${icon('plus')} New inbound`, onclick: () => inboundForm(null) })
+    ])
+  ]));
+
+  const wrap = el('div', { class: 'table-wrap' });
+  wrap.innerHTML = '<div class="empty"><div class="skeleton" style="height:120px"></div></div>';
+  view.append(wrap);
 
   await loadProtocols();
   state.inbounds = await api.get('/inbounds');
@@ -453,16 +629,26 @@ async function renderInbounds(view) {
           class: 'btn icon ghost', title: 'Enable / disable', html: icon('power'),
           onclick: async () => { await api.post(`/inbounds/${inb.id}/toggle`); render(); }
         }),
-        el('button', {
-          class: 'btn icon danger', title: 'Delete', html: icon('trash'),
-          onclick: () => confirmDialog(`Delete inbound "${inb.remark}" and all of its clients?`, async () => {
-            try {
-              await api.del(`/inbounds/${inb.id}`);
-              toast('Inbound deleted');
-              render();
-            } catch (err) { toast(err.message, 'err'); }
-          })
-        })
+        popupMenu([
+          { label: 'Edit', onClick: () => inboundForm(inb) },
+          { label: 'Export inbound', onClick: () => { location.href = `${BASE}api/inbounds/${inb.id}/export`; } },
+          { label: 'Export all URLs', onClick: () => showUrls('links', inb.id) },
+          { label: 'Export all URLs — subscription', onClick: () => showUrls('sub', inb.id) },
+          'sep',
+          { label: 'Reset traffic', onClick: () => resetTraffic(inb.id, `"${inb.remark}"`) },
+          'sep',
+          {
+            label: 'Delete',
+            danger: true,
+            onClick: () => confirmDialog(`Delete inbound "${inb.remark}" and all of its clients?`, async () => {
+              try {
+                await api.del(`/inbounds/${inb.id}`);
+                toast('Inbound deleted');
+                render();
+              } catch (err) { toast(err.message, 'err'); }
+            })
+          }
+        ])
       ])])
     ]));
   }

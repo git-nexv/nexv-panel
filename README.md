@@ -139,6 +139,24 @@ empty reuses the certificate configured for Xray inbounds. If the files cannot
 be read the panel logs a warning and stays on HTTP rather than refusing to
 start, so a wrong path never locks you out.
 
+## Moving an inbound between panels
+
+An inbound exports as a single JSON file, clients included, in the shape 3x-ui
+writes — so a 3x-ui export imports here directly, and vice versa. Use the row
+menu on the Inbounds page for one inbound, or the toolbar menu to import.
+
+Each client's `subId` is carried across exactly. As long as the new server
+answers on the same domain, every client keeps its subscription URL and only
+has to refresh it to pick up the change — nobody has to be handed a new link.
+
+Quotas are converted on the way in and out (3x-ui counts `totalGB` in bytes),
+per-client traffic comes across from `clientStats`, and an import that would
+collide with an existing port or client name is refused rather than silently
+renaming anyone.
+
+The same menus export every share link or every subscription URL, for one
+inbound or for all of them, and reset traffic counters per inbound or panel-wide.
+
 ## Subscriptions
 
 Every client gets a subscription id. The subscription endpoint is served on its
