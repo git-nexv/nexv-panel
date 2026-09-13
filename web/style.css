@@ -673,7 +673,7 @@ td .row-actions { display: flex; gap: 6px; }
   bottom: calc(10px + env(safe-area-inset-bottom) + var(--dock-h, 52px) + 10px);
   display: flex; flex-direction: column;
   /* the rounded caps eat into the corners, so the end rows need clearance */
-  padding: 14px 4px;
+  padding: 12px 3px;
   border-radius: 999px;
   transform-origin: bottom right;
   opacity: 0;
@@ -687,7 +687,7 @@ td .row-actions { display: flex; gap: 6px; }
   transition: opacity .14s linear, transform .4s var(--spring);
 }
 .dock-more .dock-thumb {
-  top: 0; bottom: auto; left: 4px; right: 4px;
+  top: 0; bottom: auto; left: 3px; right: 3px;
   width: auto !important; height: var(--h, 44px);
   transform: translateY(var(--y, 0px)) scale(var(--sx, 1), var(--sy, 1));
   transition: transform .55s var(--spring), height .45s var(--spring), opacity .25s var(--glide),
@@ -710,13 +710,13 @@ td .row-actions { display: flex; gap: 6px; }
 .dock-row {
   position: relative; z-index: 2;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
-  padding: 11px 10px; width: 96px;
+  padding: 9px 6px; width: 72px;
   border: 0; border-radius: 999px; background: none; cursor: pointer;
   color: var(--muted); font: inherit; font-size: 9.5px; font-weight: 650; line-height: 1; text-align: center;
   transition: color .25s var(--glide), transform .45s var(--spring);
 }
 .dock-row span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-.dock-row svg { width: 19px; height: 19px; flex: 0 0 auto; transition: transform .35s var(--spring); }
+.dock-row svg { width: 18px; height: 18px; flex: 0 0 auto; transition: transform .35s var(--spring); }
 .dock-row.active, .dock-row.under { color: var(--brand); }
 .dock-row.under svg { transform: scale(1.14); }
 

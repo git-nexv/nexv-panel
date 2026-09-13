@@ -1875,7 +1875,7 @@ function buildDock() {
     ...rest.map((page) => ({ page: page.id, icon: page.icon, label: page.label })),
     {
       icon: 'theme',
-      label: 'Toggle theme',
+      label: 'Theme',
       run: () => applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light')
     },
     {
@@ -1890,7 +1890,7 @@ function buildDock() {
   for (const entry of rows) {
     const row = el('button', {
       class: 'dock-row', type: 'button', 'data-page': entry.page || '',
-      html: `${icon(entry.icon, 19)}<span>${entry.label}</span>`
+      html: `${icon(entry.icon, 18)}<span>${entry.label}</span>`
     });
     row.run = entry.run;
     more.append(row);
