@@ -14,6 +14,8 @@ const update = require('../update');
 const telegram = require('../telegram');
 const online = require('../online');
 const sitekind = require('../sitekind');
+const parselink = require('../parselink');
+const probe = require('../probe');
 const botai = require('../botai');
 const system = require('../system');
 
@@ -1170,6 +1172,17 @@ function normalizeOutbound(body, existing) {
     grpcServiceName: body.grpcServiceName ?? existing?.grpcServiceName ?? '',
     sni: body.sni ?? existing?.sni ?? '',
     fingerprint: body.fingerprint ?? existing?.fingerprint ?? 'chrome',
+    allowInsecure: body.allowInsecure ?? existing?.allowInsecure ?? false,
+    alpn: Array.isArray(body.alpn) ? body.alpn : (existing?.alpn ?? []),
+    xhttpMode: body.xhttpMode ?? existing?.xhttpMode ?? 'auto',
+    grpcMultiMode: body.grpcMultiMode ?? existing?.grpcMultiMode ?? false,
+    kcpSeed: body.kcpSeed ?? existing?.kcpSeed ?? '',
+    kcpHeader: body.kcpHeader ?? existing?.kcpHeader ?? 'none',
+    /* the peer's REALITY details - a public key and one short id, which is the
+       client's half of what the inbound on the other server holds */
+    realityPublicKey: body.realityPublicKey ?? existing?.realityPublicKey ?? '',
+    realityShortId: body.realityShortId ?? existing?.realityShortId ?? '',
+    realitySpiderX: body.realitySpiderX ?? existing?.realitySpiderX ?? '/',
     wgPrivateKey: body.wgPrivateKey ?? existing?.wgPrivateKey ?? '',
     wgPeerPublicKey: body.wgPeerPublicKey ?? existing?.wgPeerPublicKey ?? '',
     wgPreSharedKey: body.wgPreSharedKey ?? existing?.wgPreSharedKey ?? '',
@@ -1204,6 +1217,52 @@ function validateOutbound(out, selfId) {
 }
 
 router.get('/outbounds', (req, res) => res.json(db.data.outbounds));
+
+/**
+ * Read a config from the other server and turn it into an outbound here.
+ *
+ * Chaining two servers is the reason this exists: the far server hands out a
+ * link for one of its clients, and that link carries every field this end
+ * needs to dial it - including the REALITY public key and short id, which are
+ * the two things nobody gets right by hand.
+ */
+router.post('/outbounds/import', (req, res) => {
+  const text = String((req.body || {}).text || '');
+  let parsed;
+  try { parsed = parselink.parseShareLink(text); } catch (err) { return bad(res, err.message); }
+
+  /* a tag from the link's own name, made safe and made unique */
+  const base = (parsed.remark || `${parsed.protocol}-${parsed.address}`)
+    .replace(/[^A-Za-z0-9_.-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 24) || 'proxy';
+  let tag = base;
+  let n = 2;
+  while (knownTags().includes(tag)) tag = `${base}-${n++}`;
+
+  delete parsed.remark;
+  res.json(Object.assign({ tag }, parsed));
+});
+
+/**
+ * Try this outbound for real and say how long it took.
+ *
+ * The outbound is tested as it is stored, whether or not it has been saved,
+ * so a chain can be proved before it is committed to.
+ */
+router.post('/outbounds/test', async (req, res) => {
+  const body = req.body || {};
+  const stored = body.id ? (db.data.outbounds || []).find((o) => o.id === body.id) : null;
+  const draft = stored || normalizeOutbound(body, null);
+  if (!draft.protocol) return bad(res, 'nothing to test');
+
+  const rendered = xray.outboundConfig(draft);
+  if (!rendered) return bad(res, `the panel cannot build a ${draft.protocol} outbound`);
+
+  const result = await probe.testOutbound(rendered, { address: draft.address, port: draft.port });
+  if (result.ok) logEvent('outbound', `tested ${draft.tag}: ${result.ms} ms`);
+  res.json(result);
+});
 
 router.post('/outbounds', async (req, res) => {
   const out = normalizeOutbound(req.body || {}, null);
@@ -1311,6 +1370,13 @@ function validateRule(rule) {
 router.get('/routing', (req, res) => res.json({
   rules: db.data.routing,
   outboundTags: knownTags(),
+  /* the rule editor offers these rather than asking the admin to remember and
+     retype a tag that is generated - getting one character wrong there made a
+     rule that silently never matched */
+  inboundTags: (db.data.inbounds || []).map((i) => ({
+    tag: i.tag,
+    label: `${i.remark || i.tag} · ${i.protocol}:${i.port}`
+  })),
   defaultOutbound: db.settings.defaultOutbound || 'direct',
   domainStrategy: db.settings.domainStrategy || 'AsIs'
 }));

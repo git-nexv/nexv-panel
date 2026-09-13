@@ -1977,12 +1977,95 @@ function clientForm(existing) {
 
 /* ----------------------------- page: outbounds --------------------------- */
 
-async function renderOutbounds(view) {
-  const wrap = tableShell(view, {
-    intro: 'Where traffic leaves the server. "direct" and "blocked" are always available.',
-    addLabel: 'New outbound',
-    onAdd: () => outboundForm(null)
+/**
+ * Try one saved outbound and say so on the key itself.
+ *
+ * The answer is the round trip of a real request made through it, so a green
+ * number here means a chained server will work, not merely that the address
+ * answers a ping.
+ */
+function testKeyFor(out) {
+  const key = el('button', {
+    class: 'btn icon ghost', type: 'button', title: 'Test this outbound', html: icon('refresh'),
+    onclick: async () => {
+      key.disabled = true;
+      key.classList.remove('ok-key', 'bad-key');
+      key.innerHTML = '…';
+      try {
+        const answer = await api.post('/outbounds/test', { id: out.id });
+        if (answer.ok) {
+          key.classList.add('ok-key');
+          key.textContent = `${answer.ms}`;
+          key.title = `${answer.ms} ms to ${answer.through}`;
+          toast(`${out.tag}: ${answer.ms} ms`);
+        } else {
+          key.classList.add('bad-key');
+          key.innerHTML = icon('refresh');
+          key.title = answer.error;
+          toast(`${out.tag}: ${answer.error}`, 'err');
+        }
+      } catch (err) {
+        key.innerHTML = icon('refresh');
+        toast(err.message, 'err');
+      } finally {
+        key.disabled = false;
+        hydrateIcons(key);
+      }
+    }
   });
+  return key;
+}
+
+/**
+ * Build an outbound from a config the other server handed out.
+ *
+ * Pointing this server at another one is the whole reason: paste the link that
+ * server gives its clients and every field - address, id, transport, the
+ * REALITY key and short id - is filled in from it.
+ */
+function importOutbound() {
+  const area = el('textarea', {
+    style: 'min-height:120px',
+    placeholder: 'vless://… or vmess://… or trojan://… or ss://…, or an outbound in JSON'
+  });
+  const status = el('div', { class: 'hint', style: 'margin-top:10px' });
+
+  modal({
+    title: 'Add a server to chain to',
+    subtitle: 'Paste a config from the other server. Its clients\u2019 links carry everything this end needs.',
+    body: el('div', {}, [area, status]),
+    width: 620,
+    actions: [{
+      label: 'Read it',
+      kind: 'primary',
+      onClick: async (close) => {
+        try {
+          const parsed = await api.post('/outbounds/import', { text: area.value });
+          close();
+          /* straight into the editor rather than saved behind their back: the
+             tag and anything the link left out are theirs to look at first */
+          outboundForm(Object.assign({ enable: true }, parsed));
+          toast('Read the config — check it over and save');
+        } catch (err) {
+          status.className = 'hint bad-text';
+          status.textContent = err.message;
+        }
+      }
+    }]
+  });
+}
+
+async function renderOutbounds(view) {
+  view.append(el('div', { class: 'between', style: 'margin-bottom:16px' }, [
+    el('div', { class: 'muted', text: 'Where traffic leaves the server. "direct" and "blocked" are always available.' }),
+    el('div', { class: 'row' }, [
+      el('button', { class: 'btn', html: `${icon('download')} Chain to another server`, onclick: importOutbound }),
+      el('button', { class: 'btn primary', html: `${icon('plus')} New outbound`, onclick: () => outboundForm(null) })
+    ])
+  ]));
+  const wrap = el('div', { class: 'table-wrap' });
+  wrap.innerHTML = '<div class="empty"><div class="skeleton" style="height:120px"></div></div>';
+  view.append(wrap);
 
   await loadProtocols();
   state.outbounds = await api.get('/outbounds');
@@ -2013,6 +2096,7 @@ async function renderOutbounds(view) {
         html: `<i></i>${out.enable === false ? 'Disabled' : 'Enabled'}`
       })]),
       el('td', {}, [el('div', { class: 'row-actions' }, [
+        testKeyFor(out),
         el('button', { class: 'btn icon ghost', title: 'Edit', html: icon('edit'), onclick: () => outboundForm(out) }),
         el('button', {
           class: 'btn icon ghost', title: 'Enable / disable', html: icon('power'),
@@ -2063,16 +2147,40 @@ function outboundForm(existing) {
   const network = input('Transport', v.network || 'tcp', {
     options: [
       { value: 'tcp', label: 'TCP' }, { value: 'ws', label: 'WebSocket' },
-      { value: 'grpc', label: 'gRPC' }, { value: 'httpupgrade', label: 'HTTPUpgrade' }
+      { value: 'grpc', label: 'gRPC' }, { value: 'httpupgrade', label: 'HTTPUpgrade' },
+      { value: 'xhttp', label: 'XHTTP' }, { value: 'kcp', label: 'mKCP' }
     ]
   });
   const security = input('Security', v.security || 'none', {
-    options: [{ value: 'none', label: 'None' }, { value: 'tls', label: 'TLS' }]
+    options: [
+      { value: 'none', label: 'None' }, { value: 'tls', label: 'TLS' },
+      { value: 'reality', label: 'REALITY' }
+    ]
+  });
+  const xhttpMode = input('XHTTP mode', v.xhttpMode || 'auto', {
+    options: ['auto', 'packet-up', 'stream-up', 'stream-one']
   });
   const wsPath = input('Path', v.wsPath || '/');
   const wsHost = input('Host header', v.wsHost || '');
   const grpcService = input('gRPC service name', v.grpcServiceName || '');
-  const sni = input('SNI', v.sni || '');
+  const sni = input('SNI', v.sni || '', { hint: 'The name to ask the far server for' });
+  const fingerprint = input('Fingerprint', v.fingerprint || 'chrome', {
+    options: ['chrome', 'firefox', 'safari', 'ios', 'android', 'edge', 'random', 'randomized']
+  });
+  const allowInsecure = el('input', { type: 'checkbox' });
+  allowInsecure.checked = !!v.allowInsecure;
+  formField(form, 'Certificate', el('label', { class: 'switch' }, [
+    allowInsecure, el('span', { class: 'track' }),
+    el('span', { class: 'muted', text: 'Accept one that does not verify' })
+  ]));
+
+  /* the far server's REALITY details: its public key and one of its short ids.
+     The other server shows both on the inbound that this one dials. */
+  const realityPublicKey = input('REALITY public key', v.realityPublicKey || '', {
+    full: true, hint: 'From the other server\u2019s inbound - its public key, not the private one'
+  });
+  const realityShortId = input('REALITY short id', v.realityShortId || '');
+  const realitySpiderX = input('SpiderX', v.realitySpiderX || '/');
   const domainStrategy = input('Domain strategy', v.domainStrategy || 'AsIs', {
     options: ['AsIs', 'UseIP', 'UseIPv4', 'UseIPv6']
   });
@@ -2095,8 +2203,10 @@ function outboundForm(existing) {
     flow: [fieldOf(flow)],
     stream: [fieldOf(network), fieldOf(security)],
     ws: [fieldOf(wsPath), fieldOf(wsHost)],
+    xhttp: [fieldOf(xhttpMode)],
     grpc: [fieldOf(grpcService)],
-    tls: [fieldOf(sni)],
+    tls: [fieldOf(sni), fieldOf(fingerprint), allowInsecure.closest('.field')],
+    reality: [fieldOf(realityPublicKey), fieldOf(realityShortId), fieldOf(realitySpiderX)],
     freedom: [fieldOf(domainStrategy)],
     blackhole: [fieldOf(blackholeResponse)],
     wg: [fieldOf(wgPrivateKey), fieldOf(wgPeerPublicKey), fieldOf(wgAddress), fieldOf(wgMtu)]
@@ -2114,15 +2224,85 @@ function outboundForm(existing) {
     show(groups.ss, p === 'shadowsocks');
     show(groups.flow, p === 'vless');
     show(groups.stream, proxyLike);
-    show(groups.ws, proxyLike && (net === 'ws' || net === 'httpupgrade'));
+    show(groups.ws, proxyLike && (net === 'ws' || net === 'httpupgrade' || net === 'xhttp'));
+    show(groups.xhttp, proxyLike && net === 'xhttp');
     show(groups.grpc, proxyLike && net === 'grpc');
-    show(groups.tls, proxyLike && security.value === 'tls');
+    show(groups.tls, proxyLike && (security.value === 'tls' || security.value === 'reality'));
+    show(groups.reality, proxyLike && security.value === 'reality');
+    // a certificate that does not verify is a TLS idea; REALITY has no such thing
+    show([allowInsecure.closest('.field')], proxyLike && security.value === 'tls');
     show(groups.freedom, p === 'freedom');
     show(groups.blackhole, p === 'blackhole');
     show(groups.wg, p === 'wireguard');
   };
   [protocol, network, security].forEach((c) => c.addEventListener('change', sync));
   sync();
+
+  /* everything the form currently holds, whether or not it has been saved */
+  const draft = () => ({
+    tag: tag.value.trim() || 'probe',
+    protocol: protocol.value,
+    address: address.value.trim(),
+    port: Number(port.value),
+    uuid: uuid.value.trim(),
+    username: username.value.trim(),
+    password: password.value,
+    method: method.value,
+    flow: flow.value,
+    network: network.value,
+    security: security.value,
+    wsPath: wsPath.value,
+    wsHost: wsHost.value,
+    grpcServiceName: grpcService.value,
+    xhttpMode: xhttpMode.value,
+    sni: sni.value,
+    fingerprint: fingerprint.value,
+    allowInsecure: allowInsecure.checked,
+    realityPublicKey: realityPublicKey.value.trim(),
+    realityShortId: realityShortId.value.trim(),
+    realitySpiderX: realitySpiderX.value.trim() || '/',
+    domainStrategy: domainStrategy.value,
+    blackholeResponse: blackholeResponse.value,
+    wgPrivateKey: wgPrivateKey.value.trim(),
+    wgPeerPublicKey: wgPeerPublicKey.value.trim(),
+    wgAddress: wgAddress.value,
+    wgMtu: Number(wgMtu.value)
+  });
+
+  /*
+   * Try it for real before committing to it. The panel starts a throwaway Xray
+   * carrying only this outbound and fetches one URL through it, so what comes
+   * back is what a chained server would actually get - not a ping to an address
+   * that answers whether or not the proxy behind it works.
+   */
+  const result = el('div', { class: 'hint', style: 'margin-top:2px' });
+  const testKey = el('button', {
+    class: 'btn', type: 'button', html: `${icon('refresh')} Test this outbound`,
+    onclick: async () => {
+      testKey.disabled = true;
+      result.className = 'hint';
+      result.textContent = 'Trying it…';
+      try {
+        const answer = await api.post('/outbounds/test', draft());
+        if (answer.ok) {
+          result.className = 'hint ok-text';
+          result.textContent = `Works — ${answer.ms} ms to ${answer.through} (HTTP ${answer.status})`;
+        } else {
+          result.className = 'hint bad-text';
+          result.textContent = answer.error;
+        }
+      } catch (err) {
+        result.className = 'hint bad-text';
+        result.textContent = err.message;
+      } finally {
+        testKey.disabled = false;
+      }
+    }
+  });
+  form.append(el('div', { class: 'field full' }, [
+    el('div', { class: 'row' }, [testKey]),
+    result
+  ]));
 
   modal({
     title: existing ? 'Edit outbound' : 'New outbound',
@@ -2148,7 +2328,13 @@ function outboundForm(existing) {
           wsPath: wsPath.value,
           wsHost: wsHost.value,
           grpcServiceName: grpcService.value,
+          xhttpMode: xhttpMode.value,
           sni: sni.value,
+          fingerprint: fingerprint.value,
+          allowInsecure: allowInsecure.checked,
+          realityPublicKey: realityPublicKey.value.trim(),
+          realityShortId: realityShortId.value.trim(),
+          realitySpiderX: realitySpiderX.value.trim() || '/',
           domainStrategy: domainStrategy.value,
           blackholeResponse: blackholeResponse.value,
           wgPrivateKey: wgPrivateKey.value.trim(),
@@ -2257,7 +2443,7 @@ async function renderRouting(view) {
       el('td', {}, [el('div', { class: 'row-actions' }, [
         el('button', { class: 'btn icon ghost', title: 'Move up', html: icon('up'), onclick: () => move(index, -1) }),
         el('button', { class: 'btn icon ghost', title: 'Move down', html: icon('down'), onclick: () => move(index, 1) }),
-        el('button', { class: 'btn icon ghost', title: 'Edit', html: icon('edit'), onclick: () => routingForm(rule, data.outboundTags) }),
+        el('button', { class: 'btn icon ghost', title: 'Edit', html: icon('edit'), onclick: () => routingForm(rule, data.outboundTags, data.inboundTags) }),
         el('button', {
           class: 'btn icon ghost', title: 'Enable / disable', html: icon('power'),
           onclick: async () => { await api.post(`/routing/${rule.id}/toggle`); render(); }
@@ -2279,9 +2465,15 @@ async function renderRouting(view) {
   mountTable(wrap, table);
 }
 
-async function routingForm(existing, tags) {
+async function routingForm(existing, tags, inbounds) {
   const v = existing || {};
-  const outboundTags = tags || (await api.get('/routing')).outboundTags;
+  let outboundTags = tags;
+  let inboundTags = inbounds;
+  if (!outboundTags || !inboundTags) {
+    const data = await api.get('/routing');
+    outboundTags = outboundTags || data.outboundTags;
+    inboundTags = inboundTags || data.inboundTags;
+  }
   const form = el('div', { class: 'form-grid' });
 
   const name = formField(form, 'Rule name', el('input', { value: v.name || 'rule-1' }));
@@ -2295,7 +2487,26 @@ async function routingForm(existing, tags) {
   const network = formField(form, 'Network', selectOf([{ value: '', label: 'Any' }, 'tcp', 'udp', 'tcp,udp'], v.network || ''));
   const protocol = formField(form, 'Protocols', el('input', { value: v.protocol || '', placeholder: 'http, tls, bittorrent' }));
   const source = formField(form, 'Source IPs', el('input', { value: v.source || '' }), { full: true });
-  const inboundTag = formField(form, 'Inbound tags', el('input', { value: v.inboundTag || '' }), { full: true });
+  /*
+   * The inbounds themselves, not a tag to be remembered and retyped. A tag is
+   * generated - inbound-2053-a1b2 - so typing it by hand is how a rule ends up
+   * matching nothing at all with no sign of why.
+   */
+  const chosen = String(v.inboundTag || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const inboundPick = el('div', { class: 'chips' });
+  for (const entry of (inboundTags || [])) {
+    const box = el('input', { type: 'checkbox', value: entry.tag });
+    box.checked = chosen.includes(entry.tag);
+    inboundPick.append(el('label', { title: entry.tag }, [box, entry.label]));
+  }
+  const inboundTag = el('input', { value: v.inboundTag || '', placeholder: 'or type tags, comma separated' });
+  inboundPick.addEventListener('change', () => {
+    inboundTag.value = Array.from(inboundPick.querySelectorAll('input:checked')).map((i) => i.value).join(',');
+  });
+  formField(form, 'Only from these inbounds', el('div', {}, [
+    (inboundTags || []).length ? inboundPick : el('div', { class: 'hint', text: 'No inbounds yet.' }),
+    el('div', { style: 'margin-top:8px' }, [inboundTag])
+  ]), { full: true, hint: 'Leave everything unticked to match traffic from any inbound.' });
   const user = formField(form, 'Users', el('input', { value: v.user || '' }), { full: true, hint: 'Client emails as shown in the Xray config' });
 
   modal({

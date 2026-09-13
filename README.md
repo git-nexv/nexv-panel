@@ -136,8 +136,16 @@ corner still reads - `web/i18n.js` is one table and a line fixes one.
   across restarts. Those are connection counts, not bytes — Xray's access log
   records which host a connection went to and never how much passed through it,
   so no per-site traffic figure exists to show.
-- **Outbounds** — where traffic leaves: direct, blocked, or your own proxies.
+- **Outbounds** — where traffic leaves: direct, blocked, or another server.
+  - **Chain to another server**: paste a config link the far server hands its
+    clients (vless/vmess/trojan/ss, or an outbound as JSON) and every field is
+    read from it, including the REALITY public key and short id.
+  - **Test**: the panel starts a throwaway Xray carrying only that outbound and
+    fetches one URL through it, so the number you get is a real round trip
+    through the chain — not a ping to an address that answers either way.
 - **Routing** — ordered rules that pick an outbound per domain, IP, port or user.
+  Rules pick their inbounds from a list of the ones you have, rather than asking
+  you to retype a generated tag.
 - **Settings** — six tabs: general (domain, ports, secret path), config names,
   TLS files, backup and restore, the account, and the event log.
   - **Config names** is a template for what each config calls itself in the

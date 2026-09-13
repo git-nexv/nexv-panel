@@ -238,10 +238,63 @@ function inboundSettings(inb, clients) {
   }
 }
 
+/**
+ * The stream settings of an OUTBOUND, which are not the stream settings of an
+ * inbound wearing a different hat.
+ *
+ * This was the bug behind "outbounds do not work". An outbound was rendered
+ * with streamSettings(), the function that builds the listening side: for TLS
+ * it emitted a certificate list, and for REALITY the server's own private key,
+ * dest and serverNames. Xray wants the opposite of each - the name to ask for,
+ * the peer's public key, one short id - so an outbound pointed at a REALITY
+ * inbound on another server could not connect at all, whatever was typed into
+ * it. The two sides are written out separately now.
+ */
+function outboundStream(out) {
+  const net = out.network || 'tcp';
+  const security = out.security || 'none';
+  const s = { network: net, security };
+
+  if (net === 'ws') {
+    s.wsSettings = { path: out.wsPath || '/' };
+    if (out.wsHost) s.wsSettings.headers = { Host: out.wsHost };
+  } else if (net === 'httpupgrade') {
+    s.httpupgradeSettings = { path: out.wsPath || '/' };
+    if (out.wsHost) s.httpupgradeSettings.host = out.wsHost;
+  } else if (net === 'xhttp') {
+    s.xhttpSettings = { path: out.wsPath || '/', mode: out.xhttpMode || 'auto' };
+    if (out.wsHost) s.xhttpSettings.host = out.wsHost;
+  } else if (net === 'grpc') {
+    s.grpcSettings = { serviceName: out.grpcServiceName || '' };
+    if (out.grpcMultiMode) s.grpcSettings.multiMode = true;
+  } else if (net === 'kcp') {
+    s.kcpSettings = { header: { type: out.kcpHeader || 'none' } };
+    if (out.kcpSeed) s.kcpSettings.seed = out.kcpSeed;
+  }
+
+  if (security === 'tls') {
+    s.tlsSettings = {
+      serverName: out.sni || out.address || '',
+      fingerprint: out.fingerprint || 'chrome',
+      allowInsecure: !!out.allowInsecure
+    };
+    if (out.alpn && out.alpn.length) s.tlsSettings.alpn = out.alpn;
+  } else if (security === 'reality') {
+    s.realitySettings = {
+      serverName: out.sni || '',
+      fingerprint: out.fingerprint || 'chrome',
+      publicKey: out.realityPublicKey || '',
+      shortId: out.realityShortId || '',
+      spiderX: out.realitySpiderX || '/'
+    };
+  }
+  return s;
+}
+
 /** Render one stored outbound into the shape xray expects. */
 function outboundConfig(out) {
   const stream = () => {
-    const s = streamSettings(out);
+    const s = outboundStream(out);
     // an outbound with plain tcp and no security needs no streamSettings at all
     if (s.network === 'tcp' && s.security === 'none') return undefined;
     return s;
@@ -893,6 +946,7 @@ module.exports = {
   xrayVersion,
   XRAY_BIN, XRAY_CONFIG, XRAY_SERVICE, API_PORT,
   buildConfig, writeConfig, testConfig, apply, serviceStatus, repairCerts, messageOf, isOverIpLimit,
+  outboundConfig, outboundStream,
   INBOUND_PROTOCOLS, OUTBOUND_PROTOCOLS, CLIENT_PROTOCOLS, LINK_PROTOCOLS,
   restart, start, stop, collectTraffic, enforceLimits, ensureAccessLog, accessLogUsable, ACCESS_LOG, rateFor,
   clientTag, isExpired, isOverQuota, generateReality, generateECH, parseECH, run, serviceUser
