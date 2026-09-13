@@ -808,6 +808,34 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
 .chips label:has(input:checked) { border-color: var(--brand); color: var(--text); background: var(--surface-2); }
 .chips input { accent-color: var(--brand); margin: 0; }
 
+/* where a client's connections went: one bar split by kind, and its legend */
+/* a table in a dialog is a short one; the page's 720px floor would make it
+   scroll sideways inside a box that has room for it */
+.modal table { min-width: 0; }
+.modal .table-wrap { overflow-x: auto; }
+
+.kind-bar {
+  display: flex; height: 10px; border-radius: 99px; overflow: hidden;
+  background: var(--surface-2); border: 1px solid var(--border);
+}
+.kind-bar > i { display: block; height: 100%; min-width: 2px; }
+.kind-legend {
+  display: flex; flex-wrap: wrap; gap: 6px 14px;
+  margin-top: 10px; font-size: 12px;
+}
+.kind-item { display: inline-flex; align-items: center; gap: 6px; }
+.kind-dot { width: 8px; height: 8px; border-radius: 99px; flex: 0 0 auto; }
+
+/* eight tones that stay apart from each other in both themes */
+.k0 { background: #6482ff; }
+.k1 { background: #1fd08c; }
+.k2 { background: #ffad2e; }
+.k3 { background: #ff5169; }
+.k4 { background: #9165ff; }
+.k5 { background: #29b6d8; }
+.k6 { background: #e56ab8; }
+.k7 { background: #8a94ad; }
+
 /* the pieces a config name can be built from, each one a button that types
    itself into the template */
 .token-chips { gap: 6px; }

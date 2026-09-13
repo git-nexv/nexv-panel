@@ -186,6 +186,7 @@ const ICONS = {
   upload: '<path d="M11 21h2v-9.2l3.3 3.3 1.4-1.4L12 8l-5.7 5.7 1.4 1.4L11 11.8V21ZM5 3h14v2H5V3Z"/>',
   down: '<path d="m12 17-6-6 1.4-1.4L12 14.2l4.6-4.6L18 11l-6 6Z"/>',
   search: '<path d="M10 3a7 7 0 1 1-4.2 12.6l-3.1 3.1-1.4-1.4 3.1-3.1A7 7 0 0 1 10 3Zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10Z"/>',
+  activity: '<path d="M4 13h3l2.5 6 5-14 2.5 8h3v2h-4.5L13 9.5 9.5 20 6 15H4v-2Z"/>',
   empty: '<path d="M4 6h16v12H4V6Zm2 2v8h12V8H6Z" opacity=".7"/>'
 };
 
@@ -1542,6 +1543,10 @@ async function renderClients(view) {
       el('td', {}, [el('div', { class: 'row-actions' }, [
         shareable ? el('button', { class: 'btn icon ghost', title: 'QR code and links', html: icon('qr'), onclick: () => showClientLink(c) }) : null,
         shareable ? el('button', { class: 'btn icon ghost', title: 'Copy config link', html: icon('copy'), onclick: () => copy(c.link) }) : null,
+        el('button', {
+          class: 'btn icon ghost', title: 'Where its traffic goes',
+          html: icon('activity'), onclick: () => showClientActivity(c)
+        }),
         el('button', { class: 'btn icon ghost', title: 'Edit', html: icon('edit'), onclick: () => clientForm(c) }),
         onOffSwitch(c.enable !== false, async (on, revert) => {
           try {
@@ -1621,7 +1626,7 @@ function liveCell(client) {
           text: client.limitIp
             ? `${client.ipCount} / ${client.limitIp} IP`
             : `${client.ipCount} IP${client.ipCount > 1 ? 's' : ''}`,
-          onclick: () => showClientIps(client)
+          onclick: () => showClientActivity(client, 'Addresses')
         })
         : null
     ])
@@ -1629,11 +1634,25 @@ function liveCell(client) {
   return box;
 }
 
-/** Where this client is connecting from, and a way to start the list over. */
-function showClientIps(client) {
+/**
+ * What one client has been up to: the addresses it connects from, and where
+ * its traffic has been going.
+ *
+ * The Sites tab counts connections, not bytes, and says so plainly. Xray's
+ * access log records that a connection to a host was accepted and never how
+ * much passed through it, so no honest panel can put a gigabyte figure next to
+ * a hostname - and a figure guessed from connection counts would be worse than
+ * none, since one video stream is a single connection carrying gigabytes while
+ * a page of adverts is two hundred carrying nothing.
+ */
+function showClientActivity(client, startOn) {
+  const { wrap, panels } = tabbed(['Sites', 'Addresses']);
+  for (const panel of Object.values(panels)) panel.className = 'tab-panel';
+
+  /* ---- Addresses ---- */
   const limit = Number(client.limitIp || 0);
   const list = el('div', { class: 'attach-list' });
-  for (const entry of client.ips) {
+  for (const entry of (client.ips || [])) {
     list.append(el('div', { class: 'attach-row' }, [
       el('div', {}, [
         el('strong', { class: 'mono', text: entry.ip }),
@@ -1641,31 +1660,125 @@ function showClientIps(client) {
       ])
     ]));
   }
+  if (!(client.ips || []).length) list.append(el('div', { class: 'hint', text: 'No connection in the last five minutes.' }));
+
+  panels.Addresses.append(
+    el('div', { class: 'muted', style: 'margin-bottom:10px', text: limit
+      ? `Allowed at once: ${limit}. Seen in the last five minutes: ${(client.ips || []).length}.${
+        client.overIps ? ' Over the limit, so this client is cut off until the extra addresses go quiet.' : ''}`
+      : `Seen in the last five minutes: ${(client.ips || []).length}. No IP limit is set on this client.` }),
+    list,
+    el('div', { class: 'hint', style: 'margin-top:10px', text: 'Addresses are read from Xray’s access log and forgotten after five minutes of silence.' }),
+    el('div', { class: 'row', style: 'margin-top:12px' }, [
+      el('button', {
+        class: 'btn', text: 'Forget these addresses',
+        onclick: async (event) => {
+          try {
+            const result = await api.post(`/clients/${client.id}/forget-ips`, {});
+            toast(`Forgot ${result.cleared} address(es)`);
+            event.target.closest('.modal-backdrop').remove();
+            render();
+          } catch (err) { toast(err.message, 'err'); }
+        }
+      })
+    ])
+  );
+
+  /* ---- Sites ---- */
+  const sites = el('div');
+  sites.innerHTML = '<div class="empty"><div class="skeleton" style="height:120px"></div></div>';
+  panels.Sites.append(sites);
 
   modal({
-    title: `Addresses for ${client.email}`,
-    subtitle: limit
-      ? `Allowed at once: ${limit}. Seen in the last five minutes: ${client.ips.length}.${
-        client.overIps ? ' Over the limit, so this client is cut off until the extra addresses go quiet.' : ''}`
-      : `Seen in the last five minutes: ${client.ips.length}. No IP limit is set on this client.`,
-    body: el('div', {}, [
-      list,
-      el('div', { class: 'hint', style: 'margin-top:10px', text: 'Addresses are read from Xray\u2019s access log and forgotten after five minutes of silence.' })
-    ]),
-    width: 480,
-    actions: [{
-      label: 'Forget these',
-      onClick: async (close) => {
-        try {
-          const result = await api.post(`/clients/${client.id}/forget-ips`, {});
-          toast(`Forgot ${result.cleared} address(es)`);
-          close();
-          render();
-        } catch (err) { toast(err.message, 'err'); }
-      }
-    }]
+    title: `What ${client.email} is doing`,
+    body: wrap,
+    width: 660,
+    actions: false
   });
+  if (startOn === 'Addresses') wrap.querySelector('.tab:nth-child(2)').click();
+
+  drawSites(client, sites);
 }
+
+/** Fill the Sites tab once the server answers. */
+async function drawSites(client, into) {
+  let data;
+  try {
+    data = await api.get(`/clients/${client.id}/sites`);
+  } catch (err) {
+    into.innerHTML = '';
+    into.append(el('div', { class: 'hint', text: err.message }));
+    return;
+  }
+
+  into.innerHTML = '';
+  if (!data.hits) {
+    into.append(
+      el('div', { class: 'empty', html: `${icon('empty', 42)}<div>Nothing recorded yet.</div>` }),
+      el('div', { class: 'hint', text: data.sniffing
+        ? 'Destinations appear here as soon as this client connects to something.'
+        : 'Sniffing is off on this client’s inbound, so Xray only ever learns the address it dialled — turn it on in the inbound’s Sniffing tab to see names here.' })
+    );
+    return;
+  }
+
+  const used = bytes(data.used || 0);
+  into.append(el('div', { class: 'muted', style: 'margin-bottom:12px' }, [
+    `${used} used in total, across ${data.hits.toLocaleString()} connections to ${data.hostCount} hosts`,
+    data.since ? el('div', { class: 'faint', style: 'font-size:11.5px', text: `since ${fmtDate(data.since)}` }) : null
+  ]));
+
+  /* the kinds, as one bar plus a legend */
+  const bar = el('div', { class: 'kind-bar' });
+  const legend = el('div', { class: 'kind-legend' });
+  data.kinds.forEach((group, i) => {
+    const tone = `k${i % 8}`;
+    bar.append(el('i', { class: tone, style: `width:${group.share}%`, title: `${group.label}: ${group.share.toFixed(1)}%` }));
+    legend.append(el('div', { class: 'kind-item' }, [
+      el('span', { class: `kind-dot ${tone}` }),
+      el('span', { text: group.label }),
+      el('span', { class: 'faint', text: `${group.share.toFixed(share1(group.share))}%` })
+    ]));
+  });
+  into.append(bar, legend);
+
+  /* and the hosts behind them */
+  const wrap = el('div', { class: 'table-wrap', style: 'margin-top:14px' });
+  const table = el('table');
+  table.innerHTML = '<thead><tr><th>Host</th><th>Kind</th><th>Connections</th><th>Share</th></tr></thead>';
+  const tbody = el('tbody');
+  for (const site of data.sites) {
+    tbody.append(el('tr', {}, [
+      el('td', {}, [el('strong', { class: 'mono', style: 'font-size:12px', text: site.host })]),
+      el('td', { class: 'muted', text: site.kindLabel }),
+      el('td', { class: 'num', text: site.hits.toLocaleString() }),
+      el('td', { class: 'muted num', text: `${site.share.toFixed(share1(site.share))}%` })
+    ]));
+  }
+  table.append(tbody);
+  mountTable(wrap, table);
+  into.append(wrap);
+
+  into.append(
+    el('div', { class: 'hint', style: 'margin-top:12px', text: 'These are connection counts, not traffic. Xray records which host a connection went to but never how many bytes went through it, so there is no per-site figure to show — one video stream is a single connection carrying gigabytes, while a page of adverts is two hundred carrying almost nothing.' }),
+    data.sniffing ? null : el('div', { class: 'hint', style: 'margin-top:6px', text: 'Sniffing is off on this inbound, so some destinations are addresses rather than names.' }),
+    el('div', { class: 'row', style: 'margin-top:12px' }, [
+      el('button', {
+        class: 'btn', text: 'Clear this history',
+        onclick: async () => {
+          try {
+            const result = await api.post(`/clients/${client.id}/forget-sites`, {});
+            toast(`Cleared ${result.cleared} host(s)`);
+            drawSites(client, into);
+          } catch (err) { toast(err.message, 'err'); }
+        }
+      })
+    ])
+  );
+}
+
+/* a share under ten is worth a decimal; above it the decimal is noise */
+const share1 = (value) => (value < 10 ? 1 : 0);
 
 /**
  * The header's light/dark switch, reused wherever something is simply on or

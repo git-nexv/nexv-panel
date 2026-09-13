@@ -13,6 +13,7 @@ const version = require('../version');
 const update = require('../update');
 const telegram = require('../telegram');
 const online = require('../online');
+const sitekind = require('../sitekind');
 const botai = require('../botai');
 const system = require('../system');
 
@@ -1017,6 +1018,70 @@ router.post('/clients/:id/reset-traffic', async (req, res) => {
   await xray.apply();
   logEvent('client', `reset traffic for ${client.email}`);
   res.json(client);
+});
+
+/**
+ * What this client's traffic has been going to.
+ *
+ * The honest shape of it: connection counts per host, grouped into kinds, with
+ * a note about what is missing. Xray's access log never records how much went
+ * through a connection, so there is no byte figure to show per site and none
+ * is invented - the client's total is what the panel measures, and this is
+ * what that total was spent on.
+ */
+router.get('/clients/:id/sites', (req, res) => {
+  const d = db.data;
+  const client = d.clients.find((c) => c.id === req.params.id);
+  if (!client) return bad(res, 'client not found', 404);
+
+  const raw = online.sitesFor(xray.clientTag(client));
+  const labels = sitekind.labels();
+  const byKind = new Map();
+
+  const sites = raw.sites.map((site) => {
+    const kind = sitekind.kindOf(site.host);
+    const group = byKind.get(kind.kind) || { kind: kind.kind, label: kind.label, hits: 0, hosts: 0 };
+    group.hits += site.hits;
+    group.hosts++;
+    byKind.set(kind.kind, group);
+    return {
+      host: site.host,
+      kind: kind.kind,
+      kindLabel: kind.label,
+      hits: site.hits,
+      share: raw.hits ? (site.hits / raw.hits) * 100 : 0,
+      at: site.at
+    };
+  });
+
+  const kinds = [...byKind.values()]
+    .map((group) => Object.assign(group, { share: raw.hits ? (group.hits / raw.hits) * 100 : 0 }))
+    .sort((a, b) => b.hits - a.hits);
+
+  /* names come from sniffing; without it the log holds addresses and nothing
+     else, which is worth saying rather than leaving the admin to wonder */
+  const inbound = d.inbounds.find((i) => i.id === client.inboundId);
+  const sniffing = inbound ? inbound.sniffing !== false : true;
+
+  res.json({
+    sites: sites.slice(0, 120),
+    kinds,
+    labels,
+    hits: raw.hits,
+    hostCount: raw.sites.length,
+    since: raw.since,
+    sniffing,
+    used: (client.up || 0) + (client.down || 0)
+  });
+});
+
+/** Start this client's site history over. */
+router.post('/clients/:id/forget-sites', (req, res) => {
+  const client = db.data.clients.find((c) => c.id === req.params.id);
+  if (!client) return bad(res, 'client not found', 404);
+  const cleared = online.forgetSites(xray.clientTag(client));
+  logEvent('client', `cleared the site history for ${client.email} (${cleared} host(s))`);
+  res.json({ ok: true, cleared });
 });
 
 /** Start this client's address list over, after the admin has seen it. */
