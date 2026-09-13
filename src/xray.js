@@ -10,6 +10,7 @@ const db = require('./db');
 
 const XRAY_BIN = process.env.NEXV_XRAY_BIN || '/usr/local/bin/xray';
 const XRAY_CONFIG = process.env.NEXV_XRAY_CONFIG || '/usr/local/etc/xray/config.json';
+const NEXV_CLI = process.env.NEXV_CLI || '/usr/local/bin/nexv';
 const XRAY_SERVICE = process.env.NEXV_XRAY_SERVICE || 'xray';
 const API_PORT = 62789;
 
@@ -32,12 +33,39 @@ const CLIENT_PROTOCOLS = ['vless', 'vmess', 'trojan', 'shadowsocks', 'socks', 'h
 /** Protocols whose clients get a shareable subscription link. */
 const LINK_PROTOCOLS = ['vless', 'vmess', 'trojan', 'shadowsocks', 'socks'];
 
-function run(cmd, args, timeout = 15000) {
+function run(cmd, args, timeout = 15000, env = null) {
   return new Promise((resolve) => {
-    execFile(cmd, args, { timeout, encoding: 'utf8' }, (err, stdout, stderr) => {
-      resolve({ ok: !err, code: err ? (err.code ?? 1) : 0, stdout: stdout || '', stderr: stderr || (err ? err.message : '') });
+    execFile(cmd, args, { timeout, encoding: 'utf8', env: env || process.env }, (err, stdout, stderr) => {
+      resolve({
+        ok: !err,
+        code: err ? (err.code ?? 1) : 0,
+        stdout: stdout || '',
+        stderr: stderr || '',
+        failure: err ? err.message : ''
+      });
     });
   });
+}
+
+/**
+ * What actually went wrong, in words.
+ *
+ * Xray prints the reason a config was rejected on stdout, not stderr, so
+ * reporting stderr alone left the panel showing Node's own
+ * "Command failed: /usr/local/bin/xray run -test ..." - which says nothing at
+ * all. The reason is the line that names it, usually the last one.
+ */
+function messageOf(result) {
+  const lines = `${result.stdout || ''}\n${result.stderr || ''}`
+    .split('\n')
+    .map((line) => line.replace(/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} /, '').trim())
+    .filter(Boolean);
+
+  const blamed = lines.filter((line) => /failed|error|panic|denied|invalid|unable|refus/i.test(line));
+  const best = blamed[blamed.length - 1] || lines[lines.length - 1] || '';
+  // "Failed to start: main: failed to load config files: [...] > the real reason"
+  const detail = best.includes(' > ') ? best.slice(best.lastIndexOf(' > ') + 3).trim() : best;
+  return (detail || result.failure || '').slice(0, 300);
 }
 
 /** systemd is absent in some containers; degrade to config-only mode there. */
@@ -475,14 +503,32 @@ async function serviceUser() {
  * "permission denied", and the panel believes it wrote a good config.
  */
 async function testConfig() {
-  if (!fs.existsSync(XRAY_BIN)) return { ok: false, stderr: 'xray binary not found' };
+  if (!fs.existsSync(XRAY_BIN)) return { ok: false, stderr: '', message: 'xray binary not found' };
   const user = await serviceUser();
   if (user && user !== 'root' && process.getuid && process.getuid() === 0) {
     const asUser = await run('runuser', ['-u', user, '--', XRAY_BIN, 'run', '-test', '-config', XRAY_CONFIG]);
     // runuser may be missing on minimal images; fall back rather than block
-    if (asUser.ok || !/runuser|No such file/i.test(asUser.stderr)) return asUser;
+    if (asUser.ok || !/runuser|No such file/i.test(asUser.stderr)) {
+      return Object.assign(asUser, { message: asUser.ok ? '' : messageOf(asUser) });
+    }
   }
-  return run(XRAY_BIN, ['run', '-test', '-config', XRAY_CONFIG]);
+  const asRoot = await run(XRAY_BIN, ['run', '-test', '-config', XRAY_CONFIG]);
+  return Object.assign(asRoot, { message: asRoot.ok ? '' : messageOf(asRoot) });
+}
+
+/**
+ * Hand the certificate to the user xray runs as.
+ *
+ * A certificate under /etc/letsencrypt is root-only while xray runs as
+ * `nobody`, which is the most common reason it dies and stays dead. The nexv
+ * CLI already knows how to make a readable copy and repoint the inbounds at
+ * it, so the panel calls that rather than keeping a second copy of the logic.
+ */
+async function repairCerts() {
+  if (!fs.existsSync(NEXV_CLI)) return { ok: false, message: 'the nexv command is not installed' };
+  // nothing is there to answer its questions, so it must not ask any
+  const result = await run(NEXV_CLI, ['cert-fix'], 60000, { ...process.env, NEXV_ASSUME_YES: '1' });
+  return { ok: result.ok, message: result.ok ? '' : messageOf(result) };
 }
 
 /** Write the config, verify it parses, and reload the service. Rolls back on a bad config. */
@@ -491,10 +537,21 @@ async function apply() {
   if (fs.existsSync(XRAY_CONFIG)) previous = fs.readFileSync(XRAY_CONFIG, 'utf8');
 
   writeConfig();
-  const test = await testConfig();
+  let test = await testConfig();
+
+  // a certificate the service user cannot read is a permissions problem with a
+  // known fix, so fix it and try once more instead of handing back an error
+  if (!test.ok && /permission denied/i.test(test.message || '')) {
+    const repaired = await repairCerts();
+    if (repaired.ok) {
+      writeConfig();
+      test = await testConfig();
+    }
+  }
+
   if (!test.ok && fs.existsSync(XRAY_BIN)) {
     if (previous !== null) fs.writeFileSync(XRAY_CONFIG, previous, { mode: 0o600 });
-    return { ok: false, error: test.stderr.trim() || 'invalid xray config' };
+    return { ok: false, error: test.message || test.stderr.trim() || 'invalid xray config' };
   }
   if (!hasSystemd()) return { ok: true, warning: 'systemd unavailable; xray was not restarted' };
 
@@ -514,10 +571,10 @@ async function apply() {
     const detail = await lastServiceError();
     return {
       ok: false,
-      error: `${detail || restart.stderr.trim() || 'xray failed to start'}${recovered.ok ? ' (previous configuration restored)' : ''}`
+      error: `${detail || messageOf(restart) || 'xray failed to start'}${recovered.ok ? ' (previous configuration restored)' : ''}`
     };
   }
-  return { ok: false, error: (await lastServiceError()) || restart.stderr.trim() || 'failed to restart xray' };
+  return { ok: false, error: (await lastServiceError()) || messageOf(restart) || 'failed to restart xray' };
 }
 
 /** The journal line that actually says why xray refused to start. */
@@ -653,7 +710,7 @@ async function generateReality() {
 module.exports = {
   xrayVersion,
   XRAY_BIN, XRAY_CONFIG, XRAY_SERVICE, API_PORT,
-  buildConfig, writeConfig, testConfig, apply, serviceStatus,
+  buildConfig, writeConfig, testConfig, apply, serviceStatus, repairCerts, messageOf,
   INBOUND_PROTOCOLS, OUTBOUND_PROTOCOLS, CLIENT_PROTOCOLS, LINK_PROTOCOLS,
   restart, start, stop, collectTraffic, enforceLimits,
   clientTag, isExpired, isOverQuota, generateReality, generateECH, run, serviceUser

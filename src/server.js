@@ -281,6 +281,8 @@ async function bootstrap() {
   try { xray.writeConfig(); } catch (err) { console.error('[xray] cannot write config:', err.message); }
   // a bot that was running before the restart starts polling again on its own
   try { require('./telegram').resume(); } catch (err) { console.error('[bot] could not resume:', err.message); }
+  // and from here on xray gets itself picked up when it falls over
+  try { require('./watchdog').start(); } catch (err) { console.error('[watchdog] could not start:', err.message); }
 }
 
 /**

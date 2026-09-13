@@ -77,6 +77,8 @@ panel_port() {
 }
 
 confirm() {
+  # the panel runs the repairs itself, with nobody there to answer
+  [[ ${NEXV_ASSUME_YES:-0} == 1 ]] && return 0
   local answer
   read -rp "$1 [y/N]: " answer
   [[ ${answer,,} == y || ${answer,,} == yes ]]
@@ -782,7 +784,7 @@ act_xray_fix() {
         act_cert_fix
         return $?
       fi
-      echo "  Run it later with: nexv cert-fix"
+      echo "  The panel repairs this on its own within a minute."
     else
       echo "  Rewrite the config from the panel's own data:  nexv restart"
     fi
@@ -1061,8 +1063,6 @@ show_menu() {
   menu_rule
   menu_row 24 "Diagnose problems"
   menu_row 25 "Change the panel port"
-  menu_row 26 "Fix Xray when it will not start"
-  menu_row 27 "Fix certificate permissions"
   menu_end
   echo
   printf "  Panel state        : %s\n" "$(state_of "$SERVICE")"
@@ -1075,7 +1075,7 @@ run_menu() {
   while true; do
     show_menu
     local choice domain file port name repeat
-    read -rp "  Please enter your selection [0-27]: " choice
+    read -rp "  Please enter your selection [0-25]: " choice
     echo
     case "$choice" in
       0) exit 0 ;;
@@ -1115,8 +1115,6 @@ run_menu() {
       24) act_doctor; pause ;;
       25) read -rp "  New panel port (empty = just report): " port
           act_fix "$port"; pause ;;
-      26) act_xray_fix; pause ;;
-      27) act_cert_fix; pause ;;
       *) err "Please choose a number between 0 and 27"; pause ;;
     esac
   done
@@ -1146,8 +1144,6 @@ ${BOLD}nexv${RESET} - NexV Panel management
   nexv geo                      update geoip.dat and geosite.dat
   nexv doctor                   diagnose why the panel is not answering
   nexv fix [port]               change the panel port and verify it answers
-  nexv xray-fix                 explain why Xray will not start, and start it
-  nexv cert-fix                 make the certificate readable by the Xray user
   nexv uninstall                remove the panel
 HELP
 }
