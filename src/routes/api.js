@@ -12,6 +12,7 @@ const transfer = require('../transfer');
 const version = require('../version');
 const update = require('../update');
 const telegram = require('../telegram');
+const online = require('../online');
 const botai = require('../botai');
 const system = require('../system');
 
@@ -804,12 +805,20 @@ router.get('/clients', (req, res) => {
     : d.clients;
   res.json(list.map((c) => {
     const inb = d.inbounds.find((i) => i.id === c.inboundId);
+    const live = online.forTag(xray.clientTag(c));
+    const rate = xray.rateFor(c.id);
     return Object.assign({}, c, {
       inboundRemark: inb ? inb.remark : 'not attached',
       protocol: inb ? inb.protocol : '',
       expired: xray.isExpired(c),
       depleted: xray.isOverQuota(c),
-      link: inb ? links.buildLink(inb, c) : ''
+      link: inb ? links.buildLink(inb, c) : '',
+      // moving traffic right now counts as online even before a new connection
+      // shows up in the access log, which is only read every ten seconds
+      online: live.online || rate.up + rate.down > 0,
+      speed: { up: Math.round(rate.up), down: Math.round(rate.down) },
+      ips: live.ips,
+      ipCount: live.ips.length
     });
   }));
 });
@@ -904,6 +913,18 @@ router.post('/clients/:id/reset-traffic', async (req, res) => {
   logEvent('client', `reset traffic for ${client.email}`);
   res.json(client);
 });
+
+/** Start this client's address list over, after the admin has seen it. */
+router.post('/clients/:id/forget-ips', (req, res) => {
+  const client = db.data.clients.find((c) => c.id === req.params.id);
+  if (!client) return bad(res, 'client not found', 404);
+  const cleared = online.forget(xray.clientTag(client));
+  logEvent('client', `cleared ${cleared} recorded address(es) for ${client.email}`);
+  res.json({ ok: true, cleared });
+});
+
+/** Is the address tracking actually working? The Clients page says so. */
+router.get('/online/status', (req, res) => res.json(online.status()));
 
 router.get('/clients/:id/qrcode', async (req, res) => {
   const d = db.data;
@@ -1192,7 +1213,7 @@ router.get('/settings', (req, res) => {
 router.put('/settings', async (req, res) => {
   const allowed = ['panelPort', 'webBasePath', 'domain', 'subDomain', 'subPort', 'subPath',
     'tgBotToken', 'tgAdminId', 'theme', 'lang', 'certFile', 'keyFile', 'xrayLogLevel',
-    'blockTorrent', 'serverIP', 'trafficResetDay', 'defaultOutbound', 'domainStrategy',
+    'blockTorrent', 'serverIP', 'trafficResetDay', 'defaultOutbound', 'domainStrategy', 'trackIps',
     'subTitle', 'panelCertFile', 'panelKeyFile', 'httpRedirect'];
   // TLS material is read once when the listener is created
   const restartKeys = ['panelPort', 'panelCertFile', 'panelKeyFile', 'certFile', 'keyFile', 'httpRedirect'];

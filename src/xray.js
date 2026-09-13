@@ -11,6 +11,7 @@ const db = require('./db');
 const XRAY_BIN = process.env.NEXV_XRAY_BIN || '/usr/local/bin/xray';
 const XRAY_CONFIG = process.env.NEXV_XRAY_CONFIG || '/usr/local/etc/xray/config.json';
 const NEXV_CLI = process.env.NEXV_CLI || '/usr/local/bin/nexv';
+const ACCESS_LOG = process.env.NEXV_XRAY_ACCESS_LOG || '/var/log/xray/access.log';
 const XRAY_SERVICE = process.env.NEXV_XRAY_SERVICE || 'xray';
 const API_PORT = 62789;
 
@@ -378,6 +379,39 @@ function routingRule(rule) {
 }
 
 /** Stats keys are per-email, so the tag must be unique across all inbounds. */
+/**
+ * Can Xray write its access log where we expect it?
+ *
+ * Pointing `log.access` at a path the service user cannot write makes Xray
+ * refuse to start, so this never assumes: the directory is created when the
+ * panel runs as root, and the setting is skipped entirely when it cannot be.
+ */
+function accessLogUsable() {
+  const dir = path.dirname(ACCESS_LOG);
+  try {
+    if (!fs.existsSync(dir)) return false;
+    fs.accessSync(dir, fs.constants.W_OK);
+    return true;
+  } catch (_) { return false; }
+}
+
+/** Make the log directory, owned by whoever xray runs as. Best effort. */
+async function ensureAccessLog() {
+  const dir = path.dirname(ACCESS_LOG);
+  try {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o755 });
+    if (!fs.existsSync(ACCESS_LOG)) fs.writeFileSync(ACCESS_LOG, '', { mode: 0o644 });
+    const user = await serviceUser();
+    if (user && user !== 'root' && process.getuid && process.getuid() === 0) {
+      await run('chown', ['-R', `${user}:`, dir], 8000);
+    }
+    return accessLogUsable();
+  } catch (err) {
+    console.error('[xray] cannot prepare the access log:', err.message);
+    return false;
+  }
+}
+
 function clientTag(c) {
   return `${c.email}#${c.id.slice(0, 8)}`;
 }
@@ -466,7 +500,12 @@ function buildConfig() {
   }
 
   return {
-    log: { loglevel: d.settings.xrayLogLevel || 'warning' },
+    // the access log is the only place a client's source address appears, so it
+    // is what "who is online, and from which IP" is read from
+    log: Object.assign(
+      { loglevel: d.settings.xrayLogLevel || 'warning' },
+      d.settings.trackIps === false || !accessLogUsable() ? {} : { access: ACCESS_LOG }
+    ),
     api: { tag: 'api', services: ['HandlerService', 'StatsService', 'LoggerService'] },
     stats: {},
     policy: {
@@ -618,6 +657,10 @@ async function start() { return run('systemctl', ['start', XRAY_SERVICE], 30000)
  * Pull user counters from the stats API and fold them into stored totals.
  * `reset` makes Xray zero its counters, so each poll adds only the delta.
  */
+/* Per-client rate from the last window; in memory, never written to disk. */
+const rates = new Map();
+let lastCollect = 0;
+
 async function collectTraffic() {
   if (!fs.existsSync(XRAY_BIN)) return { ok: false };
   const res = await run(XRAY_BIN, [
@@ -641,17 +684,36 @@ async function collectTraffic() {
   }
 
   const d = db.data;
+  const now = Date.now();
+  // every poll asks for the counters and resets them, so what comes back is
+  // the traffic of one window - divide by the window and that is the rate
+  const window = lastCollect ? Math.max(1, (now - lastCollect) / 1000) : 0;
   let changed = false;
+
   for (const c of d.clients) {
     const delta = byTag.get(clientTag(c));
-    if (!delta || (!delta.up && !delta.down)) continue;
+    if (!delta || (!delta.up && !delta.down)) {
+      rates.delete(c.id);
+      continue;
+    }
     c.up = (c.up || 0) + delta.up;
     c.down = (c.down || 0) + delta.down;
-    c.lastSeen = Date.now();
+    c.lastSeen = now;
+    if (window) {
+      rates.set(c.id, { up: delta.up / window, down: delta.down / window, at: now });
+    }
     changed = true;
   }
+  lastCollect = now;
   if (changed) db.save();
   return { ok: true, count: byTag.size };
+}
+
+/** The rate a client was moving at over the last window, in bytes per second. */
+function rateFor(clientId) {
+  const entry = rates.get(clientId);
+  if (!entry || Date.now() - entry.at > 90000) return { up: 0, down: 0 };
+  return { up: entry.up, down: entry.down };
 }
 
 /** Disable clients that ran out of quota or time, then push a fresh config. */
@@ -741,6 +803,6 @@ module.exports = {
   XRAY_BIN, XRAY_CONFIG, XRAY_SERVICE, API_PORT,
   buildConfig, writeConfig, testConfig, apply, serviceStatus, repairCerts, messageOf,
   INBOUND_PROTOCOLS, OUTBOUND_PROTOCOLS, CLIENT_PROTOCOLS, LINK_PROTOCOLS,
-  restart, start, stop, collectTraffic, enforceLimits,
+  restart, start, stop, collectTraffic, enforceLimits, ensureAccessLog, accessLogUsable, ACCESS_LOG, rateFor,
   clientTag, isExpired, isOverQuota, generateReality, generateECH, parseECH, run, serviceUser
 };

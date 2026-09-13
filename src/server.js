@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 const express = require('express');
+const QRCode = require('qrcode');
 
 const db = require('./db');
 const auth = require('./auth');
@@ -103,11 +104,95 @@ function serveSubscription(req, res) {
   res.send(req.query.plain === '1' ? body : Buffer.from(body, 'utf8').toString('base64'));
 }
 
-app.get(/.*/, (req, res, next) => {
+/**
+ * The same address, opened by a person.
+ *
+ * A VPN client asks for this URL with an Accept of any type and wants the
+ * base64 list; a browser says text/html and gets the page instead. `?info=1`
+ * and `?plain=1` force either side of that, so nothing is ever stuck with
+ * the wrong one.
+ */
+function wantsPage(req) {
+  if (req.query.info === '1') return true;
+  if (req.query.plain === '1' || req.query.json === '1') return false;
+  return String(req.headers.accept || '').includes('text/html');
+}
+
+/** Everything the page shows, for the small script inside it. */
+async function subscriptionInfo(subId) {
+  const d = db.data;
+  const clients = d.clients.filter((c) => c.subId === subId);
+  if (!clients.length) return null;
+
+  const used = clients.reduce((a, c) => a + (c.up || 0) + (c.down || 0), 0);
+  const totalGB = clients.reduce((a, c) => a + (c.totalGB || 0), 0);
+  const expiry = clients.reduce((a, c) => Math.max(a, c.expiryTime || 0), 0);
+  const url = require('./routes/api').subUrl(subId);
+
+  const configs = [];
+  for (const c of clients) {
+    const inb = d.inbounds.find((i) => i.id === c.inboundId);
+    if (!inb) continue;
+    const link = links.buildLink(inb, c);
+    if (!link) continue;
+    configs.push({
+      name: inb.remark || inb.protocol,
+      protocol: inb.protocol,
+      network: inb.network || 'tcp',
+      security: inb.security || 'none',
+      link,
+      enabled: c.enable !== false && inb.enable !== false
+    });
+  }
+
+  // the codes come with the page, so it needs no QR library of its own; a
+  // subscription with dozens of configs would be a heavy payload, hence the cap
+  for (const config of configs.slice(0, 10)) {
+    try {
+      config.qr = await QRCode.toDataURL(config.link, { margin: 1, width: 420, errorCorrectionLevel: 'M' });
+    } catch (_) { /* the link still copies */ }
+  }
+
+  let qr = '';
+  try { qr = await QRCode.toDataURL(url, { margin: 1, width: 460, errorCorrectionLevel: 'M' }); } catch (_) { /* no QR then */ }
+
+  return {
+    title: db.settings.subTitle || 'NexV',
+    name: clients[0].email,
+    used,
+    total: totalGB * 1024 ** 3,
+    up: clients.reduce((a, c) => a + (c.up || 0), 0),
+    down: clients.reduce((a, c) => a + (c.down || 0), 0),
+    expiry,
+    enabled: clients.some((c) => c.enable !== false),
+    url,
+    qr,
+    configs
+  };
+}
+
+/**
+ * One entry point for both listeners: the panel's own port and the separate
+ * subscription port serve the same three answers - the base64 list a client
+ * app wants, the page a person wants, and the JSON behind that page.
+ */
+async function subscriptionRoute(req, res, next) {
   const prefix = db.settings.subPath || '/sub/';
-  if (req.path.startsWith(prefix.endsWith('/') ? prefix : `${prefix}/`)) return serveSubscription(req, res);
-  next();
-});
+  const full = prefix.endsWith('/') ? prefix : `${prefix}/`;
+  if (!req.path.startsWith(full)) return next ? next() : res.status(404).send('not found');
+
+  const subId = req.path.slice(full.length);
+  const valid = /^[A-Za-z0-9_-]{4,64}$/.test(subId);
+  if (valid && req.query.json === '1') {
+    const info = await subscriptionInfo(subId);
+    if (!info) return res.status(404).json({ error: 'not found' });
+    return res.json(info);
+  }
+  if (valid && wantsPage(req)) return res.sendFile(path.join(WEB_DIR, 'sub.html'));
+  return serveSubscription(req, res);
+}
+
+app.get(/.*/, subscriptionRoute);
 
 /* ------------------------------- web path -------------------------------- */
 /**
@@ -283,6 +368,12 @@ async function bootstrap() {
   try { require('./telegram').resume(); } catch (err) { console.error('[bot] could not resume:', err.message); }
   // and from here on xray gets itself picked up when it falls over
   try { require('./watchdog').start(); } catch (err) { console.error('[watchdog] could not start:', err.message); }
+
+  // the access log is what tells the panel who is connected and from where
+  try {
+    await xray.ensureAccessLog();
+    require('./online').start();
+  } catch (err) { console.error('[online] could not start:', err.message); }
 }
 
 /**
@@ -373,7 +464,7 @@ if (require.main === module) {
       const subApp = express();
       subApp.disable('x-powered-by');
       subApp.set('trust proxy', true);
-      subApp.get(/.*/, serveSubscription);
+      subApp.get(/.*/, subscriptionRoute);
       createServer(subApp, tls)
         .listen(subPort, host, () => console.log(`[nexv] subscriptions listening on ${scheme}://${host}:${subPort}`))
         .on('error', (err) => console.error(`[nexv] subscription port ${subPort} unavailable:`, err.message));

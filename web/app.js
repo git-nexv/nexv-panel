@@ -247,7 +247,6 @@ const PAGES = [
   { id: 'outbounds', label: 'Outbounds', icon: 'outbounds' },
   { id: 'routing', label: 'Routing', icon: 'routing' },
   { id: 'bot', label: 'Bot', icon: 'bot' },
-  { id: 'account', label: 'Account', icon: 'account' },
   // settings sits at the end of the bar, the way a settings key usually does
   { id: 'settings', label: 'Settings', icon: 'settings' }
 ];
@@ -279,8 +278,7 @@ function render() {
     outbounds: renderOutbounds,
     routing: renderRouting,
     settings: renderSettings,
-    bot: renderBot,
-    account: renderAccount
+    bot: renderBot
   }[state.page] || renderDashboard;
 
   // shown until the painter settles, so a slow page is never a blank screen
@@ -1320,7 +1318,7 @@ async function renderClients(view) {
   const withLinks = (state.protocols && state.protocols.withLinks) || [];
   const table = el('table');
   table.innerHTML = `<thead><tr>
-    <th>Client</th><th>Inbound</th><th>Used</th><th>Quota</th>
+    <th>Client</th><th>Inbound</th><th>Now</th><th>Used</th><th>Quota</th>
     <th>Expires</th><th>Status</th><th></th>
   </tr></thead>`;
   const tbody = el('tbody');
@@ -1344,6 +1342,7 @@ async function renderClients(view) {
         el('div', { class: 'faint mono', style: 'font-size:11px', text: c.protocol })
       ]),
       el('td', { class: 'muted', text: c.inboundRemark }),
+      el('td', {}, [liveCell(c)]),
       el('td', {}, [
         el('div', { class: 'num', text: bytes(used) }),
         quota ? el('div', { class: `bar ${percent > 90 ? 'danger' : percent > 70 ? 'warn' : ''}`, style: 'width:110px', html: `<i style="width:${Math.min(100, percent)}%"></i>` }) : null
@@ -1358,9 +1357,17 @@ async function renderClients(view) {
         shareable ? el('button', { class: 'btn icon ghost', title: 'QR code and links', html: icon('qr'), onclick: () => showClientLink(c) }) : null,
         shareable ? el('button', { class: 'btn icon ghost', title: 'Copy config link', html: icon('copy'), onclick: () => copy(c.link) }) : null,
         el('button', { class: 'btn icon ghost', title: 'Edit', html: icon('edit'), onclick: () => clientForm(c) }),
-        el('button', {
-          class: 'btn icon ghost', title: 'Enable / disable', html: icon('power'),
-          onclick: async () => { await api.post(`/clients/${c.id}/toggle`); render(); }
+        onOffSwitch(c.enable !== false, async (on, revert) => {
+          try {
+            await api.post(`/clients/${c.id}/toggle`);
+            toast(on ? `${c.email} is on` : `${c.email} is off`);
+            c.enable = on;
+            statusChip.className = `chip ${on ? 'ok' : ''}`;
+            statusChip.innerHTML = `<i></i>${on ? 'Active' : 'Disabled'}`;
+          } catch (err) {
+            revert();
+            toast(err.message, 'err');
+          }
         }),
         el('button', {
           class: 'btn icon danger', title: 'Delete', html: icon('trash'),
@@ -1377,6 +1384,95 @@ async function renderClients(view) {
   }
   table.append(tbody);
   mountTable(wrap, table);
+}
+
+
+/**
+ * The green dot 3x-ui shows, plus what it is actually doing: a client counts as
+ * live while it is moving traffic or has opened a connection in the last
+ * minute, and the addresses it is connected from sit behind the dot.
+ */
+function liveCell(client) {
+  const speed = (client.speed && (client.speed.up + client.speed.down)) || 0;
+  const dot = el('span', { class: `live-dot ${client.online ? 'on' : ''}` });
+  const box = el('div', { class: 'live' }, [
+    dot,
+    el('div', {}, [
+      el('div', { class: 'live-rate', text: client.online ? (speed ? `${bytes(speed)}/s` : 'idle') : 'offline' }),
+      client.ipCount
+        ? el('button', {
+          class: 'live-ips', type: 'button',
+          text: `${client.ipCount} IP${client.ipCount > 1 ? 's' : ''}`,
+          onclick: () => showClientIps(client)
+        })
+        : null
+    ])
+  ]);
+  return box;
+}
+
+/** Where this client is connecting from, and a way to start the list over. */
+function showClientIps(client) {
+  const limit = Number(client.limitIp || 0);
+  const list = el('div', { class: 'attach-list' });
+  for (const entry of client.ips) {
+    list.append(el('div', { class: 'attach-row' }, [
+      el('div', {}, [
+        el('strong', { class: 'mono', text: entry.ip }),
+        el('div', { class: 'faint', style: 'font-size:11px', text: `last seen ${fmtDate(entry.at)}` })
+      ])
+    ]));
+  }
+
+  modal({
+    title: `Addresses for ${client.email}`,
+    subtitle: limit
+      ? `Allowed at once: ${limit}. Seen in the last five minutes: ${client.ips.length}.`
+      : `Seen in the last five minutes: ${client.ips.length}. No IP limit is set on this client.`,
+    body: el('div', {}, [
+      list,
+      el('div', { class: 'hint', style: 'margin-top:10px', text: 'Addresses are read from Xray\u2019s access log and forgotten after five minutes of silence.' })
+    ]),
+    width: 480,
+    actions: [{
+      label: 'Forget these',
+      onClick: async (close) => {
+        try {
+          const result = await api.post(`/clients/${client.id}/forget-ips`, {});
+          toast(`Forgot ${result.cleared} address(es)`);
+          close();
+          render();
+        } catch (err) { toast(err.message, 'err'); }
+      }
+    }]
+  });
+}
+
+/**
+ * The header's light/dark switch, reused wherever something is simply on or
+ * off. It flips as soon as it is pressed and rolls back if the server refuses,
+ * so it never shows a state the panel is not actually in.
+ */
+function onOffSwitch(on, apply, title) {
+  const node = el('button', {
+    class: `mini-switch ${on ? 'on' : ''}`, type: 'button', role: 'switch',
+    title: title || 'On / off',
+    'aria-checked': on ? 'true' : 'false',
+    html: '<span class="mini-knob"></span>'
+  });
+  let state = on;
+  const paint = () => {
+    node.classList.toggle('on', state);
+    node.setAttribute('aria-checked', state ? 'true' : 'false');
+  };
+  node.addEventListener('click', async () => {
+    state = !state;
+    paint();
+    node.disabled = true;
+    await apply(state, () => { state = !state; paint(); });
+    node.disabled = false;
+  });
+  return node;
 }
 
 async function showClientLink(client) {
@@ -1877,6 +1973,17 @@ async function renderSettings(view) {
     el('label', { class: 'switch' }, [torrent, el('span', { class: 'track' }), el('span', { class: 'muted', text: 'Block torrent traffic' })])
   ]));
 
+  const trackIps = el('input', { type: 'checkbox' });
+  trackIps.checked = s.trackIps !== false;
+  grid.append(el('div', { class: 'field' }, [
+    el('label', { text: 'Client addresses' }),
+    el('label', { class: 'switch' }, [
+      trackIps, el('span', { class: 'track' }),
+      el('span', { class: 'muted', text: 'Record which IPs each client connects from' })
+    ]),
+    el('div', { class: 'hint', text: 'Turns on Xray\u2019s access log, which is where the Clients page reads them from.' })
+  ]));
+
   const httpRedirect = el('input', { type: 'checkbox' });
   httpRedirect.checked = !!s.httpRedirect;
   grid.append(el('div', { class: 'field' }, [
@@ -1895,6 +2002,7 @@ async function renderSettings(view) {
         const payload = {
           xrayLogLevel: logLevel.value,
           blockTorrent: torrent.checked,
+          trackIps: trackIps.checked,
           httpRedirect: httpRedirect.checked
         };
         for (const [key, control] of Object.entries(inputs)) {
@@ -1996,6 +2104,9 @@ async function renderSettings(view) {
       }
     })
   ]));
+
+  view.append(el('div', { class: 'section-title', text: 'Account' }));
+  await renderAccount(view);
 
   view.append(el('div', { class: 'section-title', text: 'Event log' }));
   await renderLogs(view);
@@ -2708,7 +2819,7 @@ async function checkForUpdate(force) {
 /* --------------------------------- dock ---------------------------------- */
 
 /** The four pages that earn a permanent spot; the rest live under More. */
-const DOCK_PAGES = ['dashboard', 'inbounds', 'clients', 'account'];
+const DOCK_PAGES = ['dashboard', 'inbounds', 'clients', 'settings'];
 
 const dock = { bar: null, more: null, moreItem: null, moreOpen: false };
 

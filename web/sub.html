@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>Subscription</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #080b13;
+    --bg-2: #0d1220;
+    --surface: rgba(255,255,255,.04);
+    --surface-2: rgba(255,255,255,.07);
+    --border: rgba(255,255,255,.09);
+    --border-strong: rgba(255,255,255,.16);
+    --text: #eef1f8;
+    --muted: #9aa4bd;
+    --faint: #6b7490;
+    --brand: #6c8cff;
+    --brand-2: #a07bff;
+    --ok: #2fd98f;
+    --warn: #ffb454;
+    --danger: #ff5c7a;
+    --radius: 18px;
+    --ease: cubic-bezier(.22,1,.36,1);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    background:
+      radial-gradient(1100px 620px at 12% -8%, rgba(108,140,255,.16), transparent 60%),
+      radial-gradient(900px 520px at 92% 0%, rgba(160,123,255,.12), transparent 62%),
+      var(--bg);
+    color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 560px; margin: 0 auto; padding: 26px 16px 60px; }
+
+  .head { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+  .mark {
+    width: 40px; height: 40px; border-radius: 12px; flex: 0 0 auto;
+    display: grid; place-items: center; font-weight: 800; font-size: 18px; color: #fff;
+    background: linear-gradient(150deg, var(--brand), var(--brand-2));
+    box-shadow: 0 10px 26px -10px var(--brand);
+  }
+  .head h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+  .head .sub { color: var(--faint); font-size: 12.5px; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 18px; margin-bottom: 14px;
+  }
+  .between { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+    padding: 3px 10px; border-radius: 99px; font-size: 11.5px; font-weight: 600;
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--muted);
+  }
+  .chip i { width: 6px; height: 6px; border-radius: 99px; background: currentColor; }
+  .chip.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+  .chip.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); background: color-mix(in srgb, var(--danger) 14%, transparent); }
+
+  /* usage */
+  .usage-top { display: flex; align-items: baseline; gap: 8px; margin: 14px 0 4px; }
+  .usage-top b { font-size: 27px; font-weight: 800; letter-spacing: -.02em; }
+  .usage-top span { color: var(--faint); font-size: 13px; }
+  .bar { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; margin-top: 12px; }
+  .bar i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--brand), var(--brand-2)); transition: width .8s var(--ease); }
+  .bar.warn i { background: linear-gradient(90deg, var(--warn), #ff8a5c); }
+  .bar.danger i { background: linear-gradient(90deg, var(--danger), #ff4d94); }
+  .facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 18px; }
+  .fact { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; }
+  .fact .k { color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .02em; }
+  .fact .v { font-size: 14px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+  /* qr */
+  .qr { display: grid; place-items: center; padding: 20px 18px 18px; }
+  .qr img { width: min(240px, 62vw); height: auto; border-radius: 14px; background: #fff; padding: 10px; }
+  .qr p { color: var(--faint); font-size: 12px; margin: 12px 0 0; text-align: center; }
+
+  .link {
+    margin-top: 12px; padding: 11px 12px; border-radius: 12px;
+    background: var(--bg-2); border: 1px solid var(--border);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+    color: var(--muted); word-break: break-all; direction: ltr; text-align: left;
+    max-height: 92px; overflow-y: auto;
+  }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    padding: 10px 15px; border-radius: 12px; cursor: pointer;
+    border: 1px solid var(--border-strong); background: var(--surface-2);
+    color: var(--text); font: inherit; font-size: 13px; font-weight: 600;
+    transition: transform .18s var(--ease), background .2s var(--ease);
+  }
+  .btn:active { transform: scale(.97); }
+  .btn.primary { border-color: transparent; background: linear-gradient(150deg, var(--brand), var(--brand-2)); color: #fff; }
+  .btn.wide { width: 100%; margin-top: 12px; }
+
+  .section { margin: 22px 0 10px; color: var(--faint); font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+  .cfg { display: flex; align-items: center; gap: 12px; padding: 13px 14px; border-bottom: 1px solid var(--border); }
+  .cfg:last-child { border-bottom: none; }
+  .cfg .who { min-width: 0; flex: 1 1 auto; }
+  .cfg .who b { display: block; font-size: 14px; font-weight: 650; }
+  .cfg .who span { color: var(--faint); font-size: 11.5px; }
+  .cfg .go { flex: 0 0 auto; display: flex; gap: 6px; }
+  .icon-btn {
+    width: 34px; height: 34px; border-radius: 10px; cursor: pointer;
+    display: grid; place-items: center;
+    border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--muted);
+  }
+  .icon-btn:active { transform: scale(.94); }
+  .list { padding: 0; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%) translateY(20px);
+    padding: 11px 18px; border-radius: 999px; opacity: 0; pointer-events: none;
+    background: rgba(20,26,44,.96); border: 1px solid var(--border-strong);
+    font-size: 13px; font-weight: 600; backdrop-filter: blur(12px);
+    transition: opacity .24s var(--ease), transform .34s var(--ease);
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  .empty { text-align: center; color: var(--faint); padding: 40px 10px; }
+
+  .sheet {
+    position: fixed; inset: 0; z-index: 50; display: grid; place-items: center;
+    padding: 20px; background: rgba(6,9,17,.72); backdrop-filter: blur(6px);
+    opacity: 0; transition: opacity .22s var(--ease);
+  }
+  .sheet.show { opacity: 1; }
+  .sheet-box {
+    width: min(330px, 100%); padding: 20px; text-align: center;
+    background: var(--bg-2); border: 1px solid var(--border-strong); border-radius: 20px;
+    transform: translateY(14px) scale(.97); transition: transform .34s var(--ease);
+  }
+  .sheet.show .sheet-box { transform: none; }
+  .sheet-box img { width: 100%; height: auto; border-radius: 14px; background: #fff; padding: 10px; }
+  .sheet-name { margin: 12px 0 4px; font-weight: 700; }
+  @media (max-width: 380px) { .facts { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="empty">Loading…</div></div>
+<div class="toast" id="toast"></div>
+<script>
+(function () {
+  var app = document.getElementById('app');
+  var toastBox = document.getElementById('toast');
+  var toastTimer;
+
+  function toast(text) {
+    toastBox.textContent = text;
+    toastBox.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastBox.classList.remove('show'); }, 1800);
+  }
+
+  function copy(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { toast('Copied'); },
+        function () { fallbackCopy(text); });
+    } else { fallbackCopy(text); }
+  }
+  function fallbackCopy(text) {
+    var box = document.createElement('textarea');
+    box.value = text;
+    box.style.position = 'fixed';
+    box.style.opacity = '0';
+    document.body.appendChild(box);
+    box.select();
+    try { document.execCommand('copy'); toast('Copied'); } catch (e) { toast('Copy it by hand'); }
+    document.body.removeChild(box);
+  }
+
+  function bytes(n) {
+    n = Number(n) || 0;
+    if (Math.round(n) < 1024) return Math.round(n) + ' B';
+    var units = ['KB', 'MB', 'GB', 'TB', 'PB'];
+    var i = -1;
+    do { n /= 1024; i++; } while (n >= 1024 && i < units.length - 1);
+    return n.toFixed(n >= 100 ? 0 : 1) + ' ' + units[i];
+  }
+
+  function daysLeft(at) {
+    if (!at) return null;
+    return Math.ceil((at - Date.now()) / 86400000);
+  }
+
+  function esc(text) {
+    return String(text == null ? '' : text)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  var ICON_COPY = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1Zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2Zm0 16H8V7h11v14Z"/></svg>';
+  var ICON_QR = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3 3h8v8H3V3Zm2 2v4h4V5H5Zm8-2h8v8h-8V3Zm2 2v4h4V5h-4ZM3 13h8v8H3v-8Zm2 2v4h4v-4H5Zm8-2h3v3h-3v-3Zm5 0h3v3h-3v-3Zm-5 5h3v3h-3v-3Zm5 0h3v3h-3v-3Z"/></svg>';
+
+  /* The code arrives with the page, so there is nothing to fetch or load. */
+  function showQr(config) {
+    if (!config.qr) return toast('No QR for this one - copy the link instead');
+    var back = document.createElement('div');
+    back.className = 'sheet';
+    back.innerHTML = '<div class="sheet-box">'
+      + '<img src="' + config.qr + '" alt="QR code for ' + esc(config.name) + '">'
+      + '<div class="sheet-name">' + esc(config.name) + '</div>'
+      + '<button class="btn wide" id="sheetCopy">' + ICON_COPY + ' Copy this config</button>'
+      + '<button class="btn wide" id="sheetClose">Close</button></div>';
+    document.body.appendChild(back);
+    requestAnimationFrame(function () { back.classList.add('show'); });
+    var close = function () {
+      back.classList.remove('show');
+      setTimeout(function () { back.remove(); }, 220);
+    };
+    back.addEventListener('click', function (event) { if (event.target === back) close(); });
+    back.querySelector('#sheetClose').addEventListener('click', close);
+    back.querySelector('#sheetCopy').addEventListener('click', function () { copy(config.link); });
+  }
+
+  function render(info) {
+    var used = info.used || 0;
+    var total = info.total || 0;
+    var percent = total ? Math.min(100, (used / total) * 100) : 0;
+    var left = daysLeft(info.expiry);
+    var kind = percent > 90 ? 'danger' : percent > 70 ? 'warn' : '';
+
+    var state = info.enabled === false
+      ? '<span class="chip danger"><i></i>Disabled</span>'
+      : (left !== null && left <= 0)
+        ? '<span class="chip danger"><i></i>Expired</span>'
+        : '<span class="chip ok"><i></i>Active</span>';
+
+    var html = ''
+      + '<div class="head">'
+      +   '<div class="mark">' + esc((info.title || 'N').slice(0, 1).toUpperCase()) + '</div>'
+      +   '<div><h1>' + esc(info.name) + '</h1>'
+      +   '<div class="sub">' + esc(info.title) + ' subscription</div></div>'
+      + '</div>'
+
+      + '<div class="card">'
+      +   '<div class="between"><div class="chip">Usage</div>' + state + '</div>'
+      +   '<div class="usage-top"><b>' + bytes(used) + '</b><span>'
+      +     (total ? 'of ' + bytes(total) : 'unlimited') + '</span></div>'
+      +   (total ? '<div class="bar ' + kind + '"><i style="width:' + percent + '%"></i></div>' : '')
+      +   '<div class="facts">'
+      +     '<div class="fact"><div class="k">DOWNLOAD</div><div class="v">' + bytes(info.down) + '</div></div>'
+      +     '<div class="fact"><div class="k">UPLOAD</div><div class="v">' + bytes(info.up) + '</div></div>'
+      +     '<div class="fact"><div class="k">' + (left === null ? 'EXPIRES' : 'REMAINING') + '</div><div class="v">'
+      +       (left === null ? 'Never' : (left > 0 ? left + ' days' : 'over')) + '</div></div>'
+      +   '</div>'
+      + '</div>'
+
+      + '<div class="card qr">'
+      +   (info.qr ? '<img src="' + info.qr + '" alt="Subscription QR code">' : '')
+      +   '<p>Scan this in your app, or copy the link below.</p>'
+      + '</div>'
+
+      + '<div class="card">'
+      +   '<div class="between"><div class="chip">Subscription link</div></div>'
+      +   '<div class="link" id="subLink">' + esc(info.url) + '</div>'
+      +   '<button class="btn primary wide" id="copySub">' + ICON_COPY + ' Copy subscription link</button>'
+      + '</div>';
+
+    if (info.configs && info.configs.length) {
+      html += '<div class="section">Configs (' + info.configs.length + ')</div><div class="card list">';
+      for (var i = 0; i < info.configs.length; i++) {
+        var c = info.configs[i];
+        html += '<div class="cfg">'
+          + '<div class="who"><b>' + esc(c.name) + '</b><span>' + esc(c.protocol) + ' · ' + esc(c.network)
+          + (c.security && c.security !== 'none' ? ' · ' + esc(c.security) : '') + '</span></div>'
+          + '<div class="go">'
+          +   '<button class="icon-btn" data-copy="' + i + '" title="Copy this config">' + ICON_COPY + '</button>'
+          +   '<button class="icon-btn" data-qr="' + i + '" title="Show a QR code">' + ICON_QR + '</button>'
+          + '</div></div>';
+      }
+      html += '</div>';
+    }
+
+    app.innerHTML = html;
+
+    document.getElementById('copySub').addEventListener('click', function () { copy(info.url); });
+    app.addEventListener('click', function (event) {
+      var copyBtn = event.target.closest('[data-copy]');
+      if (copyBtn) return copy(info.configs[Number(copyBtn.dataset.copy)].link);
+      var qrBtn = event.target.closest('[data-qr]');
+      if (qrBtn) showQr(info.configs[Number(qrBtn.dataset.qr)]);
+    });
+  }
+
+  fetch(location.pathname + '?json=1', { headers: { accept: 'application/json' } })
+    .then(function (res) { if (!res.ok) throw new Error('not found'); return res.json(); })
+    .then(render)
+    .catch(function () {
+      app.innerHTML = '<div class="empty">This subscription does not exist, or it has been removed.</div>';
+    });
+})();
+</script>
+</body>
+</html>
