@@ -1803,6 +1803,65 @@ async function renderAccount(view) {
 }
 
 /* ------------------------------ update chip ------------------------------ */
+/**
+ * Offer the update in place. The server hands the job to systemd and restarts
+ * itself, so the browser watches /health until the new version answers.
+ */
+function updateDialog(info) {
+  const note = el('p', { class: 'muted', text: 'Your inbounds, clients and settings are left alone.' });
+  const progress = el('div', { class: 'link-box', hidden: true, style: 'margin-top:12px; max-height:150px' });
+  const body = el('div', {}, [note, progress]);
+
+  if (!info.canUpdate) {
+    note.textContent = info.updateBlockedBy || 'Update from the server\u2019s terminal.';
+    body.append(
+      el('div', { class: 'link-box', style: 'margin-top:10px', text: 'nexv update' }),
+      el('div', { class: 'row', style: 'margin-top:12px' }, [
+        el('button', { class: 'btn', html: `${icon('copy')} Copy command`, onclick: () => copy('nexv update') })
+      ])
+    );
+    return modal({ title: `Version ${info.latest} is available`, subtitle: `This panel is running ${info.current}.`, body, width: 460 });
+  }
+
+  const say = (text) => { progress.hidden = false; progress.textContent = text; };
+  const button = el('button', {
+    class: 'btn primary', html: `${icon('sparkle')} Update now`,
+    onclick: async () => {
+      button.disabled = true;
+      say('Starting the update\u2026');
+      try {
+        await api.post('/update', {});
+      } catch (err) {
+        button.disabled = false;
+        return say(`Could not start: ${err.message}`);
+      }
+      say('Downloading and installing. The panel restarts on its own \u2014 keep this page open.');
+      watchUpdate(info.latest, say);
+    }
+  });
+  body.insertBefore(el('div', { class: 'row', style: 'margin-top:14px' }, [button]), progress);
+  return modal({ title: `Version ${info.latest} is available`, subtitle: `This panel is running ${info.current}.`, body, width: 460 });
+}
+
+/** Poll until the restarted panel reports the new version, then reload. */
+async function watchUpdate(target, say) {
+  const deadline = Date.now() + 5 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 3000));
+    let health = null;
+    // the panel is restarting for part of this, so a failed probe is expected
+    try { health = await api.get('/health'); } catch (_) { /* still down */ }
+    if (health && health.version === target) {
+      say(`Updated to ${target}. Reloading\u2026`);
+      return setTimeout(() => location.reload(), 1200);
+    }
+    let tail = '';
+    try { tail = (await api.get('/update/log')).log || ''; } catch (_) { /* still down */ }
+    if (tail) say(tail);
+  }
+  say('The update is taking longer than expected. Check the server with: nexv logs 50');
+}
+
 
 /**
  * Announce a newer panel in the header. Checked once per session and then
@@ -1820,18 +1879,7 @@ async function checkForUpdate() {
     id: 'updateChip', class: 'update-chip', type: 'button',
     title: `Version ${info.latest} is available`,
     html: `${icon('sparkle', 15)}<span>Update ${info.latest}</span>`,
-    onclick: () => modal({
-      title: `Version ${info.latest} is available`,
-      subtitle: `This panel is running ${info.current}.`,
-      body: el('div', {}, [
-        el('p', { class: 'muted', text: 'Update from the server\u2019s terminal. Your inbounds, clients and settings are left alone.' }),
-        el('div', { class: 'link-box', text: 'nexv update' }),
-        el('div', { class: 'row', style: 'margin-top:12px' }, [
-          el('button', { class: 'btn', html: `${icon('copy')} Copy command`, onclick: () => copy('nexv update') })
-        ])
-      ]),
-      width: 460
-    })
+    onclick: () => updateDialog(info)
   });
   bar.insertBefore(chip, document.getElementById('xrayChip'));
 }

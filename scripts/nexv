@@ -292,7 +292,15 @@ EOF
 
 act_reset_password() {
   need_root
-  local newpass="${1:-$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-14)}"
+  local newpass="${1:-}"
+  if [[ -n $newpass ]]; then
+    if (( ${#newpass} < 6 )); then
+      err "Choose a password of at least 6 characters"
+      return 1
+    fi
+  else
+    newpass="$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-14)"
+  fi
   NEW_PASS="$newpass" DATA_DIR="$DATA_DIR" node -e '
     const fs = require("fs"), path = require("path");
     const bcrypt = require("'"$INSTALL_DIR"'/node_modules/bcryptjs");
@@ -505,6 +513,20 @@ act_doctor() {
     echo "    The panel is down or failed to bind. Check: nexv logs 50"
   else
     warn "Cannot list listening ports (install iproute2 for 'ss')"
+  fi
+
+  # a panel that cannot write its own database looks like it is ignoring every
+  # change made in the web UI - the password change being the one people notice
+  local svc_user probe
+  svc_user="$(systemctl show "$SERVICE" -p User --value 2>/dev/null)"
+  [[ -n $svc_user ]] || svc_user=root
+  printf "  %-22s %s\n" "Runs as" "$svc_user"
+  probe="$DATA_DIR/.write-probe"
+  if runuser -u "$svc_user" -- sh -c "touch '$probe' && rm -f '$probe'" 2>/dev/null; then
+    ok "$svc_user can write $DATA_DIR"
+  else
+    err "$svc_user CANNOT write $DATA_DIR - nothing changed in the panel is saved"
+    echo "    Fix it with: chown -R $svc_user $DATA_DIR"
   fi
 
   # a firewall that does not allow the panel port is the classic "it worked
@@ -1049,14 +1071,23 @@ show_menu() {
 run_menu() {
   while true; do
     show_menu
-    local choice domain file port name
+    local choice domain file port name repeat
     read -rp "  Please enter your selection [0-27]: " choice
     echo
     case "$choice" in
       0) exit 0 ;;
       1) act_update; pause ;;
       2) act_uninstall; pause ;;
-      3) act_reset_password; pause ;;
+      3) echo "  Leave the password empty to have one generated for you."
+         read -rsp "  New admin password: " name; echo
+         if [[ -n $name ]]; then
+           read -rsp "  Repeat the password: " repeat; echo
+           if [[ $name != "$repeat" ]]; then
+             err "The passwords do not match - nothing was changed"
+             pause; continue
+           fi
+         fi
+         act_reset_password "$name"; pause ;;
       4) read -rp "New admin username: " name; act_reset_username "$name"; pause ;;
       5) echo "Enter a path, or 'random' for a generated one, or 'none' to disable."
          read -rp "New web base path: " name; act_url "$name"; pause ;;
@@ -1105,7 +1136,7 @@ ${BOLD}nexv${RESET} - NexV Panel management
   nexv port <number>            change the panel port
   nexv settings                 print the current settings
   nexv cert <domain>            request a Let's Encrypt certificate
-  nexv reset-password [pw]      reset the admin password
+  nexv reset-password [pw]      set the admin password (generated when omitted)
   nexv reset-username <name>    change the admin username
   nexv firewall                 open the panel ports
   nexv bbr                      enable BBR congestion control

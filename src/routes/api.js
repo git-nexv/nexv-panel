@@ -10,9 +10,25 @@ const xray = require('../xray');
 const links = require('../links');
 const transfer = require('../transfer');
 const version = require('../version');
+const update = require('../update');
 const system = require('../system');
 
 const router = express.Router();
+
+/*
+ * Express 4 does not catch a rejected promise from an async handler: the
+ * request simply hangs and the browser waits forever. A failing disk write
+ * used to look like "the panel ignored me", so every handler is wrapped and
+ * every failure is answered.
+ */
+for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
+  const original = router[method].bind(router);
+  router[method] = (path, ...handlers) => original(path, ...handlers.map((handler) => (
+    handler.length >= 4 ? handler : (req, res, next) => {
+      try { return Promise.resolve(handler(req, res, next)).catch(next); } catch (err) { return next(err); }
+    }
+  )));
+}
 
 function bad(res, message, code = 400) { return res.status(code).json({ error: message }); }
 function randomPass(bytes = 16) { return crypto.randomBytes(bytes).toString('base64url'); }
@@ -75,12 +91,18 @@ router.post('/account', async (req, res) => {
   if (!currentPassword || !(await bcrypt.compare(String(currentPassword), req.user.password))) {
     return bad(res, 'current password is incorrect', 403);
   }
-  if (username && username !== req.user.username) {
-    if (db.data.users.some((u) => u.username === username)) return bad(res, 'username already taken');
-    req.user.username = String(username).trim();
-    db.saveNow();
+  try {
+    if (username && username !== req.user.username) {
+      if (db.data.users.some((u) => u.username === username)) return bad(res, 'username already taken');
+      req.user.username = String(username).trim();
+      db.saveNow();
+    }
+    if (password) await auth.setPassword(req.user.id, password);
+  } catch (err) {
+    // an unwritable data directory is the usual cause, and silence looked like
+    // the panel ignoring the change
+    return bad(res, `could not save the account: ${err.message}`, 500);
   }
-  if (password) await auth.setPassword(req.user.id, password);
   logEvent('auth', `account updated for ${req.user.username}`);
   res.json({ ok: true });
 });
@@ -118,12 +140,38 @@ router.get('/logs', (req, res) => res.json(db.data.logs.slice(0, 200)));
 
 /** Whether a newer panel has been published. Never fails the page. */
 router.get('/version', async (req, res) => {
+  const ready = update.available();
   try {
-    res.json(await version.check(req.query.force === '1'));
+    res.json({ ...await version.check(req.query.force === '1'), canUpdate: ready.ok, updateBlockedBy: ready.reason });
   } catch (_) {
-    res.json({ current: version.current, latest: version.current, updateAvailable: false });
+    res.json({ current: version.current, latest: version.current, updateAvailable: false, canUpdate: ready.ok });
   }
 });
+
+/**
+ * Update the panel in place. The updater runs in its own systemd unit and
+ * restarts the panel when it is done, so this answers as soon as it is
+ * started - the browser watches /health for the new version.
+ */
+router.post('/update', async (req, res) => {
+  let info;
+  try { info = await version.check(true); } catch (_) { info = { current: version.current, latest: null }; }
+  if (!info.updateAvailable && req.body?.force !== true) return bad(res, 'the panel is already up to date');
+
+  const ready = update.available();
+  if (!ready.ok) return bad(res, ready.reason, 409);
+
+  try {
+    update.start({ from: info.current, to: info.latest });
+  } catch (err) {
+    return bad(res, `could not start the update: ${err.message}`, 500);
+  }
+  logEvent('panel', `update to ${info.latest} started from the panel`);
+  res.json({ ok: true, from: info.current, to: info.latest });
+});
+
+/** Progress of the running - or last - update, for the dialog to show. */
+router.get('/update/log', (req, res) => res.json(update.state()));
 
 /**
  * Ports the panel itself owns. An inbound on one of these passes `xray -test`
@@ -979,6 +1027,13 @@ router.post('/restore', async (req, res) => {
   await xray.apply();
   logEvent('settings', 'configuration restored from backup');
   res.json({ ok: true });
+});
+
+// eslint-disable-next-line no-unused-vars -- express needs the 4-argument shape
+router.use((err, req, res, next) => {
+  console.error(`[api] ${req.method} ${req.originalUrl} failed:`, err.message);
+  if (res.headersSent) return;
+  res.status(500).json({ error: err.message || 'the panel hit an unexpected error' });
 });
 
 module.exports = router;
