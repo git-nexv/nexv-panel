@@ -541,6 +541,21 @@ td .row-actions { display: flex; gap: 6px; }
 :root:not([data-theme="light"]) .ts-moon { opacity: 0; }
 
 
+/* ------------------------- attach clients dialog -------------------------- */
+
+.attach-list {
+  max-height: 46vh; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.attach-row {
+  display: flex; align-items: center; gap: 11px;
+  padding: 9px 12px; cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.attach-row:last-child { border-bottom: none; }
+.attach-row:hover { background: var(--surface); }
+.attach-row input { flex: 0 0 auto; width: 16px; height: 16px; }
+
 /* ------------------------------- bot builder ----------------------------- */
 
 .bot-split { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 16px; align-items: start; }

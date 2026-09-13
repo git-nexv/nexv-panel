@@ -509,11 +509,66 @@ router.delete('/inbounds/:id', async (req, res) => {
   const inb = d.inbounds.find((i) => i.id === req.params.id);
   if (!inb) return bad(res, 'inbound not found', 404);
   d.inbounds = d.inbounds.filter((i) => i.id !== inb.id);
-  d.clients = d.clients.filter((c) => c.inboundId !== inb.id);
+  /*
+   * The clients outlive it. Deleting an inbound used to delete everybody on it,
+   * which is not what "delete this inbound" means to anyone: the people, their
+   * quotas and - above all - their subId stay, so a new inbound can take them
+   * over and every subscription link they hold keeps working.
+   */
+  let detached = 0;
+  for (const client of d.clients) {
+    if (client.inboundId === inb.id) { client.inboundId = ''; detached++; }
+  }
   db.saveNow();
   await xray.apply();
-  logEvent('inbound', `deleted inbound ${inb.remark}`);
-  res.json({ ok: true });
+  logEvent('inbound', `deleted inbound ${inb.remark}${detached ? ` - ${detached} client(s) kept, now unattached` : ''}`);
+  res.json({ ok: true, detached });
+});
+
+/**
+ * Move clients onto this inbound, or off it.
+ *
+ * A client belongs to one inbound at a time. Moving does not touch their subId,
+ * so a subscription link that was working before keeps working afterwards - it
+ * is how you rebuild an inbound without reissuing anyone's config.
+ */
+router.post('/inbounds/:id/attach', async (req, res) => {
+  const d = db.data;
+  const inb = d.inbounds.find((i) => i.id === req.params.id);
+  if (!inb) return bad(res, 'inbound not found', 404);
+
+  const body = req.body || {};
+  const wanted = body.all
+    ? d.clients
+    : d.clients.filter((c) => (body.clientIds || []).includes(c.id));
+  if (!wanted.length) return bad(res, 'no clients to attach');
+
+  let moved = 0;
+  for (const client of wanted) {
+    if (client.inboundId === inb.id) continue;
+    client.inboundId = inb.id;
+    moved++;
+  }
+  db.saveNow();
+  const applied = await xray.apply();
+  if (!applied.ok) return bad(res, applied.error);
+  logEvent('client', `attached ${moved} client(s) to ${inb.remark}`);
+  res.json({ ok: true, moved });
+});
+
+router.post('/inbounds/:id/detach', async (req, res) => {
+  const d = db.data;
+  const inb = d.inbounds.find((i) => i.id === req.params.id);
+  if (!inb) return bad(res, 'inbound not found', 404);
+
+  const body = req.body || {};
+  const mine = d.clients.filter((c) => c.inboundId === inb.id);
+  const wanted = body.all ? mine : mine.filter((c) => (body.clientIds || []).includes(c.id));
+  for (const client of wanted) client.inboundId = '';
+  db.saveNow();
+  await xray.apply();
+  logEvent('client', `detached ${wanted.length} client(s) from ${inb.remark}`);
+  res.json({ ok: true, moved: wanted.length });
 });
 
 router.post('/inbounds/:id/toggle', async (req, res) => {
@@ -585,33 +640,45 @@ router.get('/inbounds/:id/export', (req, res) => {
   const inb = db.data.inbounds.find((i) => i.id === req.params.id);
   if (!inb) return bad(res, 'inbound not found', 404);
   const clients = db.data.clients.filter((c) => c.inboundId === inb.id);
-  const name = (inb.remark || 'inbound').replace(/[^\w.-]+/g, '-').slice(0, 40) || 'inbound';
-  res.setHeader('Content-Disposition', `attachment; filename="${name}-${inb.port}.json"`);
-  res.setHeader('Content-Type', 'application/json');
-  res.send(JSON.stringify(transfer.exportInbound(inb, clients), null, 2));
+  // text, to be read and copied - the panel shows it rather than saving a file
+  res.json({ text: JSON.stringify(transfer.exportInbound(inb, clients), null, 2), clients: clients.length });
 });
 
 router.post('/inbounds/import', async (req, res) => {
+  const body = req.body || {};
+  // the panel sends what was pasted into the box; an object still works
+  let source = body;
+  if (typeof body.text === 'string') {
+    try { source = JSON.parse(body.text); } catch (_) { return bad(res, 'that is not valid JSON'); }
+  }
+
   let parsed;
   try {
-    parsed = transfer.importInbound(req.body);
+    parsed = transfer.importInbound(source);
   } catch (err) {
     return bad(res, err.message);
   }
   const { inbound, clients } = parsed;
 
   if (!inbound.port || inbound.port < 1 || inbound.port > 65535) {
-    return bad(res, 'the file has no usable port');
+    return bad(res, 'there is no usable port in that text');
   }
   const clash = portConflict(inbound.port, inbound.listen, null);
   if (clash) return bad(res, clash);
 
-  // a client name has to stay unique across the panel, and an import that
-  // renames people silently would break the links they already hold
+  /*
+   * A client name is unique across the panel. Renaming people silently would
+   * break the links they already hold, so by default a clash stops the import;
+   * `replace` is for the case the admin means - the same people, moved here.
+   */
   const taken = new Set(db.data.clients.map((c) => c.email));
   const collisions = clients.filter((c) => taken.has(c.email)).map((c) => c.email);
+  if (collisions.length && !body.replace) {
+    return bad(res, `these client names already exist: ${collisions.slice(0, 5).join(', ')}${collisions.length > 5 ? '…' : ''}. Tick "replace" to move them here.`);
+  }
   if (collisions.length) {
-    return bad(res, `these client names already exist: ${collisions.slice(0, 5).join(', ')}${collisions.length > 5 ? '…' : ''}`);
+    const names = new Set(collisions);
+    db.data.clients = db.data.clients.filter((c) => !names.has(c.email));
   }
 
   inbound.id = db.id();
@@ -636,7 +703,14 @@ router.post('/inbounds/import', async (req, res) => {
     return bad(res, applied.error);
   }
   logEvent('inbound', `imported ${inbound.protocol} inbound on port ${inbound.port} with ${stored.length} client(s)`);
-  res.json({ ok: true, inbound, clients: stored.length });
+  res.json({
+    ok: true,
+    inbound,
+    clients: stored.length,
+    replaced: collisions.length,
+    // worth saying out loud: their address was not one this machine can bind
+    movedAddress: inbound.address || ''
+  });
 });
 
 /** Share links as plain text, for one inbound or for all of them. */
@@ -722,7 +796,7 @@ router.get('/clients', (req, res) => {
   res.json(list.map((c) => {
     const inb = d.inbounds.find((i) => i.id === c.inboundId);
     return Object.assign({}, c, {
-      inboundRemark: inb ? inb.remark : '(deleted)',
+      inboundRemark: inb ? inb.remark : 'not attached',
       protocol: inb ? inb.protocol : '',
       expired: xray.isExpired(c),
       depleted: xray.isOverQuota(c),

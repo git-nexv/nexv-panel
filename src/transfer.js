@@ -1,4 +1,14 @@
 'use strict';
+const os = require('os');
+
+/** Every address this host can actually bind to. */
+function localAddresses() {
+  const found = ['127.0.0.1', '::1'];
+  for (const list of Object.values(os.networkInterfaces() || {})) {
+    for (const entry of list || []) found.push(entry.address);
+  }
+  return found;
+}
 /**
  * Moving an inbound between panels, in the shape 3x-ui writes.
  *
@@ -212,11 +222,21 @@ function importInbound(raw) {
   const grpc = asObject(stream.grpcSettings);
   const kcp = asObject(stream.kcpSettings);
 
+  /*
+   * Other panels put the address they hand out to clients in `listen` - a CDN
+   * edge IP, say. Binding that would fail, because the machine does not own
+   * it, and Xray would refuse to start. Anything this host cannot bind becomes
+   * the share address instead, which is what the field meant there anyway.
+   */
+  const wanted = String(data.listen || '').trim();
+  const bindable = !wanted || wanted === '0.0.0.0' || wanted === '::' || localAddresses().includes(wanted);
+
   const inbound = {
     remark: clean(data.remark) || `imported-${data.port}`,
     protocol: data.protocol,
     port: Number(data.port),
-    listen: data.listen || '0.0.0.0',
+    listen: bindable ? (wanted || '0.0.0.0') : '0.0.0.0',
+    address: bindable ? (clean(data.shareAddr) || '') : wanted,
     enable: data.enable !== false,
     network,
     security: stream.security || 'none',

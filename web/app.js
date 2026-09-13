@@ -620,16 +620,134 @@ function pickJsonFile() {
   });
 }
 
-async function importInboundFile() {
-  const data = await pickJsonFile();
-  if (!data) return;
+/**
+ * Paste an inbound in, as text. The export from this panel and the one 3x-ui
+ * produces are the same shape, so either can be pasted here - clients, quotas
+ * and subIds included, which is what keeps everyone's subscription working.
+ */
+function importInboundText() {
+  const area = el('textarea', {
+    style: 'min-height:260px',
+    placeholder: 'Paste the inbound JSON here, clients and all'
+  });
+  const replace = el('input', { type: 'checkbox' });
+  const status = el('div', { class: 'hint', style: 'margin-top:10px' });
+
+  const body = el('div', {}, [
+    area,
+    el('label', { class: 'switch', style: 'margin-top:12px' }, [
+      replace, el('span', { class: 'track' }),
+      el('span', { class: 'muted', text: 'Take over clients whose names already exist' })
+    ]),
+    status
+  ]);
+
+  const go = async (close) => {
+    const text = area.value.trim();
+    if (!text) return toast('Paste the inbound first', 'err');
+    status.textContent = 'Importing\u2026';
+    try {
+      const result = await api.post('/inbounds/import', { text, replace: replace.checked });
+      let note = `Imported with ${result.clients} client(s)`;
+      if (result.replaced) note += `, ${result.replaced} taken over`;
+      toast(note);
+      if (result.movedAddress) {
+        toast(`This server cannot bind ${result.movedAddress}, so it is the share address now`);
+      }
+      close();
+      render();
+    } catch (err) {
+      status.textContent = err.message;
+      toast(err.message, 'err');
+    }
+  };
+
+  modal({
+    title: 'Import an inbound',
+    subtitle: 'From this panel or from 3x-ui.',
+    body,
+    width: 720,
+    actions: [{ label: 'Import', kind: 'primary', onClick: go }]
+  });
+
+  // the clipboard is where it almost always comes from
+  if (navigator.clipboard && navigator.clipboard.readText) {
+    navigator.clipboard.readText()
+      .then((text) => { if (!area.value && /"protocol"/.test(text)) area.value = text; })
+      .catch(() => { /* the browser said no, so they will paste it themselves */ });
+  }
+}
+
+async function exportInboundText(inb) {
   try {
-    const result = await api.post('/inbounds/import', data);
-    toast(`Imported with ${result.clients} client(s)`);
-    render();
+    const result = await api.get(`/inbounds/${inb.id}/export`);
+    textDialog(
+      `Export "${inb.remark}"`,
+      `${result.clients} client(s) included. Paste this into another panel - 3x-ui reads it too.`,
+      result.text
+    );
   } catch (err) {
     toast(err.message, 'err');
   }
+}
+
+/** Pick who sits on this inbound. Moving nobody's subId, nobody loses a link. */
+async function attachClients(inb) {
+  let clients;
+  try { clients = await api.get('/clients'); } catch (err) { return toast(err.message, 'err'); }
+  if (!clients.length) return toast('There are no clients yet');
+
+  const boxes = new Map();
+  const list = el('div', { class: 'attach-list' });
+  for (const client of clients) {
+    const box = el('input', { type: 'checkbox' });
+    box.checked = client.inboundId === inb.id;
+    boxes.set(client.id, box);
+    list.append(el('label', { class: 'attach-row' }, [
+      box,
+      el('div', {}, [
+        el('strong', { text: client.email }),
+        el('div', { class: 'faint', style: 'font-size:11px', text: client.inboundId === inb.id ? 'already here' : (client.inboundRemark || 'not attached') })
+      ])
+    ]));
+  }
+
+  const setAll = (on) => { for (const box of boxes.values()) box.checked = on; };
+  const body = el('div', {}, [
+    el('div', { class: 'row', style: 'margin-bottom:12px' }, [
+      el('button', { class: 'btn', text: 'Select all', onclick: () => setAll(true) }),
+      el('button', { class: 'btn ghost', text: 'Select none', onclick: () => setAll(false) })
+    ]),
+    list
+  ]);
+
+  modal({
+    title: `Clients on "${inb.remark}"`,
+    subtitle: 'Ticked clients move here; unticked ones are taken off. Subscription links are unaffected.',
+    body,
+    width: 560,
+    actions: [{
+      label: 'Apply',
+      kind: 'primary',
+      onClick: async (close) => {
+        const attach = [];
+        const detach = [];
+        for (const [id, box] of boxes) {
+          const client = clients.find((c) => c.id === id);
+          if (box.checked && client.inboundId !== inb.id) attach.push(id);
+          if (!box.checked && client.inboundId === inb.id) detach.push(id);
+        }
+        if (!attach.length && !detach.length) { close(); return toast('Nothing changed'); }
+        try {
+          if (detach.length) await api.post(`/inbounds/${inb.id}/detach`, { clientIds: detach });
+          if (attach.length) await api.post(`/inbounds/${inb.id}/attach`, { clientIds: attach });
+          toast(`${attach.length} attached, ${detach.length} detached`);
+          close();
+          render();
+        } catch (err) { toast(err.message, 'err'); }
+      }
+    }]
+  });
 }
 
 async function showUrls(kind, inboundId) {
@@ -664,7 +782,7 @@ async function renderInbounds(view) {
     el('div', { class: 'muted', text: 'Each inbound is one port and one protocol that clients connect to.' }),
     el('div', { class: 'row' }, [
       popupMenu([
-        { label: 'Import an inbound', onClick: importInboundFile },
+        { label: 'Import an inbound', onClick: importInboundText },
         'sep',
         { label: 'Export all URLs', onClick: () => showUrls('links', null) },
         { label: 'Export all URLs — subscription', onClick: () => showUrls('sub', null) },
@@ -712,16 +830,17 @@ async function renderInbounds(view) {
         }),
         popupMenu([
           { label: 'Edit', onClick: () => inboundForm(inb) },
-          { label: 'Export inbound', onClick: () => { location.href = `${BASE}api/inbounds/${inb.id}/export`; } },
+          { label: 'Export inbound', onClick: () => exportInboundText(inb) },
           { label: 'Export all URLs', onClick: () => showUrls('links', inb.id) },
           { label: 'Export all URLs — subscription', onClick: () => showUrls('sub', inb.id) },
           'sep',
+          { label: 'Attach clients…', onClick: () => attachClients(inb) },
           { label: 'Reset traffic', onClick: () => resetTraffic(inb.id, `"${inb.remark}"`) },
           'sep',
           {
             label: 'Delete',
             danger: true,
-            onClick: () => confirmDialog(`Delete inbound "${inb.remark}" and all of its clients?`, async () => {
+            onClick: () => confirmDialog(`Delete inbound "${inb.remark}"? Its clients are kept and become unattached.`, async () => {
               try {
                 await api.del(`/inbounds/${inb.id}`);
                 toast('Inbound deleted');
@@ -1777,9 +1896,48 @@ async function renderSettings(view) {
 
   view.append(el('div', { class: 'section-title', text: 'Backup' }));
   view.append(el('div', { class: 'card row' }, [
-    el('a', { class: 'btn', href: `${BASE}api/backup`, download: '' }, ['Download backup']),
     el('button', {
-      class: 'btn', text: 'Restore from file',
+      class: 'btn primary', text: 'Show backup as text',
+      onclick: async () => {
+        try {
+          const dump = await api.get('/backup');
+          textDialog(
+            'Panel backup',
+            'Everything: inbounds, clients, outbounds, routing, settings and the bot. Keep it somewhere safe.',
+            JSON.stringify(dump, null, 2)
+          );
+        } catch (err) { toast(err.message, 'err'); }
+      }
+    }),
+    el('button', {
+      class: 'btn', text: 'Restore from text',
+      onclick: () => {
+        const area = el('textarea', { style: 'min-height:260px', placeholder: 'Paste a panel backup here' });
+        modal({
+          title: 'Restore the panel',
+          subtitle: 'This replaces the inbounds, clients, outbounds and routing you have now.',
+          body: area,
+          width: 720,
+          actions: [{
+            label: 'Restore',
+            kind: 'danger',
+            onClick: async (close) => {
+              let parsed;
+              try { parsed = JSON.parse(area.value); } catch (_) { return toast('That is not valid JSON', 'err'); }
+              try {
+                await api.post('/restore', parsed);
+                toast('Configuration restored');
+                close();
+                render();
+              } catch (err) { toast(err.message, 'err'); }
+            }
+          }]
+        });
+      }
+    }),
+    el('a', { class: 'btn ghost', href: `${BASE}api/backup`, download: '' }, ['Download as a file']),
+    el('button', {
+      class: 'btn ghost', text: 'Restore from a file',
       onclick: () => {
         const picker = el('input', { type: 'file', accept: 'application/json', class: 'hidden' });
         picker.addEventListener('change', async () => {
