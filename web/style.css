@@ -124,9 +124,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
   position: sticky; top: 0; z-index: 30;
   display: flex; align-items: center; gap: 14px;
   padding: 14px 26px;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg) 78%, transparent);
-  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--glass-edge);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(26px) saturate(190%);
+  backdrop-filter: blur(26px) saturate(190%);
 }
 .topbar h1 { font-size: 17px; margin: 0; font-weight: 650; }
 .topbar .spacer { flex: 1; }
@@ -416,3 +417,221 @@ td .row-actions { display: flex; gap: 6px; }
 .popup button:hover { background: var(--surface-2); }
 .popup button.danger { color: var(--danger); }
 .popup .sep { height: 1px; margin: 6px 4px; background: var(--border); }
+
+/* =========================== liquid glass ============================== */
+/*
+ * One material, used by every floating surface: a translucent pane that
+ * samples what is behind it, lifted by a bright inner top edge and a soft
+ * shadow. Saturation is pushed so colour shows through the blur the way
+ * Apple's does, instead of going grey.
+ */
+:root {
+  --glass: rgba(22, 28, 46, .62);
+  --glass-edge: rgba(255, 255, 255, .14);
+  --glass-sheen: rgba(255, 255, 255, .10);
+  --glass-shadow: 0 20px 50px -20px rgba(0, 0, 0, .7), 0 2px 10px -4px rgba(0, 0, 0, .5);
+  --spring: cubic-bezier(.32, 1.3, .5, 1);
+  --glide: cubic-bezier(.22, .68, .24, 1);
+}
+:root[data-theme="light"] {
+  --glass: rgba(255, 255, 255, .68);
+  --glass-edge: rgba(16, 24, 45, .10);
+  --glass-sheen: rgba(255, 255, 255, .75);
+  --glass-shadow: 0 20px 50px -22px rgba(16, 24, 45, .38), 0 2px 10px -5px rgba(16, 24, 45, .22);
+}
+
+.glass {
+  position: relative;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(26px) saturate(190%);
+  backdrop-filter: blur(26px) saturate(190%);
+  border: 1px solid var(--glass-edge);
+  box-shadow: var(--glass-shadow);
+}
+/* the bright hairline along the top edge that sells the material */
+.glass::before {
+  content: '';
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(180deg, var(--glass-sheen), transparent 55%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* ============================== the dock =============================== */
+
+.dock {
+  position: fixed; z-index: 90;
+  inset-inline: 0; bottom: max(14px, env(safe-area-inset-bottom));
+  display: flex; justify-content: center; align-items: center;
+  /* the gap that sets the More button apart, the way iOS separates search */
+  gap: 10px;
+  padding-inline: 12px;
+  pointer-events: none;
+}
+.dock-bar {
+  pointer-events: auto;
+  position: relative;
+  display: flex; align-items: center; gap: 2px;
+  padding: 7px;
+  border-radius: 999px;
+  touch-action: none;
+}
+.dock-item {
+  position: relative; z-index: 1;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  min-width: 72px; padding: 8px 12px 7px;
+  border: 0; background: transparent; cursor: pointer;
+  color: var(--muted); font: inherit; font-size: 10.5px; font-weight: 600;
+  border-radius: 999px;
+  transition: color .28s var(--glide), transform .38s var(--spring);
+}
+.dock-item svg { transition: transform .38s var(--spring); }
+.dock-item.active { color: var(--brand); }
+.dock-item.active svg { transform: translateY(-1px) scale(1.06); }
+.dock-item:active { transform: scale(.94); }
+
+/* the bubble that slides between items */
+.dock-bubble {
+  position: absolute; z-index: 0;
+  top: 7px; bottom: 7px; left: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--brand) 34%, transparent);
+  box-shadow: 0 6px 18px -8px color-mix(in srgb, var(--brand) 70%, transparent);
+  transition: transform .42s var(--spring), width .42s var(--spring);
+  will-change: transform, width;
+}
+/* while a finger is down the bubble tracks it without the spring */
+.dock-bar.dragging .dock-bubble { transition: transform .09s linear, width .09s linear; }
+.dock-bar.dragging .dock-item { transition: color .12s linear; }
+
+/* the More menu, a second pill that grows upward out of the dock */
+/* More sits on its own, a round pill beside the bar */
+.dock-solo {
+  pointer-events: auto;
+  display: flex; align-items: center; justify-content: center;
+  width: 58px; height: 58px; padding: 0;
+  border-radius: 999px;
+  border: 0; cursor: pointer;
+  color: var(--muted); font: inherit;
+  transition: color .24s var(--glide), transform .34s var(--spring), background .24s var(--glide);
+}
+.dock-solo:active { transform: scale(.92); }
+.dock-solo.active {
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--brand) 34%, transparent);
+}
+
+.dock-more {
+  position: fixed; z-index: 89;
+  left: 50%; transform-origin: bottom center;
+  bottom: calc(max(14px, env(safe-area-inset-bottom)) + 76px);
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 7px;
+  border-radius: 26px;
+  opacity: 0; transform: translateX(-50%) translateY(14px) scale(.86);
+  transition: opacity .26s var(--glide), transform .4s var(--spring);
+  pointer-events: none;
+}
+.dock-more.open { opacity: 1; transform: translateX(-50%); pointer-events: auto; }
+.dock-more button {
+  display: flex; align-items: center; gap: 11px;
+  padding: 11px 18px 11px 14px; min-width: 190px;
+  border: 0; border-radius: 999px; background: transparent; cursor: pointer;
+  color: var(--text); font: inherit; font-size: 13.5px; font-weight: 600; text-align: start;
+  transition: background .2s var(--glide), transform .3s var(--spring);
+}
+.dock-more button:hover { background: var(--surface-2); }
+.dock-more button:active { transform: scale(.97); }
+.dock-more button.active { color: var(--brand); }
+/* each row eases in just after the one above it */
+.dock-more.open button { animation: dock-rise .42s var(--spring) both; }
+@keyframes dock-rise {
+  from { opacity: 0; transform: translateY(10px) scale(.96); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (min-width: 981px) { .dock, .dock-more { display: none; } }
+@media (max-width: 980px) {
+  /* the dock replaces the drawer, so leave room for it */
+  .content { padding-bottom: 110px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dock-item, .dock-bubble, .dock-more, .dock-more button, .dock-item svg {
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+  }
+}
+
+/* ======================== motion across the panel ====================== */
+
+/* every page change eases in rather than snapping */
+.content > * { animation: page-in .34s var(--glide) both; }
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* rows arrive in sequence, so a table reads as it fills */
+tbody tr { animation: row-in .3s var(--glide) both; }
+tbody tr:nth-child(1) { animation-delay: 0ms; }
+tbody tr:nth-child(2) { animation-delay: 22ms; }
+tbody tr:nth-child(3) { animation-delay: 44ms; }
+tbody tr:nth-child(4) { animation-delay: 66ms; }
+tbody tr:nth-child(5) { animation-delay: 88ms; }
+tbody tr:nth-child(n+6) { animation-delay: 110ms; }
+@keyframes row-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.card, .btn, .nav-item, .chip, .tab, .dock-item {
+  transition:
+    background .24s var(--glide),
+    border-color .24s var(--glide),
+    color .24s var(--glide),
+    transform .34s var(--spring),
+    box-shadow .28s var(--glide);
+}
+.btn:active, .nav-item:active { transform: scale(.97); }
+.card:hover { transform: translateY(-1px); }
+
+/* dialogs and menus share the dock's material and its spring */
+.modal, .popup { background: var(--glass); -webkit-backdrop-filter: blur(30px) saturate(190%); backdrop-filter: blur(30px) saturate(190%); border-color: var(--glass-edge); }
+.modal { animation: modal-in .42s var(--spring) both; }
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(18px) scale(.94); }
+  to   { opacity: 1; transform: none; }
+}
+.modal-backdrop { animation: fade-in .24s var(--glide) both; -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+.popup { animation: popup-in .3s var(--spring) both; }
+@keyframes popup-in {
+  from { opacity: 0; transform: translateY(-6px) scale(.96); }
+  to   { opacity: 1; transform: none; }
+}
+
+.toast { animation: toast-in .42s var(--spring) both; }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(14px) scale(.94); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* the bars that show quota fill up instead of appearing full */
+.bar > i { transition: width .6s var(--glide); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

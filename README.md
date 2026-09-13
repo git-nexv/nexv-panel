@@ -77,6 +77,20 @@ Every entry is also a direct command:
 | `nexv fix [port]` | move the panel to a reachable port and verify it |
 | `nexv uninstall` | remove the panel |
 
+## Interface
+
+The panel is built on one translucent material — a blurred, saturated pane with
+a bright top edge — shared by the top bar, cards, dialogs and menus.
+
+On a phone the sidebar gives way to a floating dock: Dashboard, Inbounds,
+Clients and Account in a glass pill with a bubble that slides between them, and
+a separate round **More** button beside it that opens the remaining pages in a
+second pill above the bar. Dragging a finger across the dock carries the bubble
+with it and commits on release, the way the iOS call bar behaves.
+
+Page changes, table rows, dialogs, menus and toasts all animate on a spring, and
+everything collapses to an instant change under `prefers-reduced-motion`.
+
 ## Panel sections
 
 - **Dashboard** — CPU, memory, disk, live network speed, Xray state, totals.

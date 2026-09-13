@@ -270,6 +270,7 @@ function navigate(page) {
   document.getElementById('pageTitle').textContent = (PAGES.find((p) => p.id === page) || {}).label || '';
   document.getElementById('sidebar').classList.remove('open');
   renderNav();
+  moveBubble(page, true);
   render();
 }
 
@@ -1794,6 +1795,202 @@ async function renderAccount(view) {
   ]));
 }
 
+/* --------------------------------- dock ---------------------------------- */
+
+/** The four pages that earn a permanent spot; the rest live under More. */
+const DOCK_PAGES = ['dashboard', 'inbounds', 'clients', 'account'];
+
+const dock = {
+  bar: null, bubble: null, items: [], more: null, moreItem: null, moreOpen: false
+};
+
+/**
+ * A floating tab bar in the shape of iOS's: a bubble sits behind the active
+ * item and slides between them, and a finger dragged across the bar carries
+ * the bubble with it, committing to whatever it is over when released.
+ */
+function buildDock() {
+  const host = el('div', { class: 'dock' });
+  const bar = el('div', { class: 'dock-bar glass' });
+  const bubble = el('div', { class: 'dock-bubble' });
+  bar.append(bubble);
+
+  const entries = DOCK_PAGES.map((id) => PAGES.find((p) => p.id === id)).filter(Boolean);
+  const rest = PAGES.filter((p) => !DOCK_PAGES.includes(p.id));
+
+  const items = entries.map((page) => {
+    const item = el('button', {
+      class: 'dock-item', type: 'button', 'data-page': page.id,
+      html: `${icon(page.icon, 21)}<span>${page.label}</span>`
+    });
+    bar.append(item);
+    return item;
+  });
+
+  // More stands apart from the bar, with a gap, like the search key on iOS
+  const moreItem = el('button', {
+    class: 'dock-solo glass', type: 'button', 'data-page': '__more',
+    title: 'More', html: icon('more', 22)
+  });
+
+  /* the More sheet: the same pill, grown upward */
+  const more = el('div', { class: 'dock-more glass' });
+  for (const page of rest) {
+    more.append(el('button', {
+      type: 'button', 'data-page': page.id,
+      html: `${icon(page.icon, 18)}<span>${page.label}</span>`,
+      onclick: () => { closeMore(); navigate(page.id); }
+    }));
+  }
+  more.append(
+    el('button', {
+      type: 'button',
+      html: `${icon('theme', 18)}<span>Toggle theme</span>`,
+      onclick: () => {
+        closeMore();
+        applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+      }
+    }),
+    el('button', {
+      type: 'button',
+      html: `${icon('logout', 18)}<span>Sign out</span>`,
+      onclick: async () => {
+        closeMore();
+        try { await api.post('/logout'); } catch (_) { /* sign out locally anyway */ }
+        location.href = `${BASE}login`;
+      }
+    })
+  );
+
+  host.append(bar, moreItem);
+  document.body.append(host, more);
+  moreItem.addEventListener('click', (event) => { event.stopPropagation(); toggleMore(); });
+
+  Object.assign(dock, { bar, bubble, items, more, moreItem });
+  attachDrag(bar, items);
+  document.addEventListener('click', (event) => {
+    if (dock.moreOpen && !more.contains(event.target) && !bar.contains(event.target)) closeMore();
+  });
+  window.addEventListener('resize', () => moveBubble(state.page, false));
+}
+
+function toggleMore() { dock.moreOpen ? closeMore() : openMore(); }
+
+function openMore() {
+  dock.moreOpen = true;
+  dock.more.classList.add('open');
+  // stagger the rows so the sheet unfolds rather than appearing
+  Array.from(dock.more.children).forEach((row, i) => {
+    row.style.animationDelay = `${i * 28}ms`;
+  });
+  moveBubble(state.page, true);
+}
+
+function closeMore() {
+  if (!dock.moreOpen) return;
+  dock.moreOpen = false;
+  dock.more.classList.remove('open');
+  moveBubble(state.page, true);
+}
+
+/** Park the bubble behind one item; `animate` false skips the spring. */
+function moveBubble(pageId, animate = true) {
+  if (!dock.bar) return;
+  if (dock.moreItem) dock.moreItem.classList.toggle('active', dock.moreOpen);
+  const item = dock.items.find((i) => i.dataset.page === pageId);
+  if (!item) {
+    // the page lives under More, so nothing in the bar is current
+    dock.items.forEach((other) => other.classList.remove('active'));
+    dock.bubble.style.opacity = '0';
+    return;
+  }
+  dock.bubble.style.opacity = '1';
+
+  const on = dock.bar.getBoundingClientRect();
+  const box = item.getBoundingClientRect();
+  if (!animate) dock.bar.classList.add('dragging');
+  dock.bubble.style.width = `${box.width}px`;
+  dock.bubble.style.transform = `translateX(${box.left - on.left}px)`;
+  if (!animate) requestAnimationFrame(() => dock.bar.classList.remove('dragging'));
+
+  for (const other of dock.items) other.classList.toggle('active', other === item);
+}
+
+/**
+ * Drag across the bar to preview a tab, release to commit - the gesture the
+ * iOS call bar uses. A tap is just a zero-length drag, so both paths agree.
+ */
+function attachDrag(bar, items) {
+  let dragging = false;
+  let hovered = null;
+
+  const itemAt = (clientX) => items.find((item) => {
+    const box = item.getBoundingClientRect();
+    return clientX >= box.left && clientX <= box.right;
+  });
+
+  const slide = (clientX) => {
+    const item = itemAt(clientX);
+    if (!item || item === hovered) return;
+    hovered = item;
+    moveBubble(item.dataset.page, true);
+    // a short tick under the finger, where the platform supports it
+    if (navigator.vibrate) navigator.vibrate(4);
+  };
+
+  bar.addEventListener('pointerdown', (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    dragging = true;
+    hovered = null;
+    bar.setPointerCapture(event.pointerId);
+    bar.classList.add('dragging');
+    slide(event.clientX);
+  });
+
+  bar.addEventListener('pointermove', (event) => {
+    if (dragging) slide(event.clientX);
+  });
+
+  /*
+   * Capturing the pointer for the drag retargets the click to the bar, so the
+   * items' own click handlers would never run. Activation lives here instead,
+   * which also keeps tap and drag on exactly the same path.
+   */
+  const activate = (item) => {
+    if (!item) return moveBubble(state.page, true);
+    const target = item.dataset.page;
+    if (target === '__more') return toggleMore();
+    closeMore();
+    if (target !== state.page) navigate(target);
+    else moveBubble(state.page, true);
+  };
+
+  const finish = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    bar.classList.remove('dragging');
+    const item = itemAt(event.clientX) || hovered;
+    hovered = null;
+    activate(item);
+  };
+
+  bar.addEventListener('pointerup', finish);
+
+  // keyboard users never produce a pointer event
+  bar.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const item = event.target.closest('.dock-item');
+    if (!item) return;
+    event.preventDefault();
+    activate(item);
+  });
+  bar.addEventListener('pointercancel', () => {
+    dragging = false;
+    bar.classList.remove('dragging');
+    moveBubble(state.page, true);
+  });
+}
+
 /* --------------------------------- boot ---------------------------------- */
 
 function applyTheme(theme) {
@@ -1844,7 +2041,10 @@ function boot() {
 
   applyTheme(store.get('nexv-theme') || 'dark');
   hydrateIcons();
+  buildDock();
   navigate(location.hash.slice(1) || 'dashboard');
+  // the bar has just been laid out; park the bubble without a flight
+  requestAnimationFrame(() => moveBubble(state.page, false));
 }
 
 try {
