@@ -8,20 +8,22 @@
 <style>
   :root {
     color-scheme: dark;
-    --bg: #080b13;
-    --bg-2: #0d1220;
-    --surface: rgba(255,255,255,.04);
-    --surface-2: rgba(255,255,255,.07);
-    --border: rgba(255,255,255,.09);
-    --border-strong: rgba(255,255,255,.16);
-    --text: #eef1f8;
-    --muted: #9aa4bd;
-    --faint: #6b7490;
-    --brand: #6c8cff;
-    --brand-2: #a07bff;
-    --ok: #2fd98f;
-    --warn: #ffb454;
-    --danger: #ff5c7a;
+    /* the same weights the panel uses, so a customer's page and the admin's
+       read as one product rather than two */
+    --bg: #070a12;
+    --bg-2: #161e33;
+    --surface: rgba(255,255,255,.07);
+    --surface-2: rgba(255,255,255,.115);
+    --border: rgba(255,255,255,.14);
+    --border-strong: rgba(255,255,255,.28);
+    --text: #f2f5fc;
+    --muted: #a9b5d0;
+    --faint: #7c89a8;
+    --brand: #6482ff;
+    --brand-2: #9165ff;
+    --ok: #1fd08c;
+    --warn: #ffad2e;
+    --danger: #ff5169;
     --radius: 18px;
     --ease: cubic-bezier(.22,1,.36,1);
   }
@@ -118,7 +120,7 @@
   .toast {
     position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%) translateY(20px);
     padding: 11px 18px; border-radius: 999px; opacity: 0; pointer-events: none;
-    background: rgba(20,26,44,.96); border: 1px solid var(--border-strong);
+    background: var(--bg-2); border: 1px solid var(--border-strong);
     font-size: 13px; font-weight: 600; backdrop-filter: blur(12px);
     transition: opacity .24s var(--ease), transform .34s var(--ease);
   }
