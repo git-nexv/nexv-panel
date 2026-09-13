@@ -136,7 +136,7 @@ function dismissToast(node) {
   node.style.animation = 'none';
   node.style.transition = 'opacity .2s var(--ease), transform .24s var(--ease)';
   node.style.opacity = '0';
-  node.style.transform = 'translateY(-10px) scale(.96)';
+  node.style.transform = 'translateY(10px) scale(.96)';
   setTimeout(() => node.remove(), 250);
 }
 
@@ -3466,6 +3466,7 @@ function liquidLens(container, selector, axis, onPick) {
   let last = 0;
   let lensSize = 0;
   let raf = 0;
+  let stuckTimer = 0;
   /*
    * Item positions cannot change while a finger is down, so they are measured
    * once on press. Reading offsetLeft inside the animation frame - right after
@@ -3532,6 +3533,13 @@ function liquidLens(container, selector, axis, onPick) {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     const item = event.target.closest(selector);
     if (!item) return;
+    /*
+     * A press left over from a gesture that never ended - the browser swallowed
+     * the pointerup, the tab went to the background mid-drag, a second finger
+     * landed - would otherwise sit here holding the bar hostage: every later
+     * tap is read as part of it and nothing happens. Clear it and start fresh.
+     */
+    if (pressing) finish(null, true);
     const list = items();
     const i = list.indexOf(item);
 
@@ -3547,6 +3555,10 @@ function liquidLens(container, selector, axis, onPick) {
     startPos = vertical ? event.clientY : event.clientX;
 
     thumb.classList.remove('release', 'dragging');
+    clearTimeout(stuckTimer);
+    // nobody holds a navigation key for six seconds; if it looks like they are,
+    // the release was lost and the bar should let go of it
+    stuckTimer = setTimeout(() => { if (pressing) finish(null, true); }, 6000);
     if (activeIdx < 0) put(start(item), size(item));
     requestAnimationFrame(() => {
       thumb.classList.add('on', 'lifted');
@@ -3580,7 +3592,10 @@ function liquidLens(container, selector, axis, onPick) {
   function finish(event, cancelled) {
     if (!pressing || (event && event.pointerId !== pointerId)) return;
     pressing = false;
+    clearTimeout(stuckTimer);
     cancelAnimationFrame(raf);
+    try { if (pointerId !== null) container.releasePointerCapture(pointerId); } catch (_) { /* already gone */ }
+    pointerId = null;
 
     const list = items();
     held = null;
@@ -3616,13 +3631,28 @@ function liquidLens(container, selector, axis, onPick) {
     // let the capsule land before the page changes under it
     const wasDrag = dragging;
     dragging = false;
-    setTimeout(() => onPick(picked), wasDrag ? 140 : 90);
+    setTimeout(() => {
+      try { onPick(picked); } catch (err) { toast(err.message, 'err'); }
+    }, wasDrag ? 140 : 90);
   }
 
   container.addEventListener('pointerup', (event) => finish(event, false));
   container.addEventListener('pointercancel', (event) => finish(event, true));
   container.addEventListener('lostpointercapture', (event) => { if (pressing) finish(event, false); });
   container.addEventListener('contextmenu', (event) => event.preventDefault());
+
+  /*
+   * The same press, ended from outside. Pointer capture usually brings the
+   * release back to the bar, but not always: a gesture the browser takes over
+   * for a scroll, a finger lifted over the address bar, an alert stealing the
+   * page. Each of these leaves the bar looking dead until something else
+   * resets it - which is what "I have to press More to get it back" was.
+   */
+  const bail = () => { if (pressing) finish(null, true); };
+  window.addEventListener('pointerup', bail);
+  window.addEventListener('pointercancel', bail);
+  window.addEventListener('blur', bail);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) bail(); });
 
   // keyboard activation never produces a pointer event
   container.addEventListener('click', (event) => {
@@ -3748,6 +3778,13 @@ function trackTopbar() {
   const set = () => {
     const bottom = Math.round(bar.getBoundingClientRect().bottom);
     document.documentElement.style.setProperty('--topbar-b', `${bottom}px`);
+    /* the notice strip sits above the navigation bar and needs its height,
+       which is declared on .dock and so is not visible from :root */
+    const dock = document.querySelector('.dock');
+    if (dock) {
+      const h = getComputedStyle(dock).getPropertyValue('--dock-h').trim();
+      if (h) document.documentElement.style.setProperty('--dock-h', h);
+    }
   };
   set();
   if (window.ResizeObserver) new ResizeObserver(set).observe(bar);
