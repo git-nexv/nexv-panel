@@ -160,7 +160,7 @@ function toList(value, existingValue, fallback) {
 
 function normalizeInbound(body, existing) {
   const inb = Object.assign({}, existing || {}, {
-    remark: String(body.remark || existing?.remark || 'inbound').trim(),
+    remark: transfer.clean(body.remark ?? existing?.remark) || 'inbound',
     protocol: body.protocol || existing?.protocol || 'vless',
     port: Number(body.port || existing?.port || 0),
     listen: body.listen ?? existing?.listen ?? '0.0.0.0',
@@ -197,6 +197,8 @@ function normalizeInbound(body, existing) {
     alpn: toList(body.alpn, existing?.alpn, ['h2', 'http/1.1']),
     curvePreferences: toList(body.curvePreferences, existing?.curvePreferences, []),
     masterKeyLog: body.masterKeyLog ?? existing?.masterKeyLog ?? '',
+    echServerKeys: body.echServerKeys ?? existing?.echServerKeys ?? '',
+    echConfigList: body.echConfigList ?? existing?.echConfigList ?? '',
     certContent: body.certContent ?? existing?.certContent ?? '',
     keyContent: body.keyContent ?? existing?.keyContent ?? '',
     ocspStapling: Number(body.ocspStapling ?? existing?.ocspStapling ?? 0),
@@ -324,6 +326,13 @@ router.get('/generate/:kind', async (req, res) => {
   }
   if (kind === 'sskey') {
     return res.json({ value: ssKey(String(req.query.method || '')) });
+  }
+  if (kind === 'ech') {
+    try {
+      return res.json(await xray.generateECH(req.query.sni));
+    } catch (err) {
+      return bad(res, err.message, 500);
+    }
   }
   if (kind === 'reality') {
     try {
@@ -460,7 +469,8 @@ router.post('/inbounds/reset-traffic', async (req, res) => {
 
 function normalizeClient(body, existing, inbound) {
   const c = Object.assign({}, existing || {}, {
-    email: String(body.email || existing?.email || '').trim(),
+    // a newline in a name makes the export unreadable to other panels
+    email: transfer.clean(body.email ?? existing?.email),
     uuid: body.uuid || existing?.uuid || crypto.randomUUID(),
     password: body.password || existing?.password || randomPass(),
     flow: body.flow ?? existing?.flow ?? '',
@@ -468,7 +478,7 @@ function normalizeClient(body, existing, inbound) {
     expiryTime: Number(body.expiryTime ?? existing?.expiryTime ?? 0),
     limitIp: Number(body.limitIp ?? existing?.limitIp ?? 0),
     tgId: body.tgId ?? existing?.tgId ?? '',
-    comment: body.comment ?? existing?.comment ?? '',
+    comment: transfer.clean(body.comment ?? existing?.comment),
     wgPublicKey: body.wgPublicKey ?? existing?.wgPublicKey ?? '',
     wgAllowedIPs: Array.isArray(body.wgAllowedIPs)
       ? body.wgAllowedIPs

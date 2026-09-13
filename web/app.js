@@ -701,6 +701,27 @@ function generatedField(value, kind, opts = {}) {
   return row;
 }
 
+/** A text field with a labelled action button beside it. */
+function actionField(value, label, onClick, opts = {}) {
+  const input = opts.multiline
+    ? el('textarea', { placeholder: opts.placeholder || '', style: 'min-height:90px' }, [value || ''])
+    : el('input', { type: 'text', value: value ?? '', placeholder: opts.placeholder || '' });
+  const button = el('button', {
+    class: 'btn ghost', type: 'button', text: label,
+    onclick: async () => {
+      button.disabled = true;
+      const original = button.textContent;
+      button.textContent = '...';
+      try { await onClick(input); } catch (err) { toast(err.message, 'err'); }
+      button.textContent = original;
+      button.disabled = false;
+    }
+  });
+  const row = el('div', { class: 'input-row' }, [input, button]);
+  row.input = input;
+  return row;
+}
+
 function tabbed(names) {
   const wrap = el('div');
   const bar = el('div', { class: 'tabs' });
@@ -867,6 +888,22 @@ function inboundForm(existing) {
   const keyFile = add('Security', 'Private key path', text(v.keyFile || ''), {
     full: true, placeholder: '/etc/letsencrypt/live/example.com/privkey.pem'
   });
+  const setCertBtn = el('button', {
+    class: 'btn', type: 'button', text: 'Set cert from panel',
+    onclick: async () => {
+      try {
+        const settings = await api.get('/settings');
+        if (!settings.certFile || !settings.keyFile) {
+          return toast('The panel has no certificate yet. Run: nexv cert <domain>', 'err');
+        }
+        certFile.value = settings.certFile;
+        keyFile.value = settings.keyFile;
+        if (!sni.value && settings.domain) sni.value = settings.domain;
+        toast('Filled in from the panel certificate');
+      } catch (err) { toast(err.message, 'err'); }
+    }
+  });
+  add('Security', ' ', el('div', { class: 'row' }, [setCertBtn]), { full: true });
   const certContent = add('Security', 'Certificate', el('textarea', {}, [v.certContent || '']), {
     full: true, placeholder: '-----BEGIN CERTIFICATE-----'
   });
@@ -875,6 +912,19 @@ function inboundForm(existing) {
   const certOneTimeLoading = add('Security', 'One time loading', toggle(v.certOneTimeLoading));
   const certUsage = add('Security', 'Usage option', selectOf(['encipherment', 'verify', 'issue'], v.certUsage || 'encipherment'));
   const masterKeyLog = add('Security', 'Master key log', text(v.masterKeyLog || ''), { full: true, placeholder: '/path/to/sslkeylog.txt' });
+
+  const echKeysRow = actionField(v.echServerKeys || '', 'Get new ECH cert', async (input) => {
+    if (!sni.value.trim()) return toast('Fill in the SNI first', 'err');
+    const result = await api.get(`/generate/ech?sni=${encodeURIComponent(sni.value.trim())}`);
+    input.value = result.echServerKeys || '';
+    echConfig.value = result.echConfigList || '';
+    toast('ECH keys generated');
+  }, { multiline: true, placeholder: 'press Get new ECH cert' });
+  add('Security', 'ECH key', echKeysRow, { full: true, hint: 'Server-side keys. Needs an SNI.' });
+  const echKeys = echKeysRow.input;
+  const echConfig = add('Security', 'ECH config', el('textarea', { style: 'min-height:90px' }, [v.echConfigList || '']), {
+    full: true, hint: 'Handed to clients; filled in by the button above.'
+  });
 
   const rDest = add('Security', 'REALITY dest', text((v.reality && v.reality.dest) || 'www.cloudflare.com:443'));
   const rNames = add('Security', 'REALITY server names', text((v.reality && (v.reality.serverNames || []).join(',')) || 'www.cloudflare.com'));
@@ -924,7 +974,7 @@ function inboundForm(existing) {
     show([fieldOf(sni), fieldOf(cipherSuites), fieldOf(tlsMinVersion), fieldOf(tlsMaxVersion),
       fieldOf(fingerprint), fieldOf(alpn), fieldOf(curvePreferences), fieldOf(rejectUnknownSni),
       fieldOf(certSeg), fieldOf(ocspStapling), fieldOf(certOneTimeLoading), fieldOf(certUsage),
-      fieldOf(masterKeyLog)], tls);
+      fieldOf(masterKeyLog), fieldOf(echKeys), fieldOf(echConfig), setCertBtn.closest('.field')], tls);
     show([fieldOf(certFile), fieldOf(keyFile)], tls && certSource === 'path');
     show([fieldOf(certContent), fieldOf(keyContent)], tls && certSource === 'content');
     show([fieldOf(rDest), fieldOf(rNames), fieldOf(rPriv), fieldOf(rPub), fieldOf(rShort)], reality);
@@ -993,6 +1043,8 @@ function inboundForm(existing) {
           certOneTimeLoading: toggleValue(certOneTimeLoading),
           certUsage: certUsage.value,
           masterKeyLog: masterKeyLog.value,
+          echServerKeys: echKeys.value.trim(),
+          echConfigList: echConfig.value.trim(),
           sniffing: toggleValue(sniffing),
           sniffDestOverride: sniffDestOverride.values(),
           sniffMetadataOnly: toggleValue(sniffMetadataOnly),

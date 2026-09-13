@@ -90,7 +90,12 @@ function tlsSettings(inb, net) {
   if (inb.cipherSuites) out.cipherSuites = inb.cipherSuites;
   if (inb.curvePreferences && inb.curvePreferences.length) out.curvePreferences = inb.curvePreferences;
   if (inb.masterKeyLog) out.masterKeyLog = inb.masterKeyLog;
-  if (inb.fingerprint) out.settings = { fingerprint: inb.fingerprint };
+  if (inb.echServerKeys) out.echServerKeys = inb.echServerKeys;
+  if (inb.fingerprint || inb.echConfigList) {
+    out.settings = {};
+    if (inb.fingerprint) out.settings.fingerprint = inb.fingerprint;
+    if (inb.echConfigList) out.settings.echConfigList = inb.echConfigList;
+  }
   return out;
 }
 
@@ -613,6 +618,25 @@ async function enforceLimits() {
   return dirty;
 }
 
+/**
+ * ECH key material for an inbound: the server keys go in the config, the
+ * config list is what clients need. Xray does the generating.
+ */
+async function generateECH(serverName) {
+  const sni = String(serverName || '').trim();
+  if (!sni) throw new Error('an SNI is needed before ECH keys can be generated');
+  const res = await run(XRAY_BIN, ['tls', 'ech', '--serverName', sni], 15000);
+  if (!res.ok) throw new Error(res.stderr.trim() || 'xray tls ech failed');
+
+  // output carries the two PEM-ish blocks, server keys first
+  const text = res.stdout;
+  const blocks = text.split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean);
+  const keys = blocks.find((b) => /BEGIN ECH KEYS/i.test(b)) || blocks[0] || '';
+  const config = blocks.find((b) => /BEGIN ECH CONFIGS/i.test(b)) || blocks[1] || '';
+  if (!keys) throw new Error(`could not read xray's ECH output: ${text.trim().slice(0, 120)}`);
+  return { echServerKeys: keys, echConfigList: config };
+}
+
 async function generateReality() {
   const res = await run(XRAY_BIN, ['x25519'], 8000);
   if (!res.ok) throw new Error(res.stderr.trim() || 'xray x25519 failed');
@@ -632,5 +656,5 @@ module.exports = {
   buildConfig, writeConfig, testConfig, apply, serviceStatus,
   INBOUND_PROTOCOLS, OUTBOUND_PROTOCOLS, CLIENT_PROTOCOLS, LINK_PROTOCOLS,
   restart, start, stop, collectTraffic, enforceLimits,
-  clientTag, isExpired, isOverQuota, generateReality, run, serviceUser
+  clientTag, isExpired, isOverQuota, generateReality, generateECH, run, serviceUser
 };

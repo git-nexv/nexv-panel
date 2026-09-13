@@ -12,6 +12,21 @@ const crypto = require('crypto');
 
 const GB = 1024 ** 3;
 
+/**
+ * Strip control characters from a value that will be written into JSON.
+ *
+ * A stray newline in a client name survives round-trips here, because
+ * JSON.stringify escapes it - but Go's decoder rejects the escaped form in
+ * some panels, so an export with one in it cannot be imported into 3x-ui at
+ * all. Nothing legitimate needs them, so they are removed at both ends.
+ */
+function clean(value) {
+  return String(value == null ? '' : value)
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001F\u007F]/g, '')
+    .trim();
+}
+
 /** 3x-ui stores settings and streamSettings as JSON strings in some versions. */
 function asObject(value) {
   if (!value) return {};
@@ -34,10 +49,12 @@ function exportInbound(inb, clients) {
     stream.httpupgradeSettings = { path: inb.wsPath || '/', host: inb.wsHost || '' };
   } else if (stream.network === 'xhttp') {
     stream.xhttpSettings = {
-      path: inb.wsPath || '',
-      host: inb.wsHost || '',
+      path: clean(inb.wsPath),
+      host: clean(inb.wsHost),
       mode: inb.xhttpMode || 'auto',
-      scMaxBufferedPosts: Number(inb.xhttpMaxBufferedUpload || 30)
+      xPaddingBytes: '100-1000',
+      scMaxBufferedPosts: Number(inb.xhttpMaxBufferedUpload || 30),
+      scStreamUpServerSecs: '20-80'
     };
   } else if (stream.network === 'kcp') {
     stream.kcpSettings = { seed: inb.kcpSeed || '', header: { type: inb.kcpHeader || 'none' } };
@@ -45,22 +62,31 @@ function exportInbound(inb, clients) {
 
   if (stream.security === 'tls') {
     stream.tlsSettings = {
-      serverName: inb.sni || '',
+      serverName: clean(inb.sni),
       minVersion: inb.tlsMinVersion || '1.2',
       maxVersion: inb.tlsMaxVersion || '1.3',
-      cipherSuites: inb.cipherSuites || '',
+      cipherSuites: clean(inb.cipherSuites),
       rejectUnknownSni: !!inb.rejectUnknownSni,
+      disableSystemRoot: false,
+      enableSessionResumption: false,
       certificates: (inb.certFile && inb.keyFile)
         ? [{
-          certificateFile: inb.certFile,
-          keyFile: inb.keyFile,
+          certificateFile: clean(inb.certFile),
+          keyFile: clean(inb.keyFile),
           ocspStapling: Number(inb.ocspStapling || 0),
           oneTimeLoading: !!inb.certOneTimeLoading,
-          usage: inb.certUsage || 'encipherment'
+          usage: inb.certUsage || 'encipherment',
+          buildChain: false
         }]
         : [],
       alpn: (inb.alpn && inb.alpn.length) ? inb.alpn : ['h2', 'http/1.1'],
-      settings: { fingerprint: inb.fingerprint || '' }
+      echServerKeys: clean(inb.echServerKeys),
+      settings: {
+        fingerprint: clean(inb.fingerprint),
+        echConfigList: clean(inb.echConfigList),
+        pinnedPeerCertSha256: [],
+        verifyPeerCertByName: ''
+      }
     };
   } else if (stream.security === 'reality') {
     const r = inb.reality || {};
@@ -78,50 +104,80 @@ function exportInbound(inb, clients) {
   if (inb.protocol === 'vless') { settings.decryption = 'none'; settings.encryption = 'none'; }
   if (inb.protocol === 'shadowsocks') { settings.method = inb.method || ''; settings.password = inb.password || ''; }
 
+  // The field set mirrors a 3x-ui export exactly, including the keys it does
+  // not strictly need, so a file written here imports there unchanged.
   return {
-    remark: inb.remark || '',
-    enable: inb.enable !== false,
-    listen: inb.listen === '0.0.0.0' ? '' : (inb.listen || ''),
-    port: Number(inb.port),
-    protocol: inb.protocol,
-    expiryTime: 0,
+    id: 1,
+    userId: 0,
     up: clients.reduce((a, c) => a + (c.up || 0), 0),
     down: clients.reduce((a, c) => a + (c.down || 0), 0),
     total: 0,
+    remark: clean(inb.remark),
+    enable: inb.enable !== false,
+    expiryTime: 0,
+    trafficReset: 'never',
+    trafficResetDay: 1,
+    lastTrafficResetTime: 0,
+    listen: inb.listen === '0.0.0.0' ? '' : clean(inb.listen),
+    port: Number(inb.port),
+    protocol: inb.protocol,
     settings,
     streamSettings: stream,
-    tag: inb.tag || `in-${inb.port}-${inb.protocol}`,
-    sniffing: { enabled: inb.sniffing !== false, destOverride: inb.sniffDestOverride || ['http', 'tls', 'quic'] },
-    clientStats: clients.map((c) => ({
+    tag: clean(inb.tag) || `in-${inb.port}-${inb.protocol}`,
+    sniffing: {
+      enabled: inb.sniffing !== false,
+      destOverride: inb.sniffDestOverride || ['http', 'tls', 'quic'],
+      metadataOnly: !!inb.sniffMetadataOnly,
+      routeOnly: !!inb.sniffRouteOnly
+    },
+    clientStats: clients.map((c, index) => ({
+      id: index + 1,
       inboundId: 1,
       enable: c.enable !== false,
-      email: c.email,
-      uuid: c.uuid,
-      subId: c.subId,
+      email: clean(c.email),
+      uuid: clean(c.uuid),
+      subId: clean(c.subId),
       up: c.up || 0,
       down: c.down || 0,
       expiryTime: c.expiryTime || 0,
-      total: Math.round((c.totalGB || 0) * GB)
+      total: Math.round((c.totalGB || 0) * GB),
+      reset: 0,
+      resetDay: 0,
+      resetMax: 0,
+      resetCount: 0,
+      lastOnline: c.lastSeen || 0,
+      lastSubFetch: 0
     })),
-    // marks the file as ours without breaking 3x-ui's reader, which ignores it
-    nexvVersion: 1
+    nodeId: null,
+    shareAddrStrategy: 'listen',
+    shareAddr: clean(inb.address),
+    subSortIndex: 1,
+    disableFlow: false,
+    originNodeGuid: '',
+    fallbackParent: null
   };
 }
 
 function exportClient(c) {
   return {
-    comment: c.comment || '',
-    email: c.email,
+    comment: clean(c.comment),
+    created_at: c.createdAt || 0,
+    email: clean(c.email),
     enable: c.enable !== false,
     expiryTime: c.expiryTime || 0,
-    id: c.uuid,
+    id: clean(c.uuid),
     limitIp: c.limitIp || 0,
-    password: c.password || '',
-    flow: c.flow || '',
-    subId: c.subId,
-    tgId: c.tgId || 0,
+    password: clean(c.password),
+    flow: clean(c.flow),
+    reset: 0,
+    resetDay: 0,
+    resetMax: 0,
+    security: 'auto',
+    subId: clean(c.subId),
+    tgId: Number(c.tgId) || 0,
     // 3x-ui counts this field in bytes despite the name
-    totalGB: Math.round((c.totalGB || 0) * GB)
+    totalGB: Math.round((c.totalGB || 0) * GB),
+    updated_at: c.updatedAt || c.createdAt || 0
   };
 }
 
@@ -152,7 +208,7 @@ function importInbound(raw) {
   const kcp = asObject(stream.kcpSettings);
 
   const inbound = {
-    remark: data.remark || `imported-${data.port}`,
+    remark: clean(data.remark) || `imported-${data.port}`,
     protocol: data.protocol,
     port: Number(data.port),
     listen: data.listen || '0.0.0.0',
@@ -201,19 +257,19 @@ function importInbound(raw) {
   const clients = (Array.isArray(settings.clients) ? settings.clients : []).map((c) => {
     const stat = stats.get(c.email) || {};
     return {
-      email: String(c.email || '').trim(),
-      uuid: c.id || crypto.randomUUID(),
-      password: c.password || '',
-      flow: c.flow || '',
+      email: clean(c.email),
+      uuid: clean(c.id) || crypto.randomUUID(),
+      password: clean(c.password),
+      flow: clean(c.flow),
       // both panels store this field in bytes; ours keeps whole gigabytes
       totalGB: Number(c.totalGB || 0) / GB,
       expiryTime: Number(c.expiryTime || 0),
       limitIp: Number(c.limitIp || 0),
       tgId: c.tgId || '',
-      comment: c.comment || '',
+      comment: clean(c.comment),
       enable: c.enable !== false,
       // the whole reason for carrying clients: their subscription keeps working
-      subId: c.subId || crypto.randomBytes(6).toString('base64url'),
+      subId: clean(c.subId) || crypto.randomBytes(6).toString('base64url'),
       up: Number(stat.up || 0),
       down: Number(stat.down || 0)
     };
@@ -222,4 +278,4 @@ function importInbound(raw) {
   return { inbound, clients };
 }
 
-module.exports = { exportInbound, importInbound, asObject };
+module.exports = { exportInbound, importInbound, asObject, clean };
