@@ -72,6 +72,8 @@ Every entry is also a direct command:
 | `nexv bbr` | enable BBR congestion control |
 | `nexv geo` | update geoip.dat and geosite.dat |
 | `nexv doctor` | diagnose why the panel is not answering |
+| `nexv xray-fix` | explain why Xray will not start, and start it |
+| `nexv cert-fix` | make the certificate readable by the Xray user |
 | `nexv fix` | move the panel to port 443 and verify it answers |
 | `nexv uninstall` | remove the panel |
 
@@ -99,6 +101,12 @@ SOCKS5, HTTP, WireGuard.
 REALITY where the protocol supports it.
 
 Share links are generated for VLESS, VMess, Trojan, Shadowsocks and SOCKS5.
+
+Fields that need a generated value - REALITY key pairs and short IDs,
+Shadowsocks keys sized to the cipher, WireGuard keys, client UUIDs and
+passwords - have a Generate button beside them. Nothing is filled in silently:
+an empty field stays empty, and saving without one is an error that names the
+field.
 
 TLS exposes SNI, cipher suites, min and max version, uTLS fingerprint, ALPN,
 curve preferences, reject-unknown-SNI, OCSP stapling, usage, one-time loading,
@@ -186,6 +194,27 @@ It moves the panel to 443, opens 443 and 80 in the firewall, restarts, checks
 that the panel really answers there, and prints the URL. Port 80 keeps
 redirecting, so old bookmarks still work. It needs a certificate first
 (`nexv cert <domain>`) and refuses to move if something else owns 443.
+
+## Certificates and the Xray user
+
+Let's Encrypt keeps `/etc/letsencrypt/live` and `/etc/letsencrypt/archive`
+root-only, and the official Xray unit runs the service as `nobody`. Pointing an
+inbound straight at `fullchain.pem` therefore produces a config that
+`xray -test` accepts as root and that the service then dies on with
+`permission denied`.
+
+```bash
+nexv cert-fix
+```
+
+copies the certificate to `/usr/local/etc/xray/certs/<domain>/` owned
+`root:<xray group>` with the key at mode 640, repoints the inbounds at the
+copy, and installs a renewal hook that refreshes it. The panel keeps reading
+the original files, since it runs as root. `nexv xray-fix` detects this case
+and offers to run it.
+
+The panel validates a new config by loading it **as the service user**, so a
+certificate Xray cannot read is rejected before it is written.
 
 ## Firewall
 

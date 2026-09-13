@@ -452,8 +452,31 @@ function writeConfig() {
   return cfg;
 }
 
+/** The user systemd starts xray as - usually `nobody`, sometimes root. */
+let serviceUserCache = null;
+async function serviceUser() {
+  if (serviceUserCache !== null) return serviceUserCache;
+  const res = await run('systemctl', ['show', XRAY_SERVICE, '-p', 'User', '--value'], 5000);
+  serviceUserCache = (res.ok ? res.stdout.trim() : '') || 'root';
+  return serviceUserCache;
+}
+
+/**
+ * Validate the config the way the service will load it.
+ *
+ * Running the test as root hides the most common TLS failure there is: the
+ * certificate lives under /etc/letsencrypt, which is root-only, while xray
+ * runs as `nobody`. Root passes the test, the service then dies on
+ * "permission denied", and the panel believes it wrote a good config.
+ */
 async function testConfig() {
   if (!fs.existsSync(XRAY_BIN)) return { ok: false, stderr: 'xray binary not found' };
+  const user = await serviceUser();
+  if (user && user !== 'root' && process.getuid && process.getuid() === 0) {
+    const asUser = await run('runuser', ['-u', user, '--', XRAY_BIN, 'run', '-test', '-config', XRAY_CONFIG]);
+    // runuser may be missing on minimal images; fall back rather than block
+    if (asUser.ok || !/runuser|No such file/i.test(asUser.stderr)) return asUser;
+  }
   return run(XRAY_BIN, ['run', '-test', '-config', XRAY_CONFIG]);
 }
 
@@ -609,5 +632,5 @@ module.exports = {
   buildConfig, writeConfig, testConfig, apply, serviceStatus,
   INBOUND_PROTOCOLS, OUTBOUND_PROTOCOLS, CLIENT_PROTOCOLS, LINK_PROTOCOLS,
   restart, start, stop, collectTraffic, enforceLimits,
-  clientTag, isExpired, isOverQuota, generateReality, run
+  clientTag, isExpired, isOverQuota, generateReality, run, serviceUser
 };

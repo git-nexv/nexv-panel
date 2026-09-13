@@ -718,15 +718,38 @@ act_xray_fix() {
     return 0
   fi
 
-  # 1. does the config even parse?
+  local user
+  user="$(xray_user)"
+  printf "  %-24s %s\n" "Xray runs as" "$user"
+  echo
+
+  # 1. does the config parse AS THE SERVICE USER? Testing as root hides the
+  #    most common failure of all: a certificate root can read and nobody cannot.
   local test_out
-  if test_out="$("$bin" run -test -config "$cfg" 2>&1)"; then
-    ok "The config parses"
+  if [[ $user != root ]] && command -v runuser >/dev/null 2>&1; then
+    test_out="$(runuser -u "$user" -- "$bin" run -test -config "$cfg" 2>&1)" && test_ok=1 || test_ok=0
   else
-    err "The config is invalid:"
-    echo "$test_out" | tail -5 | sed 's/^/    /'
+    test_out="$("$bin" run -test -config "$cfg" 2>&1)" && test_ok=1 || test_ok=0
+  fi
+
+  if [[ $test_ok == 1 ]]; then
+    ok "The config loads as $user"
+  else
+    err "The config does not load as $user:"
+    echo "$test_out" | tail -4 | sed 's/^/    /'
     echo
-    echo "  Rewrite it from the panel's own data:  nexv restart"
+    if grep -qi "permission denied" <<<"$test_out"; then
+      warn "That is a file permission problem, not a broken config."
+      echo "  Xray runs as '$user' and cannot read the certificate."
+      echo
+      if confirm "  Fix the certificate permissions now?"; then
+        act_cert_fix
+        return $?
+      fi
+      echo "  Run it later with: nexv cert-fix"
+    else
+      echo "  Rewrite the config from the panel's own data:  nexv restart"
+    fi
     return 1
   fi
 
@@ -748,11 +771,25 @@ act_xray_fix() {
     } catch (e) {}
   ' 2>/dev/null)
 
+  # an inbound on the panel's own port is a collision the panel used to allow
+  local ppanel
+  ppanel="$(panel_port)"
+  if node -e '
+    try {
+      const cfg = require("/usr/local/etc/xray/config.json");
+      const hit = (cfg.inbounds || []).find((i) => Number(i.port) === Number(process.argv[1]));
+      process.exit(hit ? 0 : 1);
+    } catch (e) { process.exit(1); }
+  ' "$ppanel" 2>/dev/null; then
+    err "An inbound uses port $ppanel, which is the panel's own port"
+    echo "    Change or delete that inbound in the panel, then: systemctl restart xray"
+    busy=1
+  fi
+
   if [[ $busy == 1 ]]; then
     echo
     echo "  Xray cannot bind a port another program is using."
     echo "  Change or disable that inbound in the panel, then: systemctl restart xray"
-    echo "  (the panel itself listens on port $(panel_port))"
     return 1
   fi
 
@@ -767,6 +804,154 @@ act_xray_fix() {
   err "Xray still refuses to start. Last log lines:"
   journalctl -u xray -n 25 --no-pager | sed 's/^/    /'
   return 1
+}
+
+# The user systemd starts xray as. The official XTLS unit uses `nobody`.
+xray_user() {
+  local u
+  u="$(systemctl show xray -p User --value 2>/dev/null)"
+  echo "${u:-root}"
+}
+
+# Copy the certificate somewhere xray can actually read it.
+#
+# Let's Encrypt keeps /etc/letsencrypt/{live,archive} root-only, and xray runs
+# as `nobody`, so pointing an inbound straight at fullchain.pem makes the
+# service die with "permission denied" - while `xray -test` as root passes.
+# Keep a readable copy instead of loosening the letsencrypt tree.
+CERT_STORE="/usr/local/etc/xray/certs"
+
+sync_cert_copy() {
+  local src_cert="$1" src_key="$2" name="$3"
+  local dir="$CERT_STORE/$name"
+  local user group
+  user="$(xray_user)"
+  group="$(id -gn "$user" 2>/dev/null || echo root)"
+
+  mkdir -p "$dir"
+  # -L so a symlink into archive/ becomes a real file
+  cp -L "$src_cert" "$dir/fullchain.pem" || return 1
+  cp -L "$src_key" "$dir/privkey.pem" || return 1
+  chown -R "root:$group" "$dir" 2>/dev/null || true
+  chmod 755 "$CERT_STORE" "$dir"
+  chmod 644 "$dir/fullchain.pem"
+  chmod 640 "$dir/privkey.pem"
+  echo "$dir"
+}
+
+act_cert_fix() {
+  need_root
+  echo
+  echo "${BOLD}Certificate permissions${RESET}"
+  echo
+
+  local user
+  user="$(xray_user)"
+  printf "  %-24s %s\n" "Xray runs as" "$user"
+
+  local cert key
+  cert="$(DATA_DIR=$DATA_DIR node -e '
+    const db = require(process.env.DATA_DIR + "/db.json");
+    process.stdout.write((db.settings && db.settings.certFile) || "");
+  ' 2>/dev/null)"
+  key="$(DATA_DIR=$DATA_DIR node -e '
+    const db = require(process.env.DATA_DIR + "/db.json");
+    process.stdout.write((db.settings && db.settings.keyFile) || "");
+  ' 2>/dev/null)"
+
+  [[ -n $cert && -n $key ]] || { err "No certificate configured. Run: nexv cert <domain>"; return 1; }
+  [[ -f $cert && -f $key ]] || { err "Configured certificate is missing: $cert"; return 1; }
+  printf "  %-24s %s\n" "Certificate" "$cert"
+
+  if [[ $user == root ]]; then
+    ok "Xray runs as root and can already read it"
+  elif runuser -u "$user" -- test -r "$cert" 2>/dev/null && runuser -u "$user" -- test -r "$key" 2>/dev/null; then
+    ok "$user can already read the certificate"
+  else
+    warn "$user cannot read the certificate - this is why Xray will not start"
+  fi
+
+  local name dir
+  name="$(basename "$(dirname "$cert")")"
+  [[ -n $name && $name != "." ]] || name="panel"
+  dir="$(sync_cert_copy "$cert" "$key" "$name")" || { err "Could not copy the certificate"; return 1; }
+  ok "Readable copy written to $dir"
+
+  if [[ $user != root ]] && ! runuser -u "$user" -- test -r "$dir/privkey.pem" 2>/dev/null; then
+    err "$user still cannot read $dir/privkey.pem"
+    # the file modes are right, so the usual cause is a parent directory that
+    # the service user is not allowed to walk into
+    local walk="$dir"
+    while [[ $walk != / ]]; do
+      if ! runuser -u "$user" -- test -x "$walk" 2>/dev/null; then
+        echo "    Blocked at: $walk ($(stat -c '%a %U:%G' "$walk"))"
+        echo "    Make it traversable:  chmod o+x $walk"
+        break
+      fi
+      walk="$(dirname "$walk")"
+    done
+    return 1
+  fi
+
+  # point the Xray inbounds at the copy; the panel keeps reading the original
+  CERT="$dir/fullchain.pem" KEY="$dir/privkey.pem" SRC_CERT="$cert" SRC_KEY="$key" DATA_DIR="$DATA_DIR" node -e '
+    const fs = require("fs"), path = require("path");
+    const file = path.join(process.env.DATA_DIR, "db.json");
+    const db = JSON.parse(fs.readFileSync(file, "utf8"));
+    db.settings = db.settings || {};
+    db.settings.certFile = process.env.CERT;
+    db.settings.keyFile = process.env.KEY;
+    // the panel runs as root, so it can keep using the original paths
+    db.settings.panelCertFile = db.settings.panelCertFile || process.env.SRC_CERT;
+    db.settings.panelKeyFile = db.settings.panelKeyFile || process.env.SRC_KEY;
+    for (const inb of db.inbounds || []) {
+      if (inb.certFile) inb.certFile = process.env.CERT;
+      if (inb.keyFile) inb.keyFile = process.env.KEY;
+    }
+    fs.writeFileSync(file, JSON.stringify(db, null, 2), { mode: 0o600 });
+  ' || { err "Could not update the panel settings"; return 1; }
+  ok "Inbounds now point at the readable copy"
+
+  install_cert_sync_hook "$cert" "$key" "$name"
+
+  systemctl restart "$SERVICE"
+  sleep 3
+  systemctl restart xray 2>/dev/null
+  sleep 2
+  if systemctl is-active --quiet xray; then
+    ok "Xray is running"
+  else
+    err "Xray still will not start. Last log lines:"
+    journalctl -u xray -n 20 --no-pager | sed "s/^/    /"
+    return 1
+  fi
+}
+
+# Renewal replaces the originals, so the copy has to be refreshed too.
+install_cert_sync_hook() {
+  local src_cert="$1" src_key="$2" name="$3"
+  cat > /usr/local/bin/nexv-cert-sync <<EOF
+#!/usr/bin/env bash
+# Refresh the Xray-readable copy of the certificate after renewal.
+set -e
+user="\$(systemctl show xray -p User --value 2>/dev/null)"
+user="\${user:-root}"
+group="\$(id -gn "\$user" 2>/dev/null || echo root)"
+dir="$CERT_STORE/$name"
+mkdir -p "\$dir"
+cp -L "$src_cert" "\$dir/fullchain.pem"
+cp -L "$src_key" "\$dir/privkey.pem"
+chown -R "root:\$group" "\$dir" || true
+chmod 755 "$CERT_STORE" "\$dir"
+chmod 644 "\$dir/fullchain.pem"
+chmod 640 "\$dir/privkey.pem"
+systemctl restart xray nexv || true
+EOF
+  chmod 755 /usr/local/bin/nexv-cert-sync
+  cat > /etc/cron.d/nexv-cert-renew <<'EOF'
+0 3 * * * root certbot renew --quiet --deploy-hook /usr/local/bin/nexv-cert-sync
+EOF
+  ok "Renewal will refresh the copy automatically"
 }
 
 act_uninstall() {
@@ -841,6 +1026,7 @@ show_menu() {
   menu_row 24 "Diagnose problems"
   menu_row 25 "Make the panel reachable (move to 443)"
   menu_row 26 "Fix Xray when it will not start"
+  menu_row 27 "Fix certificate permissions"
   menu_end
   echo
   printf "  Panel state        : %s\n" "$(state_of "$SERVICE")"
@@ -853,7 +1039,7 @@ run_menu() {
   while true; do
     show_menu
     local choice domain file port name
-    read -rp "  Please enter your selection [0-26]: " choice
+    read -rp "  Please enter your selection [0-27]: " choice
     echo
     case "$choice" in
       0) exit 0 ;;
@@ -884,7 +1070,8 @@ run_menu() {
       24) act_doctor; pause ;;
       25) act_fix; pause ;;
       26) act_xray_fix; pause ;;
-      *) err "Please choose a number between 0 and 26"; pause ;;
+      27) act_cert_fix; pause ;;
+      *) err "Please choose a number between 0 and 27"; pause ;;
     esac
   done
 }
@@ -914,6 +1101,7 @@ ${BOLD}nexv${RESET} - NexV Panel management
   nexv doctor                   diagnose why the panel is not answering
   nexv fix                      move the panel to port 443 and verify it answers
   nexv xray-fix                 explain why Xray will not start, and start it
+  nexv cert-fix                 make the certificate readable by the Xray user
   nexv uninstall                remove the panel
 HELP
 }
@@ -940,6 +1128,7 @@ case "${1:-menu}" in
   doctor)          act_doctor ;;
   fix)             act_fix ;;
   xray-fix)        act_xray_fix ;;
+  cert-fix)        act_cert_fix ;;
   uninstall)       act_uninstall ;;
   help|-h|--help)  usage ;;
   *)               err "Unknown command: $1"; echo; usage; exit 1 ;;

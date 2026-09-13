@@ -483,6 +483,38 @@ const SS_METHODS = [
 ];
 
 /** A tabbed dialog body: returns the wrapper plus one form grid per tab. */
+/**
+ * A text input with a Generate button beside it. Nothing is ever filled in
+ * behind the admin's back: an empty field stays empty until this is pressed.
+ */
+function generatedField(value, kind, opts = {}) {
+  const input = el('input', { type: 'text', value: value ?? '', placeholder: opts.placeholder || '' });
+  const button = el('button', {
+    class: 'btn ghost',
+    type: 'button',
+    text: 'Generate',
+    onclick: async () => {
+      button.disabled = true;
+      const label = button.textContent;
+      button.textContent = '...';
+      try {
+        const query = opts.query ? `?${opts.query()}` : '';
+        const result = await api.get(`/generate/${kind}${query}`);
+        input.value = result.value ?? result.privateKey ?? '';
+        if (opts.onResult) opts.onResult(result);
+      } catch (err) {
+        toast(err.message, 'err');
+      } finally {
+        button.textContent = label;
+        button.disabled = false;
+      }
+    }
+  });
+  const row = el('div', { class: 'input-row' }, [input, button]);
+  row.input = input;
+  return row;
+}
+
 function tabbed(names) {
   const wrap = el('div');
   const bar = el('div', { class: 'tabs' });
@@ -578,15 +610,22 @@ function inboundForm(existing) {
     protocols.map((p) => ({ value: p, label: PROTOCOL_LABELS[p] || p })), v.protocol || 'vless'
   ));
   const ssMethod = add('Protocol', 'Cipher', selectOf(SS_METHODS, v.method || '2022-blake3-aes-128-gcm'));
-  const ssPassword = add('Protocol', 'Inbound password', text(v.password || ''), {
-    full: true, hint: 'Generated when left empty'
+  const ssPasswordRow = generatedField(v.password || '', 'sskey', {
+    query: () => `method=${encodeURIComponent(ssMethod.value)}`,
+    placeholder: 'press Generate'
   });
+  add('Protocol', 'Inbound password', ssPasswordRow, {
+    full: true, hint: 'Must match the cipher; Generate makes a key of the right size'
+  });
+  const ssPassword = ssPasswordRow.input;
   const udp = add('Protocol', 'UDP relay', toggle(v.udp !== false));
   const targetAddress = add('Protocol', 'Forward to address', text(v.targetAddress || '127.0.0.1'));
   const targetPort = add('Protocol', 'Forward to port', text(v.targetPort || 0, { type: 'number' }));
   const targetNetwork = add('Protocol', 'Forwarded networks', selectOf(['tcp,udp', 'tcp', 'udp'], v.targetNetwork || 'tcp,udp'));
   const followRedirect = add('Protocol', 'Follow redirect', toggle(v.followRedirect));
-  const wgPrivateKey = add('Protocol', 'WireGuard private key', text(v.wgPrivateKey || ''), { full: true });
+  const wgPrivateKeyRow = generatedField(v.wgPrivateKey || '', 'wireguard', { placeholder: 'press Generate' });
+  add('Protocol', 'WireGuard private key', wgPrivateKeyRow, { full: true });
+  const wgPrivateKey = wgPrivateKeyRow.input;
   const wgMtu = add('Protocol', 'MTU', text(v.wgMtu || 1420, { type: 'number' }));
 
   /* ------------------------------- Stream ------------------------------- */
@@ -651,13 +690,18 @@ function inboundForm(existing) {
   const certUsage = add('Security', 'Usage option', selectOf(['encipherment', 'verify', 'issue'], v.certUsage || 'encipherment'));
   const masterKeyLog = add('Security', 'Master key log', text(v.masterKeyLog || ''), { full: true, placeholder: '/path/to/sslkeylog.txt' });
 
-  const rDest = add('Security', 'Reality dest', text((v.reality && v.reality.dest) || 'www.cloudflare.com:443'));
-  const rNames = add('Security', 'Server names', text((v.reality && (v.reality.serverNames || []).join(',')) || 'www.cloudflare.com'));
-  const rPriv = add('Security', 'Private key', text((v.reality && v.reality.privateKey) || ''), {
-    full: true, hint: 'Leave empty to generate a new key pair'
+  const rDest = add('Security', 'REALITY dest', text((v.reality && v.reality.dest) || 'www.cloudflare.com:443'));
+  const rNames = add('Security', 'REALITY server names', text((v.reality && (v.reality.serverNames || []).join(',')) || 'www.cloudflare.com'));
+  const rPrivRow = generatedField((v.reality && v.reality.privateKey) || '', 'reality', {
+    placeholder: 'press Generate',
+    onResult: (keys) => { rPub.value = keys.publicKey || ''; }
   });
-  const rPub = add('Security', 'Public key', text((v.reality && v.reality.publicKey) || ''), { full: true });
-  const rShort = add('Security', 'Short IDs', text((v.reality && (v.reality.shortIds || []).join(',')) || ''));
+  add('Security', 'REALITY private key', rPrivRow, { full: true, hint: 'Generate fills the public key too' });
+  const rPriv = rPrivRow.input;
+  const rPub = add('Security', 'REALITY public key', text((v.reality && v.reality.publicKey) || ''), { full: true });
+  const rShortRow = generatedField((v.reality && (v.reality.shortIds || []).join(',')) || '', 'shortid');
+  add('Security', 'REALITY short IDs', rShortRow);
+  const rShort = rShortRow.input;
 
   /* ------------------------------ Sniffing ------------------------------ */
   const sniffing = add('Sniffing', 'Sniffing', toggle(v.sniffing !== false));
@@ -897,9 +941,13 @@ function clientForm(existing) {
   }
   formField(form, 'Inbound', inboundSel);
 
-  const uuid = formField(form, 'UUID', el('input', { value: v.uuid || '', placeholder: 'leave empty to generate' }), { full: true });
-  const password = formField(form, 'Password / key', el('input', { value: v.password || '', placeholder: 'leave empty to generate' }),
+  const uuidRow = generatedField(v.uuid || '', 'uuid', { placeholder: 'leave empty to generate on save' });
+  formField(form, 'UUID', uuidRow, { full: true });
+  const uuid = uuidRow.input;
+  const passwordRow = generatedField(v.password || '', 'password', { placeholder: 'leave empty to generate on save' });
+  formField(form, 'Password / key', passwordRow,
     { full: true, hint: 'Used by Trojan, Shadowsocks, SOCKS and HTTP inbounds' });
+  const password = passwordRow.input;
   const totalGB = formField(form, 'Quota (GB)', el('input', { type: 'number', min: '0', value: v.totalGB || 0 }), { hint: '0 means unlimited' });
 
   const days = el('input', { type: 'number', min: '0', value: v.expiryTime ? Math.max(0, daysLeft(v.expiryTime)) : 30 });

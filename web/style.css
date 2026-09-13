@@ -394,3 +394,7 @@ td .row-actions { display: flex; gap: 6px; }
 }
 .chips label:has(input:checked) { border-color: var(--brand); color: var(--text); background: var(--surface-2); }
 .chips input { accent-color: var(--brand); margin: 0; }
+
+.input-row { display: flex; gap: 8px; align-items: stretch; }
+.input-row input { flex: 1; min-width: 0; }
+.input-row .btn { flex: 0 0 auto; white-space: nowrap; }

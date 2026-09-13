@@ -243,17 +243,16 @@ router.post('/inbounds', async (req, res) => {
   if (clash) return bad(res, clash);
   inb.id = db.id();
   inb.tag = `inbound-${inb.port}-${inb.id.slice(0, 4)}`;
-  if (inb.protocol === 'shadowsocks' && !inb.password) inb.password = ssKey(inb.method);
   inb.createdAt = Date.now();
 
+  // Nothing is filled in silently: the form offers a Generate button for each
+  // of these, so an empty field is a mistake worth naming rather than papering
+  // over with a value the admin never saw.
+  if (inb.protocol === 'shadowsocks' && !inb.password) {
+    return bad(res, 'a Shadowsocks password is required - use Generate to make one');
+  }
   if (inb.security === 'reality' && !inb.reality.privateKey) {
-    try {
-      const keys = await xray.generateReality();
-      inb.reality.privateKey = keys.privateKey;
-      inb.reality.publicKey = keys.publicKey;
-    } catch (err) {
-      return bad(res, `could not generate reality keys: ${err.message}`);
-    }
+    return bad(res, 'REALITY needs a key pair - use Generate next to the private key');
   }
 
   db.data.inbounds.push(inb);
@@ -311,6 +310,33 @@ router.post('/inbounds/:id/toggle', async (req, res) => {
   db.saveNow();
   await xray.apply();
   res.json(inb);
+});
+
+/** Values the inbound form can generate on demand, one field at a time. */
+router.get('/generate/:kind', async (req, res) => {
+  const kind = req.params.kind;
+  if (kind === 'uuid') return res.json({ value: crypto.randomUUID() });
+  if (kind === 'password') return res.json({ value: randomPass() });
+  if (kind === 'shortid') {
+    // REALITY short IDs are hex, 0-8 bytes; 8 hex chars is the common choice
+    return res.json({ value: crypto.randomBytes(4).toString('hex') });
+  }
+  if (kind === 'sskey') {
+    return res.json({ value: ssKey(String(req.query.method || '')) });
+  }
+  if (kind === 'reality') {
+    try {
+      const keys = await xray.generateReality();
+      return res.json(keys);
+    } catch (err) {
+      return bad(res, `xray could not generate a key pair: ${err.message}`, 500);
+    }
+  }
+  if (kind === 'wireguard') {
+    // x25519 private key; the peer supplies its own public key
+    return res.json({ value: crypto.randomBytes(32).toString('base64') });
+  }
+  return bad(res, `nothing to generate for "${kind}"`);
 });
 
 router.get('/reality-keys', async (req, res) => {
