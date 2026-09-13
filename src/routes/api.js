@@ -538,6 +538,10 @@ router.get('/generate/:kind', async (req, res) => {
     return res.json({ value: ssKey(String(req.query.method || '')) });
   }
   if (kind === 'ech') {
+    // a missing SNI is the caller's mistake, not the server's
+    if (!String(req.query.sni || '').trim()) {
+      return bad(res, 'fill in the SNI first, then generate the ECH keys');
+    }
     try {
       return res.json(await xray.generateECH(req.query.sni));
     } catch (err) {

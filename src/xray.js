@@ -677,26 +677,55 @@ async function enforceLimits() {
 
 /**
  * ECH key material for an inbound: the server keys go in the config, the
- * config list is what clients need. Xray does the generating.
+ * config list is what clients need.
+ *
+ * `xray tls ech` prints four lines - a label, the base64, another label, the
+ * base64 - with no blank line anywhere, and the config list comes first. The
+ * old parser split on blank lines and took the keys to be first, so it handed
+ * back the whole output as the key and nothing at all as the config. Both
+ * fields want plain base64, which is what this command prints without --pem.
  */
+function parseECH(text) {
+  const lines = String(text || '').split('\n').map((line) => line.trim());
+  const isBase64 = (line) => /^[A-Za-z0-9+/]{24,}={0,2}$/.test(line);
+  const found = { echConfigList: '', echServerKeys: '' };
+
+  lines.forEach((line, index) => {
+    const label = line.toLowerCase();
+    const sameLine = line.slice(line.indexOf(':') + 1).trim();
+    const value = isBase64(sameLine) ? sameLine : (lines.slice(index + 1).find(Boolean) || '');
+    if (!isBase64(value)) return;
+    if (/ech\s*config\s*list/.test(label)) found.echConfigList = value;
+    if (/ech\s*server\s*keys/.test(label)) found.echServerKeys = value;
+  });
+
+  // a build that labels them differently still prints the pair in this order
+  if (!found.echConfigList || !found.echServerKeys) {
+    const blobs = lines.filter(isBase64);
+    if (blobs.length >= 2) {
+      found.echConfigList = found.echConfigList || blobs[0];
+      found.echServerKeys = found.echServerKeys || blobs[1];
+    }
+  }
+  return found;
+}
+
 async function generateECH(serverName) {
   const sni = String(serverName || '').trim();
   if (!sni) throw new Error('an SNI is needed before ECH keys can be generated');
   const res = await run(XRAY_BIN, ['tls', 'ech', '--serverName', sni], 15000);
-  if (!res.ok) throw new Error(res.stderr.trim() || 'xray tls ech failed');
+  if (!res.ok) throw new Error(messageOf(res) || 'xray tls ech failed');
 
-  // output carries the two PEM-ish blocks, server keys first
-  const text = res.stdout;
-  const blocks = text.split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean);
-  const keys = blocks.find((b) => /BEGIN ECH KEYS/i.test(b)) || blocks[0] || '';
-  const config = blocks.find((b) => /BEGIN ECH CONFIGS/i.test(b)) || blocks[1] || '';
-  if (!keys) throw new Error(`could not read xray's ECH output: ${text.trim().slice(0, 120)}`);
-  return { echServerKeys: keys, echConfigList: config };
+  const found = parseECH(`${res.stdout}\n${res.stderr}`);
+  if (!found.echServerKeys || !found.echConfigList) {
+    throw new Error(`could not read xray's ECH output: ${String(res.stdout).trim().slice(0, 160)}`);
+  }
+  return found;
 }
 
 async function generateReality() {
   const res = await run(XRAY_BIN, ['x25519'], 8000);
-  if (!res.ok) throw new Error(res.stderr.trim() || 'xray x25519 failed');
+  if (!res.ok) throw new Error(messageOf(res) || 'xray x25519 failed');
   const out = res.stdout;
   // output wording differs across xray versions:
   //   old: "Private key: X" / "Public key: Y"
@@ -713,5 +742,5 @@ module.exports = {
   buildConfig, writeConfig, testConfig, apply, serviceStatus, repairCerts, messageOf,
   INBOUND_PROTOCOLS, OUTBOUND_PROTOCOLS, CLIENT_PROTOCOLS, LINK_PROTOCOLS,
   restart, start, stop, collectTraffic, enforceLimits,
-  clientTag, isExpired, isOverQuota, generateReality, generateECH, run, serviceUser
+  clientTag, isExpired, isOverQuota, generateReality, generateECH, parseECH, run, serviceUser
 };
