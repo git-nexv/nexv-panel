@@ -321,50 +321,52 @@ td .row-actions { display: flex; gap: 6px; }
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    margin-bottom: 10px;
-    padding-bottom: 2px;
+    margin-bottom: 8px;
   }
   tbody tr:last-child { margin-bottom: 0; }
   tbody tr:hover { background: var(--surface); }
   td {
     display: block; min-width: 0;
-    padding: 8px 14px; border-bottom: none;
-    overflow-wrap: anywhere;
+    padding: 6px 12px; border-bottom: none;
+    line-height: 1.3; overflow-wrap: anywhere;
   }
   td::before {
     content: attr(data-label);
-    display: block; margin-bottom: 1px;
-    color: var(--faint); font-size: 11px; font-weight: 600;
+    display: block;
+    color: var(--faint); font-size: 10.5px; font-weight: 600; line-height: 1.45;
     letter-spacing: .02em;
   }
-  td .bar { width: auto !important; }
+  td .bar { width: auto !important; height: 4px; margin-top: 5px; }
+  td .faint { line-height: 1.25; }
 
   td.cell-title {
     grid-column: 1 / -1; order: -1;
-    padding: 11px 14px;
+    padding: 9px 12px;
     border-bottom: 1px solid var(--border);
   }
   td.cell-title::before { content: none; }
-  td.cell-title strong { font-size: 14.5px; }
-  tbody tr:has(.cell-status) .cell-title { padding-inline-end: 104px; }
+  td.cell-title strong { font-size: 14px; }
+  tbody tr:has(.cell-status) .cell-title { padding-inline-end: 100px; }
 
   /* the status chip rides the card's heading instead of costing a whole line */
   tbody tr { position: relative; }
   td.cell-status {
-    position: absolute; inset-block-start: 12px; inset-inline-end: 12px;
+    position: absolute; inset-block-start: 9px; inset-inline-end: 10px;
     padding: 0; width: auto;
   }
   td.cell-status::before { content: none; }
 
   td.cell-actions {
     grid-column: 1 / -1;
-    margin-top: 4px; padding: 9px 10px;
+    margin-top: 2px; padding: 4px 8px;
     border-top: 1px solid var(--border);
   }
   td.cell-actions::before { content: none; }
+  td.cell-actions .btn.icon { width: 30px; height: 30px; padding: 6px; }
+  td.cell-actions .btn.icon svg { width: 16px; height: 16px; }
   /* a row with no heading (the log) has its payload in the last column */
   tbody tr:not(:has(.cell-title)) td:last-child { grid-column: 1 / -1; }
-  .row-actions { justify-content: flex-end; flex-wrap: wrap; }
+  .row-actions { justify-content: flex-end; flex-wrap: wrap; gap: 5px; }
 }
 
 .empty { padding: 48px 20px; text-align: center; color: var(--faint); }
