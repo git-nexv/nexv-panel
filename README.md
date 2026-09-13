@@ -82,13 +82,16 @@ Every entry is also a direct command:
 The panel is built on one translucent material — a blurred, saturated pane with
 a bright top edge — shared by the top bar, cards, dialogs and menus.
 
+The header floats as its own pill rather than spanning the window, and shows an
+**Update** chip when a newer panel has been published — it names the version and
+hands you the command to run.
+
 On a phone the sidebar gives way to a floating dock: Dashboard, Inbounds,
-Clients and Account in a glass pill with a bubble that slides between them, and
-a separate round **More** button beside it. More opens the same bar stood on
-end — same pill, same glass, same bubble behind the current row — growing out
-of the button it came from, right-aligned above it. Dragging a finger along
-either bar carries the bubble with it and commits on release, the way the iOS
-call bar behaves.
+Clients and Account in a glass pill, with a separate round **More** key beside
+it that opens the same bar stood on end. A capsule marks the current item;
+pressing lifts it into a wider glass lens that trails the finger, stretches
+along the direction of travel with its speed, and lands with a jelly bounce —
+the dock the owner already ships on their own site, ported across.
 
 Page changes, table rows, dialogs, menus and toasts all animate on a spring, and
 everything collapses to an instant change under `prefers-reduced-motion`.

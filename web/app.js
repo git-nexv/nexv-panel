@@ -156,6 +156,7 @@ const ICONS = {
   up: '<path d="m12 7 6 6-1.4 1.4L12 9.8l-4.6 4.6L6 13l6-6Z"/>',
   more: '<path d="M12 8a2 2 0 1 1 2-2 2 2 0 0 1-2 2Zm0 6a2 2 0 1 1 2-2 2 2 0 0 1-2 2Zm0 6a2 2 0 1 1 2-2 2 2 0 0 1-2 2Z"/>',
   download: '<path d="M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16l-5.7-5.7 1.4-1.4L11 12.2V3ZM5 19h14v2H5v-2Z"/>',
+  sparkle: '<path d="M12 2.5 13.6 8 19 9.6 13.6 11.2 12 16.6 10.4 11.2 5 9.6 10.4 8 12 2.5ZM18.5 14l.8 2.7 2.7.8-2.7.8-.8 2.7-.8-2.7-2.7-.8 2.7-.8.8-2.7Z"/>',
   upload: '<path d="M11 21h2v-9.2l3.3 3.3 1.4-1.4L12 8l-5.7 5.7 1.4 1.4L11 11.8V21ZM5 3h14v2H5V3Z"/>',
   down: '<path d="m12 17-6-6 1.4-1.4L12 14.2l4.6-4.6L18 11l-6 6Z"/>',
   empty: '<path d="M4 6h16v12H4V6Zm2 2v8h12V8H6Z" opacity=".7"/>'
@@ -270,7 +271,7 @@ function navigate(page) {
   document.getElementById('pageTitle').textContent = (PAGES.find((p) => p.id === page) || {}).label || '';
   document.getElementById('sidebar').classList.remove('open');
   renderNav();
-  moveBubble(page, true);
+  syncDock(true);
   render();
 }
 
@@ -1795,51 +1796,71 @@ async function renderAccount(view) {
   ]));
 }
 
+/* ------------------------------ update chip ------------------------------ */
+
+/**
+ * Announce a newer panel in the header. Checked once per session and then
+ * every six hours; a server that cannot reach GitHub simply never shows it.
+ */
+async function checkForUpdate() {
+  let info;
+  try { info = await api.get('/version'); } catch (_) { return; }
+  const bar = document.querySelector('.topbar');
+  const existing = document.getElementById('updateChip');
+  if (existing) existing.remove();
+  if (!info.updateAvailable || !bar) return;
+
+  const chip = el('button', {
+    id: 'updateChip', class: 'update-chip', type: 'button',
+    title: `Version ${info.latest} is available`,
+    html: `${icon('sparkle', 15)}<span>Update ${info.latest}</span>`,
+    onclick: () => modal({
+      title: `Version ${info.latest} is available`,
+      subtitle: `This panel is running ${info.current}.`,
+      body: el('div', {}, [
+        el('p', { class: 'muted', text: 'Update from the server\u2019s terminal. Your inbounds, clients and settings are left alone.' }),
+        el('div', { class: 'link-box', text: 'nexv update' }),
+        el('div', { class: 'row', style: 'margin-top:12px' }, [
+          el('button', { class: 'btn', html: `${icon('copy')} Copy command`, onclick: () => copy('nexv update') })
+        ])
+      ]),
+      width: 460
+    })
+  });
+  bar.insertBefore(chip, document.getElementById('xrayChip'));
+}
+
 /* --------------------------------- dock ---------------------------------- */
 
 /** The four pages that earn a permanent spot; the rest live under More. */
 const DOCK_PAGES = ['dashboard', 'inbounds', 'clients', 'account'];
 
-const dock = {
-  bar: null, bubble: null, items: [], more: null, moreItem: null,
-  moreBubble: null, moreRows: [], moreOpen: false
-};
+const dock = { bar: null, more: null, moreItem: null, moreOpen: false };
 
-/**
- * A floating tab bar in the shape of iOS's: a bubble sits behind the active
- * item and slides between them, and a finger dragged across the bar carries
- * the bubble with it, committing to whatever it is over when released.
- */
 function buildDock() {
   const host = el('div', { class: 'dock' });
   const bar = el('div', { class: 'dock-bar glass' });
-  const bubble = el('div', { class: 'dock-bubble' });
-  bar.append(bubble);
+  bar.append(el('span', { class: 'dock-thumb' }));
 
   const entries = DOCK_PAGES.map((id) => PAGES.find((p) => p.id === id)).filter(Boolean);
   const rest = PAGES.filter((p) => !DOCK_PAGES.includes(p.id));
 
-  const items = entries.map((page) => {
-    const item = el('button', {
+  for (const page of entries) {
+    bar.append(el('button', {
       class: 'dock-item', type: 'button', 'data-page': page.id,
-      html: `${icon(page.icon, 21)}<span>${page.label}</span>`
-    });
-    bar.append(item);
-    return item;
-  });
+      html: `${icon(page.icon, 22)}<span>${page.label}</span>`
+    }));
+  }
 
-  // More stands apart from the bar, with a gap, like the search key on iOS
   const moreItem = el('button', {
-    class: 'dock-solo glass', type: 'button', 'data-page': '__more',
-    title: 'More', html: icon('more', 22)
+    class: 'dock-solo glass', type: 'button', title: 'More', html: icon('more', 22)
   });
 
-  /* the More sheet: the same pill, stood on end */
+  /* the More sheet is the same bar, stood on end */
   const more = el('div', { class: 'dock-more glass' });
-  const moreBubble = el('div', { class: 'dock-bubble' });
-  more.append(moreBubble);
+  more.append(el('span', { class: 'dock-thumb' }));
 
-  const moreEntries = [
+  const rows = [
     ...rest.map((page) => ({ page: page.id, icon: page.icon, label: page.label })),
     {
       icon: 'theme',
@@ -1855,175 +1876,255 @@ function buildDock() {
       }
     }
   ];
-
-  const moreRows = moreEntries.map((entry) => {
+  for (const entry of rows) {
     const row = el('button', {
-      class: 'dock-row', type: 'button',
-      'data-page': entry.page || '',
-      html: `${icon(entry.icon, 18)}<span>${entry.label}</span>`
+      class: 'dock-row', type: 'button', 'data-page': entry.page || '',
+      html: `${icon(entry.icon, 19)}<span>${entry.label}</span>`
     });
     row.run = entry.run;
     more.append(row);
-    return row;
-  });
+  }
 
   host.append(bar, moreItem);
   document.body.append(host, more);
-  moreItem.addEventListener('click', (event) => { event.stopPropagation(); toggleMore(); });
+  Object.assign(dock, { bar, more, moreItem });
 
-  Object.assign(dock, { bar, bubble, items, more, moreItem, moreBubble, moreRows });
-  attachDrag(bar, items);
-  attachDrag(more, moreRows, 'y');
+  moreItem.addEventListener('click', (event) => { event.stopPropagation(); toggleMore(); });
   document.addEventListener('click', (event) => {
     if (dock.moreOpen && !more.contains(event.target) && !moreItem.contains(event.target)) closeMore();
   });
-  window.addEventListener('resize', () => moveBubble(state.page, false));
+
+  dock.barLens = liquidLens(bar, '.dock-item', 'x', (item) => {
+    closeMore();
+    if (item.dataset.page !== state.page) navigate(item.dataset.page);
+  });
+  dock.moreLens = liquidLens(more, '.dock-row', 'y', (row) => {
+    closeMore();
+    if (typeof row.run === 'function') return row.run();
+    if (row.dataset.page && row.dataset.page !== state.page) navigate(row.dataset.page);
+  });
+
+  window.addEventListener('resize', () => syncDock(false));
 }
 
 function toggleMore() { dock.moreOpen ? closeMore() : openMore(); }
 
 function openMore() {
   dock.moreOpen = true;
-  // anchor the sheet's right edge to the three-dot button it grows from
   const solo = dock.moreItem.getBoundingClientRect();
   dock.more.style.right = `${Math.round(window.innerWidth - solo.right)}px`;
   dock.more.style.left = 'auto';
   dock.more.classList.add('open');
+  dock.moreItem.classList.add('active');
 
-  // bottom row first: the sheet unrolls upward out of the button
-  const rows = dock.moreRows;
-  rows.forEach((row, i) => {
-    row.style.animationDelay = `${(rows.length - 1 - i) * 18}ms`;
-  });
+  // bottom row first, so the sheet unrolls up out of the button
+  const rows = Array.from(dock.more.querySelectorAll('.dock-row'));
+  rows.forEach((row, i) => { row.style.animationDelay = `${(rows.length - 1 - i) * 18}ms`; });
 
-  moveMoreBubble(false);
-  moveBubble(state.page, true);
-}
-
-/** Park the sheet's bubble behind whichever row is the current page. */
-function moveMoreBubble(animate = true, target) {
-  if (!dock.moreBubble) return;
-  const row = target || dock.moreRows.find((r) => r.dataset.page === state.page);
-  for (const other of dock.moreRows) other.classList.toggle('active', other === row);
-  if (!row) { dock.moreBubble.style.opacity = '0'; return; }
-  dock.moreBubble.style.opacity = '1';
-
-  if (!animate) dock.more.classList.add('dragging');
-  dock.moreBubble.style.height = `${row.offsetHeight}px`;
-  dock.moreBubble.style.transform = `translateY(${row.offsetTop - dock.moreBubble.offsetTop}px)`;
-  if (!animate) requestAnimationFrame(() => dock.more.classList.remove('dragging'));
+  requestAnimationFrame(() => dock.moreLens.select(state.page, false));
 }
 
 function closeMore() {
   if (!dock.moreOpen) return;
   dock.moreOpen = false;
   dock.more.classList.remove('open');
-  moveBubble(state.page, true);
+  dock.moreItem.classList.remove('active');
 }
 
-/** Park the bubble behind one item; `animate` false skips the spring. */
-function moveBubble(pageId, animate = true) {
-  if (!dock.bar) return;
-  if (dock.moreItem) dock.moreItem.classList.toggle('active', dock.moreOpen);
-  const item = dock.items.find((i) => i.dataset.page === pageId);
-  if (!item) {
-    // the page lives under More, so nothing in the bar is current
-    dock.items.forEach((other) => other.classList.remove('active'));
-    dock.bubble.style.opacity = '0';
-    return;
-  }
-  dock.bubble.style.opacity = '1';
-
-  if (!animate) dock.bar.classList.add('dragging');
-  dock.bubble.style.width = `${item.offsetWidth}px`;
-  dock.bubble.style.transform = `translateX(${item.offsetLeft - dock.bubble.offsetLeft}px)`;
-  if (!animate) requestAnimationFrame(() => dock.bar.classList.remove('dragging'));
-
-  for (const other of dock.items) other.classList.toggle('active', other === item);
+/** Park both capsules on the current page. */
+function syncDock(animate = true) {
+  if (!dock.barLens) return;
+  dock.barLens.select(state.page, animate);
+  dock.moreLens.select(state.page, animate);
+  const inBar = DOCK_PAGES.includes(state.page);
+  dock.moreItem.classList.toggle('active', dock.moreOpen || !inBar);
 }
 
 /**
- * Drag across the bar to preview a tab, release to commit - the gesture the
- * iOS call bar uses. A tap is just a zero-length drag, so both paths agree.
+ * The lens that marks the current item and follows a finger.
+ *
+ * Pressing lifts it out of the bar and widens it past the item, it then trails
+ * the finger by a frame or two, stretches along the direction of travel with
+ * its speed, and lands with a jelly bounce. Coordinates come from layout
+ * offsets, never from rects: the bar's padding and any in-flight transform
+ * both throw a rect off.
  */
-function attachDrag(bar, items, axis = 'x') {
-  let dragging = false;
-  let hovered = null;
+function liquidLens(container, selector, axis, onPick) {
   const vertical = axis === 'y';
+  const thumb = container.querySelector('.dock-thumb');
+  const items = () => Array.from(container.querySelectorAll(selector));
 
-  const itemAt = (event) => items.find((item) => {
-    const box = item.getBoundingClientRect();
+  const size = (el2) => (vertical ? el2.offsetHeight : el2.offsetWidth);
+  const start = (el2) => (vertical ? el2.offsetTop : el2.offsetLeft);
+  const centre = (el2) => start(el2) + size(el2) / 2;
+
+  let activeIdx = -1;
+  let pressing = false;
+  let dragging = false;
+  let pointerId = null;
+  let startPos = 0;
+  let target = 0;
+  let cur = 0;
+  let last = 0;
+  let lensSize = 0;
+  let raf = 0;
+
+  const put = (pos, s) => {
+    thumb.style.setProperty(vertical ? '--y' : '--x', `${pos.toFixed(2)}px`);
+    if (s != null) thumb.style.setProperty(vertical ? '--h' : '--w', `${s.toFixed(2)}px`);
+  };
+
+  const nearest = (pos) => {
+    const list = items();
+    let best = 0;
+    let dist = Infinity;
+    list.forEach((item, i) => {
+      const d = Math.abs(centre(item) - pos);
+      if (d < dist) { dist = d; best = i; }
+    });
+    return best;
+  };
+
+  // the finger's coordinate, expressed in the same origin as offsetLeft/Top
+  const toLocal = (event) => {
+    const first = items()[0];
+    if (!first) return 0;
+    const box = first.getBoundingClientRect();
     return vertical
-      ? event.clientY >= box.top && event.clientY <= box.bottom
-      : event.clientX >= box.left && event.clientX <= box.right;
-  });
-
-  const slide = (event) => {
-    const item = itemAt(event);
-    if (!item || item === hovered) return;
-    hovered = item;
-    if (vertical) moveMoreBubble(true, item);
-    else moveBubble(item.dataset.page, true);
-    // a short tick under the finger, where the platform supports it
-    if (navigator.vibrate) navigator.vibrate(4);
+      ? event.clientY - box.top + first.offsetTop
+      : event.clientX - box.left + first.offsetLeft;
   };
 
-  bar.addEventListener('pointerdown', (event) => {
-    if (event.button !== undefined && event.button !== 0) return;
-    dragging = true;
-    hovered = null;
-    bar.setPointerCapture(event.pointerId);
-    bar.classList.add('dragging');
-    slide(event);
-  });
+  function select(pageId, animate = true) {
+    const list = items();
+    const idx = list.findIndex((item) => item.dataset.page === pageId);
+    activeIdx = idx;
+    list.forEach((item, i) => item.classList.toggle('active', i === idx));
+    if (idx < 0) { thumb.classList.remove('on'); return; }
+    if (!animate) thumb.classList.add('dragging');
+    put(start(list[idx]), size(list[idx]));
+    thumb.classList.add('on');
+    if (!animate) requestAnimationFrame(() => thumb.classList.remove('dragging'));
+  }
 
-  bar.addEventListener('pointermove', (event) => {
-    if (dragging) slide(event);
-  });
+  function frame() {
+    // trail the finger instead of snapping to it: this is what reads as liquid
+    cur += (target - cur) * 0.32;
+    const velocity = cur - last;
+    last = cur;
+    const stretch = Math.min(0.24, Math.abs(velocity) * 0.018);
+    thumb.style.setProperty('--sx', (vertical ? 1 - stretch * 0.55 : 1 + stretch).toFixed(3));
+    thumb.style.setProperty('--sy', (vertical ? 1 + stretch : 1 - stretch * 0.55).toFixed(3));
+    put(cur);
+    const under = nearest(cur + lensSize / 2);
+    items().forEach((item, i) => item.classList.toggle('under', i === under));
+    if (pressing) raf = requestAnimationFrame(frame);
+  }
 
-  /*
-   * Capturing the pointer for the drag retargets the click to the bar, so the
-   * items' own click handlers would never run. Activation lives here instead,
-   * which also keeps tap and drag on exactly the same path.
-   */
-  const activate = (item) => {
-    if (!item) return vertical ? moveMoreBubble(true) : moveBubble(state.page, true);
-    if (typeof item.run === 'function') { closeMore(); return item.run(); }
-    const target = item.dataset.page;
-    if (target === '__more') return toggleMore();
-    closeMore();
-    if (target !== state.page) navigate(target);
-    else if (!vertical) moveBubble(state.page, true);
-  };
-
-  const finish = (event) => {
-    if (!dragging) return;
-    dragging = false;
-    bar.classList.remove('dragging');
-    const item = itemAt(event) || hovered;
-    hovered = null;
-    activate(item);
-  };
-
-  bar.addEventListener('pointerup', finish);
-
-  // keyboard users never produce a pointer event
-  bar.addEventListener('keydown', (event) => {
-    if (event.key !== 'Enter' && event.key !== ' ') return;
-    const item = event.target.closest('.dock-item');
+  container.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    const item = event.target.closest(selector);
     if (!item) return;
-    event.preventDefault();
-    activate(item);
-  });
-  bar.addEventListener('pointercancel', () => {
+    const list = items();
+    const i = list.indexOf(item);
+
+    pressing = true;
     dragging = false;
-    bar.classList.remove('dragging');
-    if (vertical) moveMoreBubble(true);
-    else moveBubble(state.page, true);
+    pointerId = event.pointerId;
+    try { container.setPointerCapture(event.pointerId); } catch (_) { /* older browsers */ }
+
+    // the lens is wider than the item it sits on, the way iOS draws it
+    lensSize = size(item) * (vertical ? 1.12 : 1.32);
+    const lensStart = centre(item) - lensSize / 2;
+    startPos = vertical ? event.clientY : event.clientX;
+
+    thumb.classList.remove('release', 'dragging');
+    if (activeIdx < 0) put(start(item), size(item));
+    requestAnimationFrame(() => {
+      thumb.classList.add('on', 'lifted');
+      put(lensStart, lensSize);
+    });
+    cur = last = target = lensStart;
+    list.forEach((other, k) => other.classList.toggle('under', k === i));
   });
+
+  container.addEventListener('pointermove', (event) => {
+    if (!pressing || event.pointerId !== pointerId) return;
+    const pos = vertical ? event.clientY : event.clientX;
+    if (!dragging && Math.abs(pos - startPos) > 6) {
+      dragging = true;
+      thumb.classList.add('dragging');
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(frame);
+    }
+    if (dragging) {
+      const list = items();
+      // clamp the lens CENTRE, not its edge: it is wider than an item, so
+      // clamping the edge stops it short of the last one
+      const min = centre(list[0]);
+      const max = centre(list[list.length - 1]);
+      target = Math.max(min, Math.min(max, toLocal(event))) - lensSize / 2;
+      event.preventDefault();
+    }
+  });
+
+  function finish(event, cancelled) {
+    if (!pressing || (event && event.pointerId !== pointerId)) return;
+    pressing = false;
+    cancelAnimationFrame(raf);
+
+    const list = items();
+    let idx;
+    if (dragging) {
+      idx = nearest(cur + lensSize / 2);
+    } else {
+      const under = event && document.elementFromPoint(event.clientX, event.clientY);
+      idx = list.indexOf((under && under.closest(selector)) || null);
+    }
+
+    list.forEach((item) => item.classList.remove('under'));
+    thumb.classList.remove('lifted', 'dragging');
+    thumb.style.setProperty('--sx', 1);
+    thumb.style.setProperty('--sy', 1);
+
+    if (cancelled || idx < 0) {
+      const currentId = list[activeIdx] && list[activeIdx].dataset.page;
+      return select(currentId, true);
+    }
+
+    const picked = list[idx];
+    activeIdx = idx;
+    list.forEach((item, i) => item.classList.toggle('active', i === idx));
+    put(start(picked), size(picked));
+    thumb.classList.add('on');
+    // restart the bounce even when the same item is picked twice
+    thumb.classList.remove('release');
+    void thumb.offsetWidth;
+    thumb.classList.add('release');
+    if (navigator.vibrate) { try { navigator.vibrate(8); } catch (_) { /* unsupported */ } }
+
+    // let the capsule land before the page changes under it
+    const wasDrag = dragging;
+    dragging = false;
+    setTimeout(() => onPick(picked), wasDrag ? 140 : 90);
+  }
+
+  container.addEventListener('pointerup', (event) => finish(event, false));
+  container.addEventListener('pointercancel', (event) => finish(event, true));
+  container.addEventListener('lostpointercapture', (event) => { if (pressing) finish(event, false); });
+  container.addEventListener('contextmenu', (event) => event.preventDefault());
+
+  // keyboard activation never produces a pointer event
+  container.addEventListener('click', (event) => {
+    if (event.detail !== 0) return;
+    const item = event.target.closest(selector);
+    if (item) onPick(item);
+  });
+
+  return { select };
 }
 
-/* --------------------------------- boot ---------------------------------- */
+/* --------------------------------- boot ---------------------------------- *//* --------------------------------- boot ---------------------------------- */
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
@@ -2075,8 +2176,10 @@ function boot() {
   hydrateIcons();
   buildDock();
   navigate(location.hash.slice(1) || 'dashboard');
-  // the bar has just been laid out; park the bubble without a flight
-  requestAnimationFrame(() => moveBubble(state.page, false));
+  checkForUpdate();
+  setInterval(checkForUpdate, 6 * 60 * 60 * 1000);
+  // the bar has just been laid out; park the capsule without a flight
+  requestAnimationFrame(() => syncDock(false));
 }
 
 try {

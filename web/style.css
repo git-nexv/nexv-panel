@@ -120,19 +120,56 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 
+/* the header floats the way the dock does, rather than spanning the window */
 .topbar {
-  position: sticky; top: 0; z-index: 30;
-  display: flex; align-items: center; gap: 14px;
-  padding: 14px 26px;
-  border-bottom: 1px solid var(--glass-edge);
+  position: sticky; z-index: 40;
+  top: max(10px, env(safe-area-inset-top));
+  display: flex; align-items: center; gap: 10px;
+  margin: 10px 14px 0;
+  padding: 8px 10px 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-edge);
   background: var(--glass);
   -webkit-backdrop-filter: blur(26px) saturate(190%);
   backdrop-filter: blur(26px) saturate(190%);
+  box-shadow: var(--glass-shadow);
 }
-.topbar h1 { font-size: 17px; margin: 0; font-weight: 650; }
+.topbar h1 {
+  font-size: 16px; margin: 0; font-weight: 680; letter-spacing: -.01em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .topbar .spacer { flex: 1; }
+/* lighter, smaller controls: the header should read as a label, not a toolbar */
+.topbar .btn { padding: 8px 12px; font-size: 12.5px; border-radius: 999px; }
+.topbar .btn.icon { padding: 8px; }
+.topbar .btn svg { width: 17px; height: 17px; }
+.topbar .chip { padding: 5px 11px; font-size: 11.5px; }
+.topbar .btn.ghost { background: transparent; border-color: transparent; }
+.topbar .btn.ghost:hover { background: var(--surface-2); }
 
-.content { padding: 24px 26px 60px; }
+/* the update pill, shown only when a newer panel exists */
+.update-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 13px 6px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--ok) 42%, transparent);
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+  color: var(--ok); font: inherit; font-size: 12px; font-weight: 700;
+  animation: chip-pop .5s var(--spring) both;
+  transition: transform .3s var(--spring), background .24s var(--glide);
+}
+.update-chip:hover { background: color-mix(in srgb, var(--ok) 24%, transparent); }
+.update-chip:active { transform: scale(.95); }
+.update-chip svg { width: 15px; height: 15px; }
+@keyframes chip-pop {
+  from { opacity: 0; transform: translateY(-6px) scale(.86); }
+  to   { opacity: 1; transform: none; }
+}
+@media (max-width: 560px) {
+  .update-chip span { display: none; }
+  .update-chip { padding: 7px; }
+}
+
+.content { padding: 18px 26px 60px; }
 
 .menu-btn { display: none; }
 
@@ -463,116 +500,145 @@ td .row-actions { display: flex; gap: 6px; }
 }
 
 /* ============================== the dock =============================== */
-
+/*
+ * Borrowed wholesale from the dock the owner already ships on their site: a
+ * capsule marks the current item, and pressing turns it into a wider glass
+ * lens that lifts out of the bar, lags behind the finger, stretches with its
+ * speed and settles with a jelly bounce.
+ */
 .dock {
+  --dock-h: 62px;
+  --dock-gap: 10px;
   position: fixed; z-index: 90;
-  inset-inline: 0; bottom: max(14px, env(safe-area-inset-bottom));
-  display: flex; justify-content: center; align-items: center;
-  /* the gap that sets the More button apart, the way iOS separates search */
-  gap: 10px;
-  padding-inline: 12px;
-  pointer-events: none;
+  left: 50%; bottom: calc(12px + env(safe-area-inset-bottom));
+  width: min(520px, calc(100vw - 20px));
+  transform: translateX(-50%);
+  display: flex; align-items: center; gap: var(--dock-gap);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
+.dock * { -webkit-user-select: none; user-select: none; }
+
 .dock-bar {
-  pointer-events: auto;
-  position: relative;
-  display: flex; align-items: center; gap: 2px;
-  padding: 7px;
+  position: relative; flex: none;
+  height: var(--dock-h); width: calc(100% - var(--dock-h) - var(--dock-gap));
+  display: flex; align-items: stretch; padding: 4px;
   border-radius: 999px;
   touch-action: none;
 }
 .dock-item {
-  position: relative; z-index: 1;
-  display: flex; flex-direction: column; align-items: center; gap: 3px;
-  min-width: 72px; padding: 8px 12px 7px;
-  border: 0; background: transparent; cursor: pointer;
-  color: var(--muted); font: inherit; font-size: 10.5px; font-weight: 600;
-  border-radius: 999px;
-  transition: color .28s var(--glide), transform .38s var(--spring);
+  position: relative; z-index: 2; flex: 1 1 0; min-width: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  border: 0; background: none; border-radius: 999px; cursor: pointer;
+  color: var(--muted); font: inherit; font-size: 10.5px; font-weight: 650; line-height: 1;
+  transition: color .25s var(--glide), transform .45s var(--spring);
 }
-.dock-item svg { transition: transform .38s var(--spring); }
-.dock-item.active { color: var(--brand); }
-.dock-item.active svg { transform: translateY(-1px) scale(1.06); }
-.dock-item:active { transform: scale(.94); }
+.dock-item svg { width: 22px; height: 22px; transition: transform .35s var(--spring); }
+.dock-item span { white-space: nowrap; }
+.dock-item.active, .dock-item.under { color: var(--brand); }
+.dock-item.under svg { transform: scale(1.14); }
 
-/* the bubble that slides between items */
-.dock-bubble {
-  position: absolute; z-index: 0;
-  top: 7px; bottom: 7px; left: 0;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--brand) 22%, transparent);
-  border: 1px solid color-mix(in srgb, var(--brand) 34%, transparent);
-  box-shadow: 0 6px 18px -8px color-mix(in srgb, var(--brand) 70%, transparent);
-  transition: transform .42s var(--spring), width .42s var(--spring);
-  will-change: transform, width;
+/* the capsule, and the lens it becomes under a finger */
+.dock-thumb {
+  position: absolute; z-index: 1; top: 4px; bottom: 4px; left: 0;
+  width: var(--w, 80px); border-radius: 999px;
+  transform: translateX(var(--x, 0px)) scale(var(--sx, 1), var(--sy, 1));
+  background: color-mix(in srgb, var(--brand) 18%, transparent);
+  opacity: 0; pointer-events: none;
+  transition: transform .55s var(--spring), width .45s var(--spring), opacity .25s var(--glide),
+              top .3s var(--spring), bottom .3s var(--spring), background .25s var(--glide),
+              box-shadow .25s var(--glide);
 }
-/* while a finger is down the bubble tracks it without the spring */
-.dock-bar.dragging .dock-bubble { transition: transform .09s linear, width .09s linear; }
-.dock-bar.dragging .dock-item { transition: color .12s linear; }
+.dock-thumb.on { opacity: 1; }
+.dock-thumb.lifted {
+  z-index: 3; top: -7px; bottom: -7px;
+  background: color-mix(in srgb, var(--brand) 24%, transparent);
+  -webkit-backdrop-filter: saturate(190%) brightness(1.06);
+  backdrop-filter: saturate(190%) brightness(1.06);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, .3),
+    inset 0 10px 18px -8px rgba(255, 255, 255, .3),
+    inset 0 -10px 18px -10px rgba(255, 255, 255, .14),
+    0 14px 34px rgba(0, 0, 0, .45);
+}
+/* while a finger drives it, position is set frame by frame */
+.dock-thumb.dragging {
+  transition: width .45s var(--spring), opacity .25s var(--glide),
+              top .3s var(--spring), bottom .3s var(--spring),
+              background .25s var(--glide), box-shadow .25s var(--glide);
+}
+.dock-thumb.release { animation: dock-jelly .5s var(--spring); }
+@keyframes dock-jelly {
+  0%   { transform: translateX(var(--x)) scale(1.12, .9); }
+  45%  { transform: translateX(var(--x)) scale(.96, 1.05); }
+  100% { transform: translateX(var(--x)) scale(1, 1); }
+}
 
-/* the More menu, a second pill that grows upward out of the dock */
-/* More sits on its own, a round pill beside the bar */
+/* More: its own round key, set apart the way iOS separates search */
 .dock-solo {
-  pointer-events: auto;
+  position: relative; flex: none;
+  height: var(--dock-h); width: var(--dock-h);
   display: flex; align-items: center; justify-content: center;
-  width: 58px; height: 58px; padding: 0;
-  border-radius: 999px;
-  border: 0; cursor: pointer;
+  padding: 0; border: 0; border-radius: 999px; cursor: pointer;
   color: var(--muted); font: inherit;
   transition: color .24s var(--glide), transform .34s var(--spring), background .24s var(--glide);
 }
+.dock-solo svg { width: 22px; height: 22px; }
 .dock-solo:active { transform: scale(.92); }
-.dock-solo.active {
-  color: var(--brand);
-  background: color-mix(in srgb, var(--brand) 22%, transparent);
-  border: 1px solid color-mix(in srgb, var(--brand) 34%, transparent);
-}
+.dock-solo.active { color: var(--brand); background: color-mix(in srgb, var(--brand) 18%, transparent); }
 
-/*
- * The More sheet is the same bar, stood on end: same pill, same glass, same
- * bubble behind the current row. It grows out of the three-dot button rather
- * than fading in, so the button reads as the thing that opened.
- */
+/* ---- the same bar, stood on end ---- */
 .dock-more {
   position: fixed; z-index: 89;
-  bottom: calc(max(14px, env(safe-area-inset-bottom)) + 82px);
-  display: flex; flex-direction: column; gap: 2px;
-  padding: 7px;
-  border-radius: 30px;
+  bottom: calc(12px + env(safe-area-inset-bottom) + var(--dock-h, 62px) + 10px);
+  display: flex; flex-direction: column;
+  /* the rounded caps eat into the corners, so the end rows need clearance */
+  padding: 18px 4px;
+  border-radius: 999px;
   transform-origin: bottom right;
   opacity: 0;
-  transform: scale(.72) translateY(10px);
+  transform: scale(.74) translateY(10px);
   transition: opacity .16s var(--glide), transform .34s var(--spring);
   pointer-events: none;
+  touch-action: none;
 }
 .dock-more.open {
-  opacity: 1;
-  transform: none;
-  pointer-events: auto;
-  transition: opacity .14s linear, transform .38s var(--spring);
+  opacity: 1; transform: none; pointer-events: auto;
+  transition: opacity .14s linear, transform .4s var(--spring);
 }
-
-.dock-more .dock-bubble {
-  top: 7px; bottom: auto; left: 7px; right: 7px;
-  width: auto !important;
-  transition: transform .34s var(--spring), height .34s var(--spring);
+.dock-more .dock-thumb {
+  top: 0; bottom: auto; left: 4px; right: 4px;
+  width: auto !important; height: var(--h, 44px);
+  transform: translateY(var(--y, 0px)) scale(var(--sx, 1), var(--sy, 1));
+  transition: transform .55s var(--spring), height .45s var(--spring), opacity .25s var(--glide),
+              left .3s var(--spring), right .3s var(--spring), background .25s var(--glide),
+              box-shadow .25s var(--glide);
 }
-.dock-more.dragging .dock-bubble { transition: transform .09s linear, height .09s linear; }
+.dock-more .dock-thumb.lifted { left: -7px; right: -7px; }
+.dock-more .dock-thumb.dragging {
+  transition: height .45s var(--spring), opacity .25s var(--glide),
+              left .3s var(--spring), right .3s var(--spring),
+              background .25s var(--glide), box-shadow .25s var(--glide);
+}
+.dock-more .dock-thumb.release { animation: dock-jelly-y .5s var(--spring); }
+@keyframes dock-jelly-y {
+  0%   { transform: translateY(var(--y)) scale(.9, 1.12); }
+  45%  { transform: translateY(var(--y)) scale(1.05, .96); }
+  100% { transform: translateY(var(--y)) scale(1, 1); }
+}
 
 .dock-row {
-  position: relative; z-index: 1;
-  display: flex; align-items: center; gap: 12px;
-  padding: 11px 20px 11px 15px; min-width: 196px;
-  border: 0; border-radius: 999px; background: transparent; cursor: pointer;
-  color: var(--muted); font: inherit; font-size: 13.5px; font-weight: 600; text-align: start;
-  transition: color .2s var(--glide), transform .3s var(--spring);
+  position: relative; z-index: 2;
+  display: flex; align-items: center; gap: 11px;
+  padding: 12px 22px 12px 16px; min-width: 190px;
+  border: 0; border-radius: 999px; background: none; cursor: pointer;
+  color: var(--muted); font: inherit; font-size: 13.5px; font-weight: 650; text-align: start;
+  transition: color .25s var(--glide), transform .45s var(--spring);
 }
-.dock-row svg { flex: 0 0 auto; transition: transform .34s var(--spring); }
-.dock-row.active { color: var(--brand); }
-.dock-row.active svg { transform: scale(1.08); }
-.dock-row:active { transform: scale(.97); }
+.dock-row svg { width: 19px; height: 19px; flex: 0 0 auto; transition: transform .35s var(--spring); }
+.dock-row.active, .dock-row.under { color: var(--brand); }
+.dock-row.under svg { transform: scale(1.14); }
 
-/* rows arrive just behind the pill, quickly, bottom-up like a menu unrolling */
 .dock-more.open .dock-row { animation: dock-row-in .22s var(--glide) both; }
 @keyframes dock-row-in {
   from { opacity: 0; transform: translateY(6px); }
@@ -586,7 +652,7 @@ td .row-actions { display: flex; gap: 6px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dock-item, .dock-bubble, .dock-more, .dock-row, .dock-item svg, .dock-row svg {
+  .dock-item, .dock-thumb, .dock-more, .dock-row, .dock-item svg, .dock-row svg {
     transition-duration: .01ms !important;
     animation-duration: .01ms !important;
   }

@@ -9,6 +9,7 @@ const auth = require('../auth');
 const xray = require('../xray');
 const links = require('../links');
 const transfer = require('../transfer');
+const version = require('../version');
 const system = require('../system');
 
 const router = express.Router();
@@ -114,6 +115,15 @@ router.get('/status', async (req, res) => {
 });
 
 router.get('/logs', (req, res) => res.json(db.data.logs.slice(0, 200)));
+
+/** Whether a newer panel has been published. Never fails the page. */
+router.get('/version', async (req, res) => {
+  try {
+    res.json(await version.check(req.query.force === '1'));
+  } catch (_) {
+    res.json({ current: version.current, latest: version.current, updateAvailable: false });
+  }
+});
 
 /**
  * Ports the panel itself owns. An inbound on one of these passes `xray -test`
