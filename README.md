@@ -86,12 +86,14 @@ The header floats as its own pill rather than spanning the window, and shows an
 **Update** chip when a newer panel has been published — it names the version and
 hands you the command to run.
 
-On a phone the sidebar gives way to a floating dock: Dashboard, Inbounds,
-Clients and Account in a glass pill, with a separate round **More** key beside
-it that opens the same bar stood on end. A capsule marks the current item;
-pressing lifts it into a wider glass lens that trails the finger, stretches
-along the direction of travel with its speed, and lands with a jelly bounce —
-the dock the owner already ships on their own site, ported across.
+Navigation is the dock, on every screen — there is no sidebar or hamburger. On
+a wide screen all eight pages sit in the bar at once; on a phone it carries
+Dashboard, Inbounds, Clients and Account, with a round **More** key of exactly
+the same height beside it that opens the same bar stood on end. A capsule marks
+the current item; pressing lifts it into a wider glass lens that trails the
+finger, stretches along the direction of travel with its speed, and lands with
+a jelly bounce — the dock the owner already ships on their own site, ported
+across.
 
 Page changes, table rows, dialogs, menus and toasts all animate on a spring, and
 everything collapses to an instant change under `prefers-reduced-motion`.

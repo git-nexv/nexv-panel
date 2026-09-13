@@ -9,27 +9,15 @@
 </head>
 <body dir="ltr">
 <div class="app">
-  <aside class="sidebar" id="sidebar">
-    <div class="brand">
-      <div class="brand-mark">N</div>
-      <div>
-        <div class="brand-name">NexV Panel</div>
-        <div class="brand-sub" id="xrayVersion">Xray-core</div>
-      </div>
-    </div>
-    <nav id="nav"></nav>
-    <div class="nav-spacer"></div>
-    <div class="nav-item" id="themeToggle"><span data-icon="theme"></span><span>Toggle theme</span></div>
-    <div class="nav-item" id="logoutBtn"><span data-icon="logout"></span><span>Sign out</span></div>
-  </aside>
-
   <main class="main">
     <header class="topbar">
-      <button class="btn icon ghost menu-btn" id="menuBtn"><span data-icon="menu"></span></button>
+      <div class="brand-mark sm">N</div>
       <h1 id="pageTitle">Dashboard</h1>
       <div class="spacer"></div>
       <span class="chip" id="xrayChip"><i></i><span>—</span></span>
-      <button class="btn ghost" id="restartXray"><span data-icon="refresh"></span><span>Restart Xray</span></button>
+      <button class="btn icon ghost" id="restartXray" title="Restart Xray"><span data-icon="refresh"></span></button>
+      <button class="btn icon ghost desk-only" id="themeToggle" title="Toggle theme"><span data-icon="theme"></span></button>
+      <button class="btn icon ghost desk-only" id="logoutBtn" title="Sign out"><span data-icon="logout"></span></button>
     </header>
     <div class="content" id="view"></div>
   </main>

@@ -252,25 +252,11 @@ const state = {
   protocols: null, timer: null
 };
 
-function renderNav() {
-  const nav = document.getElementById('nav');
-  nav.innerHTML = '';
-  for (const page of PAGES) {
-    nav.append(el('div', {
-      class: `nav-item ${state.page === page.id ? 'active' : ''}`,
-      html: `${icon(page.icon)}<span>${page.label}</span>`,
-      onclick: () => navigate(page.id)
-    }));
-  }
-}
-
 function navigate(page) {
   if (!PAGES.some((p) => p.id === page)) page = 'dashboard';
   state.page = page;
   location.hash = page;
   document.getElementById('pageTitle').textContent = (PAGES.find((p) => p.id === page) || {}).label || '';
-  document.getElementById('sidebar').classList.remove('open');
-  renderNav();
   syncDock(true);
   render();
 }
@@ -378,9 +364,10 @@ async function renderDashboard(view) {
     const chip = document.getElementById('xrayChip');
     chip.className = `chip ${status.xray.running ? 'ok' : 'danger'}`;
     chip.innerHTML = `<i></i><span>Xray ${status.xray.running ? 'up' : 'down'}</span>`;
-    // keep just "Xray x.y.z"; the full build string overflows the sidebar
+    // keep just "Xray x.y.z"; the full build string is too long for the chip
     const shortVersion = (status.xray.version || '').split('(')[0].trim();
-    document.getElementById('xrayVersion').textContent = shortVersion || 'Xray-core';
+    const chipTitle = document.getElementById('xrayChip');
+    if (chipTitle) chipTitle.title = shortVersion || 'Xray-core';
   };
 
   await paint();
@@ -1837,13 +1824,18 @@ const DOCK_PAGES = ['dashboard', 'inbounds', 'clients', 'account'];
 
 const dock = { bar: null, more: null, moreItem: null, moreOpen: false };
 
+/** Wide enough to show every page at once? Then More is not needed. */
+const WIDE = () => window.matchMedia('(min-width: 981px)').matches;
+
 function buildDock() {
   const host = el('div', { class: 'dock' });
   const bar = el('div', { class: 'dock-bar glass' });
   bar.append(el('span', { class: 'dock-thumb' }));
 
-  const entries = DOCK_PAGES.map((id) => PAGES.find((p) => p.id === id)).filter(Boolean);
-  const rest = PAGES.filter((p) => !DOCK_PAGES.includes(p.id));
+  // on a wide screen every page fits in the bar, so nothing is hidden away
+  const wide = WIDE();
+  const entries = wide ? PAGES : DOCK_PAGES.map((id) => PAGES.find((p) => p.id === id)).filter(Boolean);
+  const rest = wide ? [] : PAGES.filter((p) => !DOCK_PAGES.includes(p.id));
 
   for (const page of entries) {
     bar.append(el('button', {
@@ -1885,9 +1877,11 @@ function buildDock() {
     more.append(row);
   }
 
-  host.append(bar, moreItem);
+  host.append(bar);
+  if (!wide) host.append(moreItem);
+  host.classList.toggle('no-more', wide);
   document.body.append(host, more);
-  Object.assign(dock, { bar, more, moreItem });
+  Object.assign(dock, { bar, more, moreItem, wide });
 
   moreItem.addEventListener('click', (event) => { event.stopPropagation(); toggleMore(); });
   document.addEventListener('click', (event) => {
@@ -1904,7 +1898,20 @@ function buildDock() {
     if (row.dataset.page && row.dataset.page !== state.page) navigate(row.dataset.page);
   });
 
-  window.addEventListener('resize', () => syncDock(false));
+  let wasWide = wide;
+  window.addEventListener('resize', () => {
+    if (WIDE() !== wasWide) {
+      // the set of items changes across the breakpoint, so rebuild rather than
+      // leave pages stranded in a More button that is no longer shown
+      wasWide = WIDE();
+      host.remove();
+      more.remove();
+      buildDock();
+      syncDock(false);
+      return;
+    }
+    syncDock(false);
+  });
 }
 
 function toggleMore() { dock.moreOpen ? closeMore() : openMore(); }
@@ -1936,6 +1943,7 @@ function syncDock(animate = true) {
   if (!dock.barLens) return;
   dock.barLens.select(state.page, animate);
   dock.moreLens.select(state.page, animate);
+  if (dock.wide) return;
   const inBar = DOCK_PAGES.includes(state.page);
   dock.moreItem.classList.toggle('active', dock.moreOpen || !inBar);
 }
@@ -2155,10 +2163,6 @@ function boot() {
   document.getElementById('logoutBtn').addEventListener('click', async () => {
     try { await api.post('/logout'); } catch (_) { /* sign out locally anyway */ }
     location.href = `${BASE}login`;
-  });
-
-  document.getElementById('menuBtn').addEventListener('click', () => {
-    document.getElementById('sidebar').classList.toggle('open');
   });
 
   document.getElementById('restartXray').addEventListener('click', async function () {

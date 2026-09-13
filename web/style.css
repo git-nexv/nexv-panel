@@ -21,15 +21,16 @@
 }
 
 :root[data-theme="light"] {
-  --bg: #f4f6fc;
+  --bg: #eef1f9;
   --bg-2: #ffffff;
-  --surface: rgba(16,24,45,.028);
-  --surface-2: rgba(16,24,45,.05);
-  --border: rgba(16,24,45,.09);
-  --border-strong: rgba(16,24,45,.18);
-  --text: #101a30;
-  --muted: #5b6884;
-  --faint: #8894ad;
+  /* a touch more ink than before: at .028 a filled field was invisible */
+  --surface: rgba(16,24,45,.05);
+  --surface-2: rgba(16,24,45,.085);
+  --border: rgba(16,24,45,.14);
+  --border-strong: rgba(16,24,45,.26);
+  --text: #0d1526;
+  --muted: #4a5670;
+  --faint: #737f99;
   --shadow: 0 18px 40px -22px rgba(16,24,45,.35);
 }
 
@@ -65,6 +66,16 @@ button, input, select, textarea { font: inherit; color: inherit; }
 /* ------------------------------- layout -------------------------------- */
 
 .app { display: flex; min-height: 100vh; }
+
+/* header controls that only make sense where there is no More sheet.
+   Scoped to .topbar so it outranks .btn's own display, which comes later. */
+.topbar .desk-only { display: none; }
+@media (min-width: 981px) { .topbar .desk-only { display: inline-flex; } }
+
+.brand-mark.sm {
+  width: 30px; height: 30px; border-radius: 9px;
+  font-size: 15px; flex: 0 0 auto;
+}
 
 .sidebar {
   width: var(--sidebar-w);
@@ -245,7 +256,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 input, select, textarea {
   width: 100%;
   padding: 10px 12px;
-  background: var(--bg-2);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   outline: none;
@@ -256,6 +267,13 @@ input:focus, select:focus, textarea:focus {
   box-shadow: 0 0 0 3px rgba(108,140,255,.18);
 }
 select { appearance: none; background-image: none; cursor: pointer; }
+:root[data-theme="light"] input,
+:root[data-theme="light"] select,
+:root[data-theme="light"] textarea {
+  background: #fff;
+  border-color: rgba(16, 24, 45, .16);
+  box-shadow: inset 0 1px 2px rgba(16, 24, 45, .05);
+}
 textarea { resize: vertical; min-height: 90px; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 12.5px; }
 
 .switch { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; user-select: none; }
@@ -297,6 +315,7 @@ td .row-actions { display: flex; gap: 6px; }
   position: fixed; inset: 0; z-index: 100;
   background: rgba(6,9,17,.62);
   backdrop-filter: blur(5px);
+  --dim: rgba(6,9,17,.62);
   display: grid; place-items: center;
   padding: 20px;
   animation: fade .18s var(--ease);
@@ -376,15 +395,6 @@ td .row-actions { display: flex; gap: 6px; }
   body, .app { overflow-x: hidden; }
   .topbar { flex-wrap: wrap; row-gap: 8px; }
   .topbar h1 { font-size: 15.5px; }
-  .sidebar {
-    position: fixed; inset-block: 0; inset-inline-start: 0;
-    transform: translateX(-102%);
-    box-shadow: var(--shadow);
-    background: var(--bg-2);
-  }
-  [dir="rtl"] .sidebar { transform: translateX(102%); }
-  .sidebar.open { transform: none; }
-  .menu-btn { display: inline-flex; }
   .content { padding: 18px 14px 50px; }
   .topbar { padding: 12px 14px; }
   .form-grid { grid-template-columns: 1fr; }
@@ -471,10 +481,12 @@ td .row-actions { display: flex; gap: 6px; }
   --glide: cubic-bezier(.22, .68, .24, 1);
 }
 :root[data-theme="light"] {
-  --glass: rgba(255, 255, 255, .68);
-  --glass-edge: rgba(16, 24, 45, .10);
-  --glass-sheen: rgba(255, 255, 255, .75);
-  --glass-shadow: 0 20px 50px -22px rgba(16, 24, 45, .38), 0 2px 10px -5px rgba(16, 24, 45, .22);
+  /* nearly opaque: at .68 the blur pulled the dark backdrop through and every
+     light surface came out the same dead grey */
+  --glass: rgba(250, 251, 255, .94);
+  --glass-edge: rgba(16, 24, 45, .13);
+  --glass-sheen: rgba(255, 255, 255, .9);
+  --glass-shadow: 0 20px 50px -22px rgba(16, 24, 45, .3), 0 2px 10px -5px rgba(16, 24, 45, .16);
 }
 
 .glass {
@@ -507,11 +519,11 @@ td .row-actions { display: flex; gap: 6px; }
  * speed and settles with a jelly bounce.
  */
 .dock {
-  --dock-h: 62px;
-  --dock-gap: 10px;
+  --dock-h: 52px;
+  --dock-gap: 8px;
   position: fixed; z-index: 90;
-  left: 50%; bottom: calc(12px + env(safe-area-inset-bottom));
-  width: min(520px, calc(100vw - 20px));
+  left: 50%; bottom: calc(10px + env(safe-area-inset-bottom));
+  width: min(430px, calc(100vw - 20px));
   transform: translateX(-50%);
   display: flex; align-items: center; gap: var(--dock-gap);
   -webkit-tap-highlight-color: transparent;
@@ -520,20 +532,23 @@ td .row-actions { display: flex; gap: 6px; }
 .dock * { -webkit-user-select: none; user-select: none; }
 
 .dock-bar {
-  position: relative; flex: none;
-  height: var(--dock-h); width: calc(100% - var(--dock-h) - var(--dock-gap));
+  position: relative; flex: 1 1 auto; min-width: 0;
+  /* box-sizing keeps the pill exactly --dock-h tall, border and all, so the
+     round More key beside it is the same size rather than a pixel short */
+  height: var(--dock-h); box-sizing: border-box;
   display: flex; align-items: stretch; padding: 4px;
   border-radius: 999px;
   touch-action: none;
 }
+.dock.no-more .dock-bar { flex: 1 1 100%; }
 .dock-item {
   position: relative; z-index: 2; flex: 1 1 0; min-width: 0;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
   border: 0; background: none; border-radius: 999px; cursor: pointer;
-  color: var(--muted); font: inherit; font-size: 10.5px; font-weight: 650; line-height: 1;
+  color: var(--muted); font: inherit; font-size: 9.5px; font-weight: 650; line-height: 1;
   transition: color .25s var(--glide), transform .45s var(--spring);
 }
-.dock-item svg { width: 22px; height: 22px; transition: transform .35s var(--spring); }
+.dock-item svg { width: 19px; height: 19px; transition: transform .35s var(--spring); }
 .dock-item span { white-space: nowrap; }
 .dock-item.active, .dock-item.under { color: var(--brand); }
 .dock-item.under svg { transform: scale(1.14); }
@@ -576,21 +591,21 @@ td .row-actions { display: flex; gap: 6px; }
 
 /* More: its own round key, set apart the way iOS separates search */
 .dock-solo {
-  position: relative; flex: none;
-  height: var(--dock-h); width: var(--dock-h);
+  position: relative; flex: 0 0 var(--dock-h);
+  height: var(--dock-h); width: var(--dock-h); box-sizing: border-box;
   display: flex; align-items: center; justify-content: center;
-  padding: 0; border: 0; border-radius: 999px; cursor: pointer;
+  padding: 0; border-radius: 999px; cursor: pointer;
   color: var(--muted); font: inherit;
   transition: color .24s var(--glide), transform .34s var(--spring), background .24s var(--glide);
 }
-.dock-solo svg { width: 22px; height: 22px; }
+.dock-solo svg { width: 19px; height: 19px; }
 .dock-solo:active { transform: scale(.92); }
 .dock-solo.active { color: var(--brand); background: color-mix(in srgb, var(--brand) 18%, transparent); }
 
 /* ---- the same bar, stood on end ---- */
 .dock-more {
   position: fixed; z-index: 89;
-  bottom: calc(12px + env(safe-area-inset-bottom) + var(--dock-h, 62px) + 10px);
+  bottom: calc(10px + env(safe-area-inset-bottom) + var(--dock-h, 52px) + 10px);
   display: flex; flex-direction: column;
   /* the rounded caps eat into the corners, so the end rows need clearance */
   padding: 18px 4px;
@@ -645,11 +660,14 @@ td .row-actions { display: flex; gap: 6px; }
   to   { opacity: 1; transform: none; }
 }
 
-@media (min-width: 981px) { .dock, .dock-more { display: none; } }
-@media (max-width: 980px) {
-  /* the dock replaces the drawer, so leave room for it */
-  .content { padding-bottom: 110px; }
+/* a wide screen shows every page at once, so the bar gets more room */
+@media (min-width: 981px) {
+  .dock { --dock-h: 56px; width: min(760px, calc(100vw - 40px)); }
+  .dock-item { font-size: 10.5px; }
+  .dock-item svg { width: 20px; height: 20px; }
 }
+/* the dock is the navigation, so every layout leaves room for it */
+.content { padding-bottom: 96px; }
 
 @media (prefers-reduced-motion: reduce) {
   .dock-item, .dock-thumb, .dock-more, .dock-row, .dock-item svg, .dock-row svg {
@@ -699,6 +717,7 @@ tbody tr:nth-child(n+6) { animation-delay: 110ms; }
   to   { opacity: 1; transform: none; }
 }
 .modal-backdrop { animation: fade-in .24s var(--glide) both; -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+:root[data-theme="light"] .modal-backdrop { background: rgba(38, 48, 74, .34); }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 
 .popup { animation: popup-in .3s var(--spring) both; }
