@@ -52,6 +52,48 @@ function hasSystemd() {
   return available;
 }
 
+/**
+ * TLS for an inbound. A certificate is taken either from files on disk or
+ * pasted inline; inline wins when present, because someone who pasted a
+ * certificate meant to use it.
+ */
+function tlsSettings(inb, net) {
+  const alpn = (inb.alpn && inb.alpn.length)
+    ? inb.alpn
+    : (net === 'grpc' ? ['h2'] : ['h2', 'http/1.1']);
+
+  const certificate = () => {
+    const base = {
+      ocspStapling: Number(inb.ocspStapling || 0),
+      usage: inb.certUsage || 'encipherment',
+      oneTimeLoading: !!inb.certOneTimeLoading
+    };
+    if (inb.certContent && inb.keyContent) {
+      return [Object.assign(base, {
+        certificate: String(inb.certContent).split('\n'),
+        key: String(inb.keyContent).split('\n')
+      })];
+    }
+    const cert = inb.certFile || db.settings.certFile;
+    const key = inb.keyFile || db.settings.keyFile;
+    return cert && key ? [Object.assign(base, { certificateFile: cert, keyFile: key })] : [];
+  };
+
+  const out = {
+    serverName: inb.sni || db.settings.domain || '',
+    minVersion: inb.tlsMinVersion || '1.2',
+    maxVersion: inb.tlsMaxVersion || '1.3',
+    rejectUnknownSni: !!inb.rejectUnknownSni,
+    alpn,
+    certificates: certificate()
+  };
+  if (inb.cipherSuites) out.cipherSuites = inb.cipherSuites;
+  if (inb.curvePreferences && inb.curvePreferences.length) out.curvePreferences = inb.curvePreferences;
+  if (inb.masterKeyLog) out.masterKeyLog = inb.masterKeyLog;
+  if (inb.fingerprint) out.settings = { fingerprint: inb.fingerprint };
+  return out;
+}
+
 function streamSettings(inb) {
   const net = inb.network || 'tcp';
   const s = { network: net, security: inb.security || 'none' };
@@ -65,6 +107,11 @@ function streamSettings(inb) {
     s.httpupgradeSettings = { path: inb.wsPath || '/', host: inb.wsHost || '' };
   } else if (net === 'xhttp') {
     s.xhttpSettings = { path: inb.wsPath || '/', host: inb.wsHost || '', mode: inb.xhttpMode || 'auto' };
+    // all optional; xray falls back to its own defaults when they are absent
+    if (inb.xhttpMaxUploadSize) s.xhttpSettings.scMaxEachPostBytes = String(inb.xhttpMaxUploadSize);
+    if (inb.xhttpMaxBufferedUpload) s.xhttpSettings.scMaxBufferedPosts = Number(inb.xhttpMaxBufferedUpload);
+    if (inb.xhttpMinUploadInterval) s.xhttpSettings.scMinPostsIntervalMs = String(inb.xhttpMinUploadInterval);
+    if (inb.xhttpMaxHeaderBytes) s.xhttpSettings.headerBytes = Number(inb.xhttpMaxHeaderBytes);
   } else if (net === 'kcp') {
     s.kcpSettings = { seed: inb.kcpSeed || '', header: { type: inb.kcpHeader || 'none' } };
   } else {
@@ -72,13 +119,7 @@ function streamSettings(inb) {
   }
 
   if (s.security === 'tls') {
-    const cert = inb.certFile || db.settings.certFile;
-    const key = inb.keyFile || db.settings.keyFile;
-    s.tlsSettings = {
-      serverName: inb.sni || db.settings.domain || '',
-      alpn: net === 'grpc' ? ['h2'] : ['h2', 'http/1.1'],
-      certificates: cert && key ? [{ certificateFile: cert, keyFile: key }] : []
-    };
+    s.tlsSettings = tlsSettings(inb, net);
   } else if (s.security === 'reality') {
     const r = inb.reality || {};
     s.realitySettings = {
@@ -345,7 +386,14 @@ function buildConfig() {
       port: Number(inb.port),
       protocol: inb.protocol,
       settings: inboundSettings(inb, clients),
-      sniffing: { enabled: inb.sniffing !== false, destOverride: ['http', 'tls', 'quic'] }
+      sniffing: {
+        enabled: inb.sniffing !== false,
+        destOverride: (inb.sniffDestOverride && inb.sniffDestOverride.length)
+          ? inb.sniffDestOverride
+          : ['http', 'tls', 'quic'],
+        metadataOnly: !!inb.sniffMetadataOnly,
+        routeOnly: !!inb.sniffRouteOnly
+      }
     };
     // wireguard and dokodemo-door carry no transport of their own
     if (inb.protocol !== 'wireguard') entry.streamSettings = streamSettings(inb);

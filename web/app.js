@@ -482,139 +482,297 @@ const SS_METHODS = [
   'aes-128-gcm', 'aes-256-gcm', 'chacha20-ietf-poly1305'
 ];
 
+/** A tabbed dialog body: returns the wrapper plus one form grid per tab. */
+function tabbed(names) {
+  const wrap = el('div');
+  const bar = el('div', { class: 'tabs' });
+  const panels = {};
+  const tabs = [];
+
+  names.forEach((name, index) => {
+    const panel = el('div', { class: 'tab-panel form-grid' });
+    if (index > 0) panel.hidden = true;
+    panels[name] = panel;
+
+    const tab = el('div', {
+      class: `tab ${index === 0 ? 'active' : ''}`,
+      text: name,
+      onclick: () => {
+        tabs.forEach((t) => t.classList.remove('active'));
+        tab.classList.add('active');
+        for (const [key, node] of Object.entries(panels)) node.hidden = key !== name;
+      }
+    });
+    tabs.push(tab);
+    bar.append(tab);
+  });
+
+  wrap.append(bar, ...Object.values(panels));
+  return { wrap, panels };
+}
+
+/** Segmented control, the way 3x-ui presents Security and certificate source. */
+function segmented(options, value, onChange) {
+  const box = el('div', { class: 'seg' });
+  const buttons = [];
+  for (const opt of options) {
+    const button = el('button', {
+      type: 'button',
+      class: value === opt.value ? 'active' : '',
+      text: opt.label,
+      onclick: () => {
+        buttons.forEach((b) => b.classList.remove('active'));
+        button.classList.add('active');
+        box.dataset.value = opt.value;
+        onChange(opt.value);
+      }
+    });
+    buttons.push(button);
+    box.append(button);
+  }
+  box.dataset.value = value;
+  return box;
+}
+
+/** Multi-select as a row of chips (ALPN, sniffing targets). */
+function chipSet(options, selected) {
+  const box = el('div', { class: 'chips' });
+  for (const opt of options) {
+    const input = el('input', { type: 'checkbox', value: opt });
+    input.checked = selected.includes(opt);
+    box.append(el('label', {}, [input, opt]));
+  }
+  box.values = () => Array.from(box.querySelectorAll('input:checked')).map((i) => i.value);
+  return box;
+}
+
+function toggle(checked) {
+  const input = el('input', { type: 'checkbox' });
+  input.checked = !!checked;
+  return el('label', { class: 'switch' }, [input, el('span', { class: 'track' })]);
+}
+const toggleValue = (node) => node.querySelector('input').checked;
+
 function inboundForm(existing) {
   const v = existing || {};
-  const form = el('div', { class: 'form-grid' });
   const protocols = (state.protocols && state.protocols.inbound) || ['vless'];
+  const { wrap, panels } = tabbed(['Basics', 'Protocol', 'Stream', 'Security', 'Sniffing']);
 
-  const input = (label, value, opts = {}) => {
-    const control = opts.options
-      ? selectOf(opts.options, value)
-      : el('input', { type: opts.type || 'text', value: value ?? '', placeholder: opts.placeholder || '' });
-    return formField(form, label, control, opts);
-  };
-
-  const remark = input('Name', v.remark || 'inbound-1');
-  const port = input('Port', v.port || Math.floor(20000 + Math.random() * 40000), { type: 'number' });
-  const protocol = input('Protocol', v.protocol || 'vless', {
-    options: protocols.map((p) => ({ value: p, label: PROTOCOL_LABELS[p] || p }))
-  });
-  const network = input('Transport', v.network || 'tcp', {
-    options: [
-      { value: 'tcp', label: 'TCP' }, { value: 'ws', label: 'WebSocket' },
-      { value: 'grpc', label: 'gRPC' }, { value: 'httpupgrade', label: 'HTTPUpgrade' },
-      { value: 'xhttp', label: 'XHTTP' }, { value: 'kcp', label: 'mKCP' }
-    ]
-  });
-  const security = input('Security', v.security || 'none', {
-    options: [{ value: 'none', label: 'None' }, { value: 'tls', label: 'TLS' }, { value: 'reality', label: 'REALITY' }]
-  });
-  const address = input('Connect address (optional)', v.address || '', {
-    hint: 'Used in share links. Defaults to the panel domain or server IP.'
+  /* one helper for every labelled control, so each tab reads as a list */
+  const add = (tab, label, control, opts = {}) => formField(panels[tab], label, control, opts);
+  const text = (value, opts = {}) => el('input', {
+    type: opts.type || 'text', value: value ?? '', placeholder: opts.placeholder || ''
   });
 
-  const wsPath = input('Path', v.wsPath || '/nexv');
-  const wsHost = input('Host header', v.wsHost || '');
-  const grpcService = input('gRPC service name', v.grpcServiceName || 'nexv-grpc');
-  const kcpSeed = input('mKCP seed', v.kcpSeed || '');
-  const kcpHeader = input('mKCP header', v.kcpHeader || 'none', {
-    options: ['none', 'srtp', 'utp', 'wechat-video', 'dtls', 'wireguard']
+  /* ------------------------------- Basics ------------------------------- */
+  const remark = add('Basics', 'Remark', text(v.remark || 'inbound-1'));
+  const port = add('Basics', 'Port', text(v.port || Math.floor(20000 + Math.random() * 40000), { type: 'number' }));
+  const listen = add('Basics', 'Listen IP', text(v.listen || ''), { placeholder: '0.0.0.0', hint: 'Empty listens on every address' });
+  const address = add('Basics', 'Connect address', text(v.address || ''), {
+    full: true, hint: 'Used in share links. Defaults to the panel domain or server IP.'
   });
-  const sni = input('SNI', v.sni || '');
-  const certFile = input('TLS certificate', v.certFile || '', { full: true, placeholder: '/etc/letsencrypt/live/example.com/fullchain.pem' });
-  const keyFile = input('TLS private key', v.keyFile || '', { full: true, placeholder: '/etc/letsencrypt/live/example.com/privkey.pem' });
-  const rDest = input('REALITY dest', (v.reality && v.reality.dest) || 'www.cloudflare.com:443');
-  const rNames = input('Server names', (v.reality && (v.reality.serverNames || []).join(',')) || 'www.cloudflare.com');
-  const rPriv = input('Private key', (v.reality && v.reality.privateKey) || '', { full: true, hint: 'Leave empty to generate a new key pair' });
-  const rPub = input('Public key', (v.reality && v.reality.publicKey) || '', { full: true });
-  const rShort = input('Short IDs', (v.reality && (v.reality.shortIds || []).join(',')) || '');
-  const ssMethod = input('Cipher', v.method || '2022-blake3-aes-128-gcm', { options: SS_METHODS });
-  const targetAddress = input('Forward to address', v.targetAddress || '127.0.0.1');
-  const targetPort = input('Forward to port', v.targetPort || 0, { type: 'number' });
-  const targetNetwork = input('Forwarded networks', v.targetNetwork || 'tcp,udp', {
-    options: ['tcp,udp', 'tcp', 'udp']
-  });
-  const wgPrivateKey = input('WireGuard private key', v.wgPrivateKey || '', { full: true });
-  const wgMtu = input('MTU', v.wgMtu || 1420, { type: 'number' });
+  const enable = add('Basics', 'Enabled', toggle(v.enable !== false));
 
+  /* ------------------------------ Protocol ------------------------------ */
+  const protocol = add('Protocol', 'Protocol', selectOf(
+    protocols.map((p) => ({ value: p, label: PROTOCOL_LABELS[p] || p })), v.protocol || 'vless'
+  ));
+  const ssMethod = add('Protocol', 'Cipher', selectOf(SS_METHODS, v.method || '2022-blake3-aes-128-gcm'));
+  const ssPassword = add('Protocol', 'Inbound password', text(v.password || ''), {
+    full: true, hint: 'Generated when left empty'
+  });
+  const udp = add('Protocol', 'UDP relay', toggle(v.udp !== false));
+  const targetAddress = add('Protocol', 'Forward to address', text(v.targetAddress || '127.0.0.1'));
+  const targetPort = add('Protocol', 'Forward to port', text(v.targetPort || 0, { type: 'number' }));
+  const targetNetwork = add('Protocol', 'Forwarded networks', selectOf(['tcp,udp', 'tcp', 'udp'], v.targetNetwork || 'tcp,udp'));
+  const followRedirect = add('Protocol', 'Follow redirect', toggle(v.followRedirect));
+  const wgPrivateKey = add('Protocol', 'WireGuard private key', text(v.wgPrivateKey || ''), { full: true });
+  const wgMtu = add('Protocol', 'MTU', text(v.wgMtu || 1420, { type: 'number' }));
+
+  /* ------------------------------- Stream ------------------------------- */
+  const network = add('Stream', 'Transmission', selectOf([
+    { value: 'tcp', label: 'TCP' }, { value: 'ws', label: 'WebSocket' },
+    { value: 'grpc', label: 'gRPC' }, { value: 'httpupgrade', label: 'HTTPUpgrade' },
+    { value: 'xhttp', label: 'XHTTP' }, { value: 'kcp', label: 'mKCP' }
+  ], v.network || 'tcp'));
+  const wsHost = add('Stream', 'Host', text(v.wsHost || ''));
+  const wsPath = add('Stream', 'Path', text(v.wsPath || '/'));
+  const xhttpMode = add('Stream', 'Mode', selectOf(['auto', 'packet-up', 'stream-up', 'stream-one'], v.xhttpMode || 'auto'));
+  const xhttpMaxUploadSize = add('Stream', 'Max upload size (bytes)', text(v.xhttpMaxUploadSize || ''), { placeholder: 'xray default' });
+  const xhttpMaxBufferedUpload = add('Stream', 'Max buffered upload', text(v.xhttpMaxBufferedUpload || '', { type: 'number' }), { placeholder: '30' });
+  const xhttpMinUploadInterval = add('Stream', 'Min upload interval (ms)', text(v.xhttpMinUploadInterval || ''), { placeholder: 'e.g. 50-150' });
+  const xhttpMaxHeaderBytes = add('Stream', 'Server max header bytes', text(v.xhttpMaxHeaderBytes || '', { type: 'number' }), { placeholder: 'xray default' });
+  const grpcService = add('Stream', 'gRPC service name', text(v.grpcServiceName || 'nexv-grpc'));
+  const kcpSeed = add('Stream', 'mKCP seed', text(v.kcpSeed || ''));
+  const kcpHeader = add('Stream', 'mKCP header', selectOf(['none', 'srtp', 'utp', 'wechat-video', 'dtls', 'wireguard'], v.kcpHeader || 'none'));
+
+  /* ------------------------------ Security ------------------------------ */
+  let security = v.security || 'none';
+  const securitySeg = segmented(
+    [{ value: 'none', label: 'None' }, { value: 'tls', label: 'TLS' }, { value: 'reality', label: 'Reality' }],
+    security,
+    (value) => { security = value; sync(); }
+  );
+  add('Security', 'Security', securitySeg, { full: true });
+
+  const sni = add('Security', 'SNI', text(v.sni || ''), { placeholder: 'Server Name Indication' });
+  const cipherSuites = add('Security', 'Cipher suites', text(v.cipherSuites || ''), { placeholder: 'Auto' });
+  const tlsMinVersion = add('Security', 'Min version', selectOf(['1.0', '1.1', '1.2', '1.3'], v.tlsMinVersion || '1.2'));
+  const tlsMaxVersion = add('Security', 'Max version', selectOf(['1.0', '1.1', '1.2', '1.3'], v.tlsMaxVersion || '1.3'));
+  const fingerprint = add('Security', 'uTLS', selectOf(
+    ['', 'chrome', 'firefox', 'safari', 'ios', 'android', 'edge', 'random', 'randomized'], v.fingerprint || 'chrome'
+  ));
+  const alpn = add('Security', 'ALPN', chipSet(['h2', 'http/1.1', 'h3'], v.alpn || ['h2', 'http/1.1']), { full: true });
+  const curvePreferences = add('Security', 'Curve preferences', text((v.curvePreferences || []).join(',')), {
+    full: true, placeholder: 'X25519,P-256'
+  });
+  const rejectUnknownSni = add('Security', 'Reject unknown SNI', toggle(v.rejectUnknownSni));
+
+  let certSource = (v.certContent && v.keyContent) ? 'content' : 'path';
+  const certSeg = segmented(
+    [{ value: 'path', label: 'File path' }, { value: 'content', label: 'File content' }],
+    certSource,
+    (value) => { certSource = value; sync(); }
+  );
+  add('Security', 'Digital certificate', certSeg, { full: true });
+
+  const certFile = add('Security', 'Certificate path', text(v.certFile || ''), {
+    full: true, placeholder: '/etc/letsencrypt/live/example.com/fullchain.pem'
+  });
+  const keyFile = add('Security', 'Private key path', text(v.keyFile || ''), {
+    full: true, placeholder: '/etc/letsencrypt/live/example.com/privkey.pem'
+  });
+  const certContent = add('Security', 'Certificate', el('textarea', {}, [v.certContent || '']), {
+    full: true, placeholder: '-----BEGIN CERTIFICATE-----'
+  });
+  const keyContent = add('Security', 'Private key', el('textarea', {}, [v.keyContent || '']), { full: true });
+  const ocspStapling = add('Security', 'OCSP stapling (s)', text(v.ocspStapling || 0, { type: 'number' }));
+  const certOneTimeLoading = add('Security', 'One time loading', toggle(v.certOneTimeLoading));
+  const certUsage = add('Security', 'Usage option', selectOf(['encipherment', 'verify', 'issue'], v.certUsage || 'encipherment'));
+  const masterKeyLog = add('Security', 'Master key log', text(v.masterKeyLog || ''), { full: true, placeholder: '/path/to/sslkeylog.txt' });
+
+  const rDest = add('Security', 'Reality dest', text((v.reality && v.reality.dest) || 'www.cloudflare.com:443'));
+  const rNames = add('Security', 'Server names', text((v.reality && (v.reality.serverNames || []).join(',')) || 'www.cloudflare.com'));
+  const rPriv = add('Security', 'Private key', text((v.reality && v.reality.privateKey) || ''), {
+    full: true, hint: 'Leave empty to generate a new key pair'
+  });
+  const rPub = add('Security', 'Public key', text((v.reality && v.reality.publicKey) || ''), { full: true });
+  const rShort = add('Security', 'Short IDs', text((v.reality && (v.reality.shortIds || []).join(',')) || ''));
+
+  /* ------------------------------ Sniffing ------------------------------ */
+  const sniffing = add('Sniffing', 'Sniffing', toggle(v.sniffing !== false));
+  const sniffDestOverride = add('Sniffing', 'Destination override',
+    chipSet(['http', 'tls', 'quic', 'fakedns'], v.sniffDestOverride || ['http', 'tls', 'quic']), { full: true });
+  const sniffMetadataOnly = add('Sniffing', 'Metadata only', toggle(v.sniffMetadataOnly));
+  const sniffRouteOnly = add('Sniffing', 'Route only', toggle(v.sniffRouteOnly));
+
+  /* --------------------------- field visibility -------------------------- */
   const fieldOf = (control) => control.closest('.field');
-  const groups = {
-    stream: [fieldOf(network), fieldOf(security), fieldOf(address)],
-    ws: [fieldOf(wsPath), fieldOf(wsHost)],
-    grpc: [fieldOf(grpcService)],
-    kcp: [fieldOf(kcpSeed), fieldOf(kcpHeader)],
-    tls: [fieldOf(sni), fieldOf(certFile), fieldOf(keyFile)],
-    reality: [fieldOf(rDest), fieldOf(rNames), fieldOf(rPriv), fieldOf(rPub), fieldOf(rShort)],
-    ss: [fieldOf(ssMethod)],
-    doko: [fieldOf(targetAddress), fieldOf(targetPort), fieldOf(targetNetwork)],
-    wg: [fieldOf(wgPrivateKey), fieldOf(wgMtu)]
-  };
+  const show = (nodes, on) => [].concat(nodes).forEach((n) => n.classList.toggle('hidden', !on));
 
-  const show = (nodes, on) => nodes.forEach((n) => n.classList.toggle('hidden', !on));
-
-  const sync = () => {
+  function sync() {
     const proto = protocol.value;
+    const net = network.value;
     // wireguard and dokodemo-door carry no xray transport of their own
     const hasStream = proto !== 'wireguard' && proto !== 'dokodemo-door';
-    const net = network.value;
-    const sec = security.value;
 
-    show(groups.stream, hasStream);
-    show(groups.ws, hasStream && (net === 'ws' || net === 'httpupgrade' || net === 'xhttp'));
-    show(groups.grpc, hasStream && net === 'grpc');
-    show(groups.kcp, hasStream && net === 'kcp');
-    show(groups.tls, hasStream && sec === 'tls');
-    show(groups.reality, hasStream && sec === 'reality');
-    show(groups.ss, proto === 'shadowsocks');
-    show(groups.doko, proto === 'dokodemo-door');
-    show(groups.wg, proto === 'wireguard');
+    show([fieldOf(ssMethod), fieldOf(ssPassword)], proto === 'shadowsocks');
+    show(fieldOf(udp), proto === 'socks');
+    show([fieldOf(targetAddress), fieldOf(targetPort), fieldOf(targetNetwork), fieldOf(followRedirect)], proto === 'dokodemo-door');
+    show([fieldOf(wgPrivateKey), fieldOf(wgMtu)], proto === 'wireguard');
+
+    show(fieldOf(network), hasStream);
+    show([fieldOf(wsHost), fieldOf(wsPath)], hasStream && ['ws', 'httpupgrade', 'xhttp'].includes(net));
+    show([fieldOf(xhttpMode), fieldOf(xhttpMaxUploadSize), fieldOf(xhttpMaxBufferedUpload),
+      fieldOf(xhttpMinUploadInterval), fieldOf(xhttpMaxHeaderBytes)], hasStream && net === 'xhttp');
+    show(fieldOf(grpcService), hasStream && net === 'grpc');
+    show([fieldOf(kcpSeed), fieldOf(kcpHeader)], hasStream && net === 'kcp');
+
+    const tls = hasStream && security === 'tls';
+    const reality = hasStream && security === 'reality';
+    show(fieldOf(securitySeg), hasStream);
+    show([fieldOf(sni), fieldOf(cipherSuites), fieldOf(tlsMinVersion), fieldOf(tlsMaxVersion),
+      fieldOf(fingerprint), fieldOf(alpn), fieldOf(curvePreferences), fieldOf(rejectUnknownSni),
+      fieldOf(certSeg), fieldOf(ocspStapling), fieldOf(certOneTimeLoading), fieldOf(certUsage),
+      fieldOf(masterKeyLog)], tls);
+    show([fieldOf(certFile), fieldOf(keyFile)], tls && certSource === 'path');
+    show([fieldOf(certContent), fieldOf(keyContent)], tls && certSource === 'content');
+    show([fieldOf(rDest), fieldOf(rNames), fieldOf(rPriv), fieldOf(rPub), fieldOf(rShort)], reality);
 
     // REALITY only works over raw TCP or gRPC/xhttp; keep the pairing sane
-    if (hasStream && sec === 'reality' && (net === 'ws' || net === 'httpupgrade')) {
-      security.value = 'none';
+    if (reality && (net === 'ws' || net === 'httpupgrade')) {
+      security = 'none';
+      securitySeg.querySelectorAll('button').forEach((b, i) => b.classList.toggle('active', i === 0));
       toast('REALITY cannot be combined with WebSocket', 'err');
       sync();
     }
-  };
-  [network, security, protocol].forEach((c) => c.addEventListener('change', sync));
+  }
+  [protocol, network].forEach((c) => c.addEventListener('change', sync));
   sync();
 
   modal({
-    title: existing ? 'Edit inbound' : 'New inbound',
+    title: existing ? 'Edit inbound' : 'Add inbound',
     subtitle: 'Saving writes the Xray config and restarts the service.',
-    body: form,
-    width: 680,
+    body: wrap,
+    width: 720,
     actions: [{
-      label: existing ? 'Save changes' : 'Create inbound',
+      label: existing ? 'Save changes' : 'Create',
       kind: 'primary',
       onClick: async (close) => {
         const payload = {
           remark: remark.value,
           port: Number(port.value),
-          protocol: protocol.value,
-          network: network.value,
-          security: security.value,
+          listen: listen.value.trim(),
           address: address.value,
-          wsPath: wsPath.value,
-          wsHost: wsHost.value,
-          grpcServiceName: grpcService.value,
-          kcpSeed: kcpSeed.value,
-          kcpHeader: kcpHeader.value,
-          sni: sni.value,
-          certFile: certFile.value,
-          keyFile: keyFile.value,
+          enable: toggleValue(enable),
+          protocol: protocol.value,
           method: ssMethod.value,
+          password: ssPassword.value,
+          udp: toggleValue(udp),
           targetAddress: targetAddress.value,
           targetPort: Number(targetPort.value),
           targetNetwork: targetNetwork.value,
-          wgPrivateKey: wgPrivateKey.value,
+          followRedirect: toggleValue(followRedirect),
+          wgPrivateKey: wgPrivateKey.value.trim(),
           wgMtu: Number(wgMtu.value),
+          network: network.value,
+          wsHost: wsHost.value,
+          wsPath: wsPath.value,
+          xhttpMode: xhttpMode.value,
+          xhttpMaxUploadSize: xhttpMaxUploadSize.value,
+          xhttpMaxBufferedUpload: xhttpMaxBufferedUpload.value,
+          xhttpMinUploadInterval: xhttpMinUploadInterval.value,
+          xhttpMaxHeaderBytes: xhttpMaxHeaderBytes.value,
+          grpcServiceName: grpcService.value,
+          kcpSeed: kcpSeed.value,
+          kcpHeader: kcpHeader.value,
+          security,
+          sni: sni.value,
+          cipherSuites: cipherSuites.value,
+          tlsMinVersion: tlsMinVersion.value,
+          tlsMaxVersion: tlsMaxVersion.value,
+          fingerprint: fingerprint.value,
+          alpn: alpn.values(),
+          curvePreferences: curvePreferences.value,
+          rejectUnknownSni: toggleValue(rejectUnknownSni),
+          certFile: certSource === 'path' ? certFile.value : '',
+          keyFile: certSource === 'path' ? keyFile.value : '',
+          certContent: certSource === 'content' ? certContent.value : '',
+          keyContent: certSource === 'content' ? keyContent.value : '',
+          ocspStapling: Number(ocspStapling.value),
+          certOneTimeLoading: toggleValue(certOneTimeLoading),
+          certUsage: certUsage.value,
+          masterKeyLog: masterKeyLog.value,
+          sniffing: toggleValue(sniffing),
+          sniffDestOverride: sniffDestOverride.values(),
+          sniffMetadataOnly: toggleValue(sniffMetadataOnly),
+          sniffRouteOnly: toggleValue(sniffRouteOnly),
           reality: {
             dest: rDest.value,
-            serverNames: rNames.value.split(',').map((s) => s.trim()).filter(Boolean),
+            serverNames: rNames.value.split(',').map((x) => x.trim()).filter(Boolean),
             privateKey: rPriv.value,
             publicKey: rPub.value,
-            shortIds: rShort.value.split(',').map((s) => s.trim()).filter(Boolean)
+            shortIds: rShort.value.split(',').map((x) => x.trim()).filter(Boolean)
           }
         };
         try {

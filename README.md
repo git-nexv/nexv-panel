@@ -78,7 +78,8 @@ Every entry is also a direct command:
 ## Panel sections
 
 - **Dashboard** — CPU, memory, disk, live network speed, Xray state, totals.
-- **Inbounds** — one port and protocol per inbound, with transport and security.
+- **Inbounds** — a tabbed editor (Basics, Protocol, Stream, Security, Sniffing)
+  covering transport options, TLS and REALITY, certificates and sniffing.
 - **Clients** — accounts per inbound, with quota, expiry, QR codes and links.
 - **Outbounds** — where traffic leaves: direct, blocked, or your own proxies.
 - **Routing** — ordered rules that pick an outbound per domain, IP, port or user.
@@ -98,6 +99,14 @@ SOCKS5, HTTP, WireGuard.
 REALITY where the protocol supports it.
 
 Share links are generated for VLESS, VMess, Trojan, Shadowsocks and SOCKS5.
+
+TLS exposes SNI, cipher suites, min and max version, uTLS fingerprint, ALPN,
+curve preferences, reject-unknown-SNI, OCSP stapling, usage, one-time loading,
+a master key log, and a certificate given either as file paths or pasted
+inline. XHTTP exposes mode, max upload size, max buffered upload, minimum
+upload interval and the server header limit. Sniffing exposes its targets plus
+metadata-only and route-only. ECH, pinned peer certificates and XMUX are not
+implemented.
 
 ## HTTPS
 

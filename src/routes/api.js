@@ -149,6 +149,14 @@ router.get('/protocols', (req, res) => res.json({
 
 /* ------------------------------- inbounds ------------------------------- */
 
+/** Accept a list either as an array or as a comma-separated string. */
+function toList(value, existingValue, fallback) {
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (typeof value === 'string') return value.split(',').map((v) => v.trim()).filter(Boolean);
+  if (Array.isArray(existingValue)) return existingValue;
+  return fallback;
+}
+
 function normalizeInbound(body, existing) {
   const inb = Object.assign({}, existing || {}, {
     remark: String(body.remark || existing?.remark || 'inbound').trim(),
@@ -177,6 +185,25 @@ function normalizeInbound(body, existing) {
     followRedirect: body.followRedirect ?? existing?.followRedirect ?? false,
     wgPrivateKey: body.wgPrivateKey ?? existing?.wgPrivateKey ?? '',
     wgMtu: Number(body.wgMtu ?? existing?.wgMtu ?? 1420),
+    xhttpMaxUploadSize: body.xhttpMaxUploadSize ?? existing?.xhttpMaxUploadSize ?? '',
+    xhttpMaxBufferedUpload: body.xhttpMaxBufferedUpload ?? existing?.xhttpMaxBufferedUpload ?? '',
+    xhttpMinUploadInterval: body.xhttpMinUploadInterval ?? existing?.xhttpMinUploadInterval ?? '',
+    xhttpMaxHeaderBytes: body.xhttpMaxHeaderBytes ?? existing?.xhttpMaxHeaderBytes ?? '',
+    tlsMinVersion: body.tlsMinVersion ?? existing?.tlsMinVersion ?? '1.2',
+    tlsMaxVersion: body.tlsMaxVersion ?? existing?.tlsMaxVersion ?? '1.3',
+    cipherSuites: body.cipherSuites ?? existing?.cipherSuites ?? '',
+    rejectUnknownSni: body.rejectUnknownSni ?? existing?.rejectUnknownSni ?? false,
+    alpn: toList(body.alpn, existing?.alpn, ['h2', 'http/1.1']),
+    curvePreferences: toList(body.curvePreferences, existing?.curvePreferences, []),
+    masterKeyLog: body.masterKeyLog ?? existing?.masterKeyLog ?? '',
+    certContent: body.certContent ?? existing?.certContent ?? '',
+    keyContent: body.keyContent ?? existing?.keyContent ?? '',
+    ocspStapling: Number(body.ocspStapling ?? existing?.ocspStapling ?? 0),
+    certUsage: body.certUsage ?? existing?.certUsage ?? 'encipherment',
+    certOneTimeLoading: body.certOneTimeLoading ?? existing?.certOneTimeLoading ?? false,
+    sniffDestOverride: toList(body.sniffDestOverride, existing?.sniffDestOverride, ['http', 'tls', 'quic']),
+    sniffMetadataOnly: body.sniffMetadataOnly ?? existing?.sniffMetadataOnly ?? false,
+    sniffRouteOnly: body.sniffRouteOnly ?? existing?.sniffRouteOnly ?? false,
     address: body.address ?? existing?.address ?? '',
     sniffing: body.sniffing ?? existing?.sniffing ?? true,
     enable: body.enable ?? existing?.enable ?? true,
