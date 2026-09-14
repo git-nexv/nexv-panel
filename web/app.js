@@ -211,6 +211,7 @@ const ICONS = {
   search: '<path d="M10 3a7 7 0 1 1-4.2 12.6l-3.1 3.1-1.4-1.4 3.1-3.1A7 7 0 0 1 10 3Zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10Z"/>',
   activity: '<path d="M4 13h3l2.5 6 5-14 2.5 8h3v2h-4.5L13 9.5 9.5 20 6 15H4v-2Z"/>',
   admins: '<path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm-7 8v-1c0-2.7 4.5-4 7-4s7 1.3 7 4v1H5Zm14.5-9.5 1.2 2.4 2.6.4-1.9 1.8.5 2.6-2.4-1.3-2.4 1.3.5-2.6-1.9-1.8 2.6-.4 1.2-2.4Z"/>',
+  wallet: '<path d="M3 6a3 3 0 0 1 3-3h11v2H6a1 1 0 0 0 0 2h12a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6Zm13 6a2 2 0 1 0 0 4h5v-4h-5Z"/>',
   key: '<path d="M14 2a8 8 0 1 0-7.5 10.6L3 16.1V21h5v-2h2v-2h2l1.6-1.6A8 8 0 0 0 14 2Zm2.5 6.5a2 2 0 1 1-2-2 2 2 0 0 1 2 2Z"/>',
   empty: '<path d="M4 6h16v12H4V6Zm2 2v8h12V8H6Z" opacity=".7"/>'
 };
@@ -566,10 +567,10 @@ function paintXrayChip(xray) {
   if (!chip) return;
   const cls = `chip ${xray.running ? 'ok' : 'danger'}`;
   if (chip.className !== cls) chip.className = cls;
-  const html = `<i></i><span>Xray ${xray.running ? 'up' : 'down'}</span>`;
+  const html = tHtml(`<i></i><span>Xray ${xray.running ? 'up' : 'down'}</span>`);
   if (chip.innerHTML !== html) chip.innerHTML = html;
   // keep just "Xray x.y.z"; the full build string is too long for the chip
-  chip.title = (xray.version || '').split('(')[0].trim() || 'Xray-core';
+  chip.title = (xray.version || '').split('(')[0].trim() || t('Xray-core');
 }
 
 /** Re-read the Xray state for the header, after an action changed it. */
@@ -2791,14 +2792,7 @@ async function renderSettings(view) {
       .map((l) => ({ value: l.code, label: l.label })),
     window.NEXV_I18N ? window.NEXV_I18N.lang() : 'en'
   );
-  langSel.addEventListener('change', () => {
-    if (!window.NEXV_I18N) return;
-    window.NEXV_I18N.setLang(langSel.value);
-    api.put('/settings', { lang: langSel.value }).catch(() => {});
-    const key = document.getElementById('langToggle');
-    if (key) key.textContent = langSel.value === 'fa' ? 'FA' : 'EN';
-    navigate(state.page);
-  });
+  langSel.addEventListener('change', () => applyLanguage(langSel.value));
   general.append(el('div', { class: 'field' }, [
     el('label', { text: 'Language' }), langSel,
     el('div', { class: 'hint', text: 'Takes effect at once, on this browser and on the sign-in page.' })
@@ -3058,7 +3052,7 @@ async function renderAdmins(view) {
   view.append(el('div', { class: 'between', style: 'margin-bottom:16px' }, [
     el('div', { class: 'muted', text: 'Panels you have sold. Each one signs in at its own address and spends a balance you credit.' }),
     el('div', { class: 'row' }, [
-      el('button', { class: 'btn', html: `${icon('qr')} Gift code`, onclick: () => codeDialog(null) }),
+      el('button', { class: 'btn', html: `${icon('qr')} Make a code`, onclick: () => codeDialog(null) }),
       el('button', { class: 'btn primary', html: `${icon('plus')} New panel`, onclick: () => adminForm(null) })
     ])
   ]));
@@ -3115,6 +3109,10 @@ async function renderAdmins(view) {
             onclick: () => credentialsDialog(admin)
           }),
           el('button', {
+            class: 'btn icon ghost', title: 'Add or take back balance', html: icon('wallet'),
+            onclick: () => balanceDialog(admin)
+          }),
+          el('button', {
             class: 'btn icon ghost', title: 'Suspend / re-open', html: icon('power'),
             onclick: async () => {
               try {
@@ -3146,14 +3144,18 @@ async function renderAdmins(view) {
   if (codes.length) {
     const cwrap = el('div', { class: 'table-wrap' });
     const ctable = el('table');
-    ctable.innerHTML = '<thead><tr><th>Code</th><th>Worth</th><th>For</th><th>Used</th><th></th></tr></thead>';
+    ctable.innerHTML = '<thead><tr><th>Code</th><th>Worth</th><th>What it is</th><th>For</th><th>Used</th><th></th></tr></thead>';
     const cbody = el('tbody');
     for (const code of codes.slice(0, 60)) {
       const owner = data.admins.find((a) => a.id === code.resellerId);
       cbody.append(el('tr', {}, [
         el('td', {}, [el('strong', { class: 'mono', style: 'font-size:12px', text: code.code })]),
         el('td', { class: 'num', text: code.amount.toLocaleString() }),
-        el('td', { class: 'muted', text: owner ? owner.name : 'anyone (gift)' }),
+        el('td', {}, [el('span', {
+          class: `chip ${code.kind === 'gift' ? 'ok' : ''}`,
+          html: `<i></i>${code.kind === 'gift' ? 'Gift' : 'Paid top-up'}`
+        })]),
+        el('td', { class: 'muted', text: owner ? owner.name : 'a deleted panel' }),
         el('td', { class: 'muted', text: code.usedAt ? fmtDate(code.usedAt) : 'not yet' }),
         el('td', {}, [el('div', { class: 'row-actions' }, [
           el('button', { class: 'btn icon ghost', title: 'Copy', html: icon('copy'), onclick: () => copy(code.code) }),
@@ -3435,28 +3437,27 @@ async function adminDetail(id) {
     panels['Their clients'].append(el('div', { class: 'hint', text: 'They have not sold anything yet.' }));
   }
 
-  /* money: a code to give them, or a hand adjustment */
-  const amount = el('input', { type: 'number', placeholder: '1000000' });
-  const reason = el('input', { placeholder: 'why' });
+  /* money: by hand, or as a code for them to redeem */
   panels.Balance.append(
     el('div', { class: 'form-grid' }, [
-      el('div', { class: 'field' }, [el('label', { text: 'Amount' }), amount,
-        el('div', { class: 'hint', text: 'A positive number adds, a negative one takes back.' })]),
-      el('div', { class: 'field' }, [el('label', { text: 'Note' }), reason])
+      el('div', { class: 'field' }, [
+        el('label', { text: 'Balance now' }),
+        el('div', { class: 'value-lg', text: a.balance.toLocaleString() })
+      ]),
+      el('div', { class: 'field' }, [
+        el('label', { text: 'Spent so far' }),
+        el('div', { class: 'value-lg', text: (a.spent || 0).toLocaleString() })
+      ])
     ]),
     el('div', { class: 'row', style: 'margin-top:4px' }, [
       el('button', {
-        class: 'btn primary', text: 'Adjust the balance',
-        onclick: async (event) => {
-          try {
-            const result = await api.post(`/admins/${id}/balance`, { amount: Number(amount.value), reason: reason.value });
-            toast(`Balance is now ${result.balance.toLocaleString()}`);
-            event.target.closest('.modal-backdrop').remove();
-            render();
-          } catch (err) { toast(err.message, 'err'); }
-        }
+        class: 'btn primary', html: `${icon('wallet')} Add or take back`,
+        onclick: (event) => { event.target.closest('.modal-backdrop').remove(); balanceDialog(a); }
       }),
-      el('button', { class: 'btn', text: 'Make a code for them', onclick: () => codeDialog(a) })
+      el('button', {
+        class: 'btn', html: `${icon('qr')} Make a code for them`,
+        onclick: (event) => { event.target.closest('.modal-backdrop').remove(); codeDialog(a); }
+      })
     ]),
     data.ledger.length
       ? el('div', { class: 'section-title', text: 'History' })
@@ -3486,21 +3487,106 @@ async function adminDetail(id) {
   modal({ title: a.name, body: wrap, width: 760, actions: false });
 }
 
-/** A code worth money: for one panel, or for anybody. */
+/**
+ * Money in or out of one panel's balance.
+ *
+ * The same thing the Balance tab does, one key away from the list: crediting
+ * somebody who paid, or taking back what was credited by mistake, is the thing
+ * a leader does most and it should not need three clicks to find.
+ */
+function balanceDialog(admin) {
+  let sign = 1;
+  const amount = el('input', { type: 'number', min: '0', placeholder: '100000' });
+  const reason = el('input', { placeholder: 'why' });
+  const after = el('div', { class: 'hint' });
+
+  const show = () => {
+    const n = Math.round(Number(amount.value) || 0);
+    after.textContent = n
+      ? t(`Balance becomes ${(admin.balance + sign * n).toLocaleString()}`)
+      : '';
+  };
+  amount.addEventListener('input', show);
+
+  const pick = segmented(
+    [{ value: 'add', label: 'Add' }, { value: 'take', label: 'Take back' }],
+    'add',
+    (value) => { sign = value === 'add' ? 1 : -1; show(); }
+  );
+
+  const form = el('div', { class: 'form-grid' }, [
+    el('div', { class: 'field full' }, [
+      el('label', { text: 'Balance now' }),
+      el('div', { class: 'value-lg', text: admin.balance.toLocaleString() })
+    ]),
+    el('div', { class: 'field' }, [el('label', { text: 'Add or take back' }), pick]),
+    el('div', { class: 'field' }, [el('label', { text: 'Amount' }), amount, after]),
+    el('div', { class: 'field full' }, [
+      el('label', { text: 'Note' }), reason,
+      el('div', { class: 'hint', text: 'Shows in their balance history. Leave it blank if there is nothing to say.' })
+    ])
+  ]);
+
+  modal({
+    title: `Balance for ${admin.name}`,
+    body: form,
+    width: 560,
+    actions: [{
+      label: 'Apply',
+      kind: 'primary',
+      onClick: async (close) => {
+        const n = Math.round(Number(amount.value) || 0);
+        if (n <= 0) return toast('Type an amount first', 'err');
+        try {
+          const result = await api.post(`/admins/${admin.id}/balance`, {
+            amount: sign * n,
+            reason: reason.value.trim() || (sign > 0 ? 'added by the leader' : 'taken back by the leader')
+          });
+          close();
+          toast(`Balance is now ${result.balance.toLocaleString()}`);
+          render();
+        } catch (err) { toast(err.message, 'err'); }
+      }
+    }]
+  });
+}
+
+/**
+ * A code worth money, for one panel.
+ *
+ * Always for one: a code anybody could redeem is a code the wrong person
+ * redeems. The kind says whether it is balance they paid for or balance you
+ * are giving them - it spends the same either way, and the difference shows up
+ * in their history and in yours.
+ */
 function codeDialog(admin) {
-  const amount = el('input', { type: 'number', placeholder: '1000000' });
-  const note = el('input', { placeholder: 'what this is for' });
+  const data = state.admins || { admins: [] };
+  const panels = data.admins || [];
+  let kind = 'topup';
+
+  const who = selectOf(
+    [{ value: '', label: 'Pick a panel' }].concat(panels.map((a) => ({ value: a.id, label: a.name }))),
+    admin ? admin.id : ''
+  );
+  const amount = el('input', { type: 'number', min: '0', placeholder: '1000000' });
+  const pick = segmented(
+    [{ value: 'topup', label: 'Paid top-up' }, { value: 'gift', label: 'Gift' }],
+    'topup',
+    (value) => { kind = value; }
+  );
   const out = el('div', { class: 'hint', style: 'margin-top:12px' });
 
   modal({
-    title: admin ? `A code for ${admin.name}` : 'A gift code',
-    subtitle: admin
-      ? 'Only this panel can use it, and only once.'
-      : 'Anybody with the code can use it, once. Good for handing out a trial.',
+    title: admin ? `A code for ${admin.name}` : 'Make a code',
+    subtitle: 'Only the panel you choose can use it, and only once.',
     body: el('div', {}, [
       el('div', { class: 'form-grid' }, [
+        el('div', { class: 'field full' }, [el('label', { text: 'For which panel' }), who]),
         el('div', { class: 'field' }, [el('label', { text: 'Worth' }), amount]),
-        el('div', { class: 'field' }, [el('label', { text: 'Note' }), note])
+        el('div', { class: 'field' }, [
+          el('label', { text: 'What it is' }), pick,
+          el('div', { class: 'hint', text: 'Balance they paid for, or balance you are giving them.' })
+        ])
       ]),
       out
     ]),
@@ -3512,8 +3598,8 @@ function codeDialog(admin) {
         try {
           const code = await api.post('/admins/codes', {
             amount: Number(amount.value),
-            resellerId: admin ? admin.id : '',
-            note: note.value
+            resellerId: who.value,
+            kind
           });
           out.className = 'hint';
           out.innerHTML = '';
@@ -3524,6 +3610,7 @@ function codeDialog(admin) {
             ])
           );
           hydrateIcons(out);
+          render();
         } catch (err) {
           out.className = 'hint bad-text';
           out.textContent = err.message;
@@ -4370,12 +4457,19 @@ async function checkForUpdate(force) {
     });
     bar.insertBefore(chip, document.getElementById('xrayChip'));
   }
-  chip.classList.toggle('ready', !!info.updateAvailable);
-  chip.title = info.updateAvailable
-    ? `Version ${info.latest} is available`
-    : `Up to date · ${info.current}`;
-  chip.innerHTML = `${icon('update', 15)}<span>${info.updateAvailable ? `Update ${info.latest}` : info.current}</span>`;
+  paintUpdateChip(info);
   return info;
+}
+
+/** What the update key says, in whatever language the panel is in. */
+function paintUpdateChip(info) {
+  const chip = document.getElementById('updateChip');
+  if (!chip || !info) return;
+  chip.classList.toggle('ready', !!info.updateAvailable);
+  chip.title = t(info.updateAvailable
+    ? `Version ${info.latest} is available`
+    : `Up to date · ${info.current}`);
+  chip.innerHTML = `${icon('update', 15)}<span>${t(info.updateAvailable ? `Update ${info.latest}` : info.current)}</span>`;
 }
 
 /* --------------------------------- dock ---------------------------------- */
@@ -4394,6 +4488,11 @@ const dock = { bar: null, more: null, moreItem: null, moreOpen: false };
 const WIDE = () => window.matchMedia('(min-width: 981px)').matches;
 
 function buildDock() {
+  /* a rebuild - the breakpoint moved, or the language changed - replaces what
+     is there; two docks on the page is a bug you only see on a phone */
+  if (dock.host) dock.host.remove();
+  if (dock.more) dock.more.remove();
+
   const host = el('div', { class: 'dock' });
   const bar = el('div', { class: 'dock-bar glass' });
   bar.append(el('span', { class: 'dock-thumb' }));
@@ -4444,12 +4543,9 @@ function buildDock() {
   if (!wide) host.append(moreItem);
   host.classList.toggle('no-more', wide);
   document.body.append(host, more);
-  Object.assign(dock, { bar, more, moreItem, wide });
+  Object.assign(dock, { host, bar, more, moreItem, wide });
 
   moreItem.addEventListener('click', (event) => { event.stopPropagation(); toggleMore(); });
-  document.addEventListener('click', (event) => {
-    if (dock.moreOpen && !more.contains(event.target) && !moreItem.contains(event.target)) closeMore();
-  });
 
   dock.barLens = liquidLens(bar, '.dock-item', 'x', (item) => {
     closeMore();
@@ -4461,20 +4557,25 @@ function buildDock() {
     if (row.dataset.page && row.dataset.page !== state.page) navigate(row.dataset.page);
   });
 
-  let wasWide = wide;
-  window.addEventListener('resize', () => {
-    if (WIDE() !== wasWide) {
+  if (!dock.wired) {
+    dock.wired = true;
+    document.addEventListener('click', (event) => {
+      if (!dock.moreOpen) return;
+      if (!dock.more.contains(event.target) && !dock.moreItem.contains(event.target)) closeMore();
+    });
+    window.addEventListener('resize', () => {
       // the set of items changes across the breakpoint, so rebuild rather than
       // leave pages stranded in a More button that is no longer shown
-      wasWide = WIDE();
-      host.remove();
-      more.remove();
-      buildDock();
+      if (WIDE() !== dock.wide) return rebuildDock();
       syncDock(false);
-      return;
-    }
-    syncDock(false);
-  });
+    });
+  }
+}
+
+/** Build it again over the top of itself, and put the capsule back. */
+function rebuildDock() {
+  buildDock();
+  syncDock(false);
 }
 
 function toggleMore() { dock.moreOpen ? closeMore() : openMore(); }
@@ -4872,17 +4973,52 @@ function trackTopbar() {
 function languageKey() {
   const key = document.getElementById('langToggle');
   if (!key || !window.NEXV_I18N) return;
-  const paint = () => { key.textContent = window.NEXV_I18N.lang() === 'fa' ? 'FA' : 'EN'; };
-  paint();
+  key.textContent = window.NEXV_I18N.lang() === 'fa' ? 'FA' : 'EN';
   key.addEventListener('click', () => {
-    const next = window.NEXV_I18N.lang() === 'fa' ? 'en' : 'fa';
-    window.NEXV_I18N.setLang(next);
-    paint();
-    api.put('/settings', { lang: next }).catch(() => { /* the browser remembers either way */ });
-    /* through navigate, not render: the header's page title is written there
-       and would otherwise keep the language you just left */
-    navigate(state.page);
+    applyLanguage(window.NEXV_I18N.lang() === 'fa' ? 'en' : 'fa');
   });
+}
+
+/**
+ * Switching language, everywhere at once.
+ *
+ * The view is redrawn every time you move between pages, so it used to be the
+ * only part that came back translated. The dock, the More sheet and the header
+ * are built once at sign-in and then left alone - which is exactly why they
+ * stayed in the language you started in. Each of them is dealt with here, and
+ * nothing else may call setLang directly.
+ */
+function applyLanguage(code, quiet) {
+  if (!window.NEXV_I18N) return;
+  const next = window.NEXV_I18N.setLang(code);
+  const key = document.getElementById('langToggle');
+  if (key) key.textContent = next === 'fa' ? 'FA' : 'EN';
+
+  translateChrome();
+  rebuildDock();
+  refreshXrayChip();
+  if (state.version) paintUpdateChip(state.version);
+  if (!quiet) api.put('/settings', { lang: next }).catch(() => { /* the browser remembers either way */ });
+  /* through navigate, not render: the header's page title is written there
+     and would otherwise keep the language you just left */
+  navigate(state.page);
+}
+
+/**
+ * The header is written in index.html, so its words never went through el()
+ * and never got translated. The English is kept on the node the first time
+ * round - translating a translation gives nothing back.
+ */
+function translateChrome() {
+  const bar = document.querySelector('.topbar');
+  if (!bar) return;
+  for (const attr of TRANSLATED_ATTRS) {
+    for (const node of bar.querySelectorAll(`[${attr}]`)) {
+      const slot = `t${attr[0].toUpperCase()}${attr.slice(1).replace(/-(\w)/g, (_, c) => c.toUpperCase())}`;
+      if (node.dataset[slot] === undefined) node.dataset[slot] = node.getAttribute(attr);
+      node.setAttribute(attr, t(node.dataset[slot]));
+    }
+  }
 }
 
 /**
@@ -4901,7 +5037,10 @@ function signOut() {
 
 async function boot() {
   /* language before anything is drawn, so nothing is drawn twice */
-  if (window.NEXV_I18N) window.NEXV_I18N.setLang(window.NEXV_I18N.stored() || document.documentElement.dataset.lang || 'en');
+  if (window.NEXV_I18N) {
+    window.NEXV_I18N.setLang(window.NEXV_I18N.stored() || document.documentElement.dataset.lang || 'en');
+    translateChrome();
+  }
 
   /* and the role before that, because it decides what pages exist at all */
   try {

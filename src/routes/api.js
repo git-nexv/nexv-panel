@@ -1888,13 +1888,15 @@ router.post('/admins/:id/balance', leaderOnly, (req, res) => {
   res.json({ ok: true, balance });
 });
 
-/** A code worth money: tied to one panel, or loose as a gift. */
+/** A code worth money, made out to one panel and no other. */
 router.post('/admins/codes', leaderOnly, (req, res) => {
   const body = req.body || {};
   const amount = Math.round(Number(body.amount) || 0);
   if (amount <= 0) return bad(res, 'a code has to be worth something');
+  const owner = resellers.byId(body.resellerId);
+  if (!owner) return bad(res, 'choose which panel this code is for');
   const code = resellers.issueCode(body);
-  logEvent('admin', `issued a code worth ${amount}${body.resellerId ? '' : ' (gift, anyone may use it)'}`);
+  logEvent('admin', `issued a ${code.kind === 'gift' ? 'gift' : 'top-up'} code worth ${amount} for ${owner.name}`);
   res.json(code);
 });
 

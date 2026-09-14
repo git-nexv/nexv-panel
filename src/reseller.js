@@ -156,16 +156,25 @@ function makeCode(length = 16) {
   return out;
 }
 
+/** What a code is for. Only ever one of these two. */
+const KINDS = ['topup', 'gift'];
+function kindOf(value) { return KINDS.includes(value) ? value : 'topup'; }
+
 /**
- * A code worth money. Tied to one reseller when the leader is topping that
- * person up, or loose when it is a gift anybody may redeem once.
+ * A code worth money, made out to one reseller.
+ *
+ * Tied to a panel rather than loose: a code that anybody could redeem is a code
+ * that the wrong person redeems, and the leader always knows who they are
+ * topping up. The kind - money they paid for, or money given - changes nothing
+ * about how it is spent; it is there so the ledger says which it was.
  */
-function issueCode({ amount, resellerId, note, length }) {
+function issueCode({ amount, resellerId, kind, note, length }) {
   const code = {
     id: db.id(),
     code: makeCode(length),
     amount: Math.round(Number(amount) || 0),
     resellerId: resellerId || '',
+    kind: kindOf(kind),
     note: String(note || ''),
     createdAt: Date.now(),
     usedAt: 0,
@@ -192,7 +201,7 @@ function redeem(reseller, typed) {
 
   entry.usedAt = Date.now();
   entry.usedBy = reseller.id;
-  adjust(reseller, entry.amount, `code ${entry.code}`);
+  adjust(reseller, entry.amount, `${kindOf(entry.kind) === 'gift' ? 'gift' : 'top-up'} code ${entry.code}`);
   return { ok: true, amount: entry.amount, balance: reseller.balance };
 }
 
@@ -345,7 +354,7 @@ function summary(reseller) {
 module.exports = {
   DEFAULT_PRICE_PER_GB, BOT_DIR,
   all, codes, byId, bySlug, forUser, create, remove,
-  costOf, charge, adjust, issueCode, redeem, makeCode,
+  costOf, charge, adjust, issueCode, redeem, makeCode, KINDS, kindOf,
   readBot, writeBot, botFile, clientsOf, summary,
   userOf, usernameOf, setCredentials, clearCredentials, suggestPassword
 };
