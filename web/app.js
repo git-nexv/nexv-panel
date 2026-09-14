@@ -1849,11 +1849,37 @@ const waitingToStart = (c) => !!c.startAfterFirstUse && !c.expiryTime && (c.expi
  * one can be shown, so the order decides: a client the admin switched off reads
  * as Disabled even when its time also ran out.
  */
+/**
+ * A client is running out.
+ *
+ * Not a state of its own - it is still working, and treating it as a problem
+ * would put it in the same box as one that has stopped. It is a warning, and
+ * the point of it is that somebody can be told before the config dies rather
+ * than after. The thresholds come from Settings; zero turns each one off.
+ */
+function endingSoon(c) {
+  if (c.enable === false || c.expired || c.depleted) return false;
+  const s = state.settings || {};
+  const days = Number(s.expireWarnDays) || 0;
+  const gb = Number(s.trafficWarnGB) || 0;
+
+  if (days > 0 && c.expiryTime) {
+    const left = Math.ceil((c.expiryTime - Date.now()) / 86400000);
+    if (left >= 0 && left <= days) return true;
+  }
+  if (gb > 0 && Number(c.totalGB) > 0) {
+    const leftGB = c.totalGB - ((c.up || 0) + (c.down || 0)) / 1024 ** 3;
+    if (leftGB >= 0 && leftGB <= gb) return true;
+  }
+  return false;
+}
+
 function clientState(c) {
   if (c.enable === false) return 'disabled';
   if (c.expired) return 'expired';
   if (c.depleted) return 'depleted';
   if (c.overIps) return 'overIps';
+  if (endingSoon(c)) return 'soon';
   return 'active';
 }
 
@@ -1866,6 +1892,7 @@ function clientState(c) {
 const CLIENT_STATES = [
   { id: 'all', label: 'Total', tone: '', match: () => true },
   { id: 'active', label: 'Active', tone: 'ok', match: (c) => clientState(c) === 'active' },
+  { id: 'soon', label: 'Running out', tone: 'warn', match: (c) => clientState(c) === 'soon' },
   { id: 'disabled', label: 'Disabled', tone: 'off', match: (c) => c.enable === false },
   { id: 'expired', label: 'Expired', tone: 'bad', match: (c) => !!c.expired },
   { id: 'depleted', label: 'Out of quota', tone: 'bad', match: (c) => !!c.depleted },
@@ -1890,6 +1917,7 @@ const CLIENT_CHIPS = {
   expired: { class: 'chip danger', label: 'Expired' },
   depleted: { class: 'chip danger', label: 'Out of quota' },
   overIps: { class: 'chip warn', label: 'Too many IPs' },
+  soon: { class: 'chip warn', label: 'Running out' },
   active: { class: 'chip ok', label: 'Active' }
 };
 
@@ -3122,7 +3150,7 @@ async function routingForm(existing, tags, inbounds) {
  * now, the way the Bot page is laid out, so nothing has to be scrolled past to
  * reach something else.
  */
-const SETTINGS_TABS = ['General', 'Config names', 'TLS', 'Backup', 'Account', 'Logs'];
+const SETTINGS_TABS = ['General', 'Access', 'Limits', 'Config names', 'TLS', 'Backup', 'Account', 'Logs'];
 
 async function renderSettings(view) {
   const s = await api.get('/settings');
@@ -3152,6 +3180,15 @@ async function renderSettings(view) {
   add(general, 'panelPort', 'Panel port', s.panelPort, { type: 'number', hint: 'Changing this needs a panel restart (nexv restart)' });
   add(general, 'subPort', 'Subscription port', s.subPort, { type: 'number' });
   add(general, 'subPath', 'Subscription path', s.subPath);
+
+  add(general, 'panelListen', 'Listen IP', s.panelListen || '', {
+    placeholder: 'every address',
+    hint: 'Which address the panel answers on. Empty means all of them.'
+  });
+  add(general, 'panelDomain', 'Listen domain', s.panelDomain || '', {
+    placeholder: 'any name',
+    hint: 'Set it and the panel answers to that name only - a request by IP, or by somebody else\u2019s name pointed here, gets nothing.'
+  });
 
   const langSel = selectOf(
     (window.NEXV_I18N ? window.NEXV_I18N.LANGS : [{ code: 'en', label: 'English' }])
@@ -3194,6 +3231,41 @@ async function renderSettings(view) {
       el('span', { class: 'muted', text: 'Answer on port 80 and redirect here' })
     ]),
     el('div', { class: 'hint', text: 'Off by default. Ignored while an inbound uses port 80.' })
+  ]));
+
+  /* ---- Access ---- */
+  const access = el('div', { class: 'form-grid' });
+  add(access, 'sessionHours', 'Stay signed in for (hours)', s.sessionHours || '', {
+    type: 'number', placeholder: '168',
+    hint: 'How long a sign-in lasts. Empty keeps the default of a week.'
+  });
+  add(access, 'trustedProxies', 'Trusted proxies', s.trustedProxies ?? '', {
+    full: true, placeholder: '127.0.0.1/32, ::1/128',
+    hint: 'Only these may tell the panel who a visitor is. Anything else is believed to be exactly where it connected from - which is what stops a stranger writing your own address into the log. Leave it as the loopback pair unless the panel sits behind a proxy on another machine.'
+  });
+  add(access, 'ipLimitAllowlist', 'IP limit allowlist', s.ipLimitAllowlist || '', {
+    full: true, placeholder: '203.0.113.10, 198.51.100.0/24',
+    hint: 'Addresses the concurrent-IP limit never counts and never cuts off, so one shared office or campus address cannot use up a client\u2019s limit on its own.'
+  });
+
+  /* ---- Limits ---- */
+  const limits = el('div', { class: 'form-grid' });
+  add(limits, 'expireWarnDays', 'Warn this many days before expiry', s.expireWarnDays || '', {
+    type: 'number', placeholder: 'off',
+    hint: 'A client this close to its date is marked as running out - still working, but worth telling somebody about. 0 turns it off.'
+  });
+  add(limits, 'trafficWarnGB', 'Warn with this much left (GB)', s.trafficWarnGB || '', {
+    type: 'number', placeholder: 'off',
+    hint: 'The same, for quota rather than days.'
+  });
+  const restartOnDisable = toggle(!!s.restartXrayOnAutoDisable);
+  limits.append(el('div', { class: 'field full' }, [
+    el('label', { text: 'Restart Xray when a client is cut off' }),
+    restartOnDisable,
+    el('div', {
+      class: 'hint',
+      text: 'Rewriting the config stops a cut-off client being offered, but a connection it already holds stays up until Xray restarts. Off by default: a restart is a blip for everybody on the server to end one person\u2019s session early.'
+    })
   ]));
 
   /* ---- Config names ---- */
@@ -3295,7 +3367,8 @@ async function renderSettings(view) {
       xrayLogLevel: logLevel.value,
       blockTorrent: torrent.checked,
       trackIps: trackIps.checked,
-      httpRedirect: httpRedirect.checked
+      httpRedirect: httpRedirect.checked,
+      restartXrayOnAutoDisable: toggleValue(restartOnDisable)
     };
     for (const [key, control] of Object.entries(inputs)) {
       payload[key] = control.type === 'number' ? Number(control.value) : control.value;
@@ -3325,6 +3398,8 @@ async function renderSettings(view) {
   ]);
 
   panels.General.append(el('div', { class: 'card' }, [general, saveRow()]));
+  panels.Access.append(el('div', { class: 'card' }, [access, saveRow()]));
+  panels.Limits.append(el('div', { class: 'card' }, [limits, saveRow()]));
   panels.TLS.append(el('div', { class: 'card' }, [tls, saveRow()]));
   naming.append(saveRow());
 
@@ -5542,6 +5617,13 @@ async function boot() {
     state.role = me.role || 'admin';
     state.me = me;
   } catch (_) { /* the shell still draws; the API will refuse what it must */ }
+
+  /* the panel's own settings, once: the Clients page reads the warning
+     thresholds out of them and would otherwise only have them after somebody
+     had visited Settings, which is not a thing anyone should have to do */
+  if (state.role !== 'reseller') {
+    try { state.settings = await api.get('/settings'); } catch (_) { /* defaults apply */ }
+  }
   themeSwitch(document.getElementById('themeToggle'));
   languageKey();
   trackTopbar();

@@ -10,6 +10,7 @@ const xray = require('../xray');
 const links = require('../links');
 const transfer = require('../transfer');
 const version = require('../version');
+const netfilter = require('../netfilter');
 const update = require('../update');
 const telegram = require('../telegram');
 const online = require('../online');
@@ -59,8 +60,8 @@ function logEvent(type, message) {
 router.post('/login', async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return bad(res, 'username and password are required');
-  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
-  const result = await auth.login(username, password, String(ip).split(',')[0].trim());
+  const ip = netfilter.clientIp(req);
+  const result = await auth.login(username, password, ip);
   if (!result) {
     logEvent('auth', `failed login for "${username}" from ${ip}`);
     return bad(res, 'invalid credentials', 401);
@@ -98,7 +99,7 @@ router.post('/register', async (req, res) => {
   reseller.userId = user.id;
   db.saveNow();
 
-  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+  const ip = netfilter.clientIp(req);
   const result = await auth.login(name, String(password), ip);
   if (result) res.cookie(auth.COOKIE, result.token, auth.cookieOptions(req));
   logEvent('admin', `"${reseller.name}" opened their panel and made an account`);
@@ -1881,9 +1882,12 @@ router.put('/settings', async (req, res) => {
   const allowed = ['panelPort', 'webBasePath', 'domain', 'subDomain', 'subPort', 'subPath',
     'tgBotToken', 'tgAdminId', 'theme', 'lang', 'certFile', 'keyFile', 'xrayLogLevel',
     'blockTorrent', 'serverIP', 'trafficResetDay', 'defaultOutbound', 'domainStrategy', 'trackIps',
-    'subTitle', 'panelCertFile', 'panelKeyFile', 'httpRedirect', 'remarkTemplate', 'pricePerGB'];
+    'subTitle', 'panelCertFile', 'panelKeyFile', 'httpRedirect', 'remarkTemplate', 'pricePerGB',
+    'panelListen', 'panelDomain', 'sessionHours', 'trustedProxies', 'ipLimitAllowlist',
+    'pageSize', 'restartXrayOnAutoDisable', 'expireWarnDays', 'trafficWarnGB'];
   // TLS material is read once when the listener is created
-  const restartKeys = ['panelPort', 'panelCertFile', 'panelKeyFile', 'certFile', 'keyFile', 'httpRedirect'];
+  const restartKeys = ['panelPort', 'panelCertFile', 'panelKeyFile', 'certFile', 'keyFile', 'httpRedirect',
+    'panelListen', 'panelDomain'];
   const s = db.settings;
   let restartNeeded = false;
 

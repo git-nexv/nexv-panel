@@ -1,19 +1,41 @@
 /*
- * The palette is deliberately flat and high-contrast: a card should read as a
- * card without being stared at. The surfaces used to be a 3.5% white wash over
- * a nearly black page, which left every panel, border and label a whisper away
- * from its background - legible on a good monitor in a dark room, and not much
- * else. Everything here is roughly twice the weight it was, and the accents
- * carry more pigment so a green chip is green rather than a pale mint.
+ * One background, and everything else glass on top of it.
+ *
+ * The page paints the only real surface there is: a graphite ground, a fine
+ * dot grid, and a single soft light that drifts across it. Every panel, card,
+ * dock and dialog above that is glass - a thin wash, a hairline, and a blur of
+ * whatever happens to be behind it. Nothing else carries a fill of its own, so
+ * depth comes from stacking rather than from colour, and the page reads as one
+ * material rather than as a page with boxes drawn on it.
+ *
+ * The palette is neutral on purpose. Blue is the colour every panel of this
+ * kind reaches for, and it ends up tinting text, borders and shadows until
+ * everything looks like the same plastic. Here the accents are silver and the
+ * ground is graphite; the only saturated colours left are the three that mean
+ * something - a client is fine, a client is nearly out, a client is cut off.
  */
+
 /*
- * Vazirmatn, served from the panel itself rather than a font CDN: the people
- * running this are often behind a filter that makes an outside request hang
- * for seconds and then fail, and a panel that waits on Google for its letters
- * is a panel that looks broken. One variable file carries every weight, and it
- * draws Persian as well as it draws Latin, which the system stack does not.
- * SIL Open Font Licence 1.1 - see web/fonts/OFL.txt.
+ * Two faces, both served from the panel itself rather than a font CDN: the
+ * people running this are often behind a filter that makes an outside request
+ * hang for seconds and then fail, and a panel that waits on Google for its
+ * letters is a panel that looks broken.
+ *
+ * Figtree draws the Latin - geometric, round, a little informal, and modern
+ * without being cold. It has no Persian glyphs, which is exactly why it is
+ * listed first: Persian falls straight through to Vazirmatn, so each script is
+ * drawn by the face that was designed for it. Both are variable, so every
+ * weight on the page comes out of one file each.
+ * Both SIL Open Font Licence 1.1 - see web/fonts/OFL.txt and figtree-OFL.txt.
  */
+@font-face {
+  font-family: 'Figtree';
+  src: url('fonts/figtree.woff2') format('woff2-variations'),
+       url('fonts/figtree.woff2') format('woff2');
+  font-weight: 300 900;
+  font-style: normal;
+  font-display: swap;
+}
 @font-face {
   font-family: 'Vazirmatn';
   src: url('fonts/vazirmatn.woff2') format('woff2-variations'),
@@ -24,60 +46,91 @@
 }
 
 :root {
-  --bg: #070a12;
-  --bg-2: #161e33;
-  /* Cards get a solid colour rather than a wash of white over the page. A
-     translucent fill has to adapt to whatever is behind it, which on a page
-     this dark means it can never be more than a few levels lighter - so a card
-     never quite looked like an object. --surface stays translucent for the
-     fills that really do sit on top of something: fields, hovers, headers. */
-  --card: #1a2338;
-  /* a card is told apart by its fill, not by a line drawn round it: the bright
-     hairline on every box and on the navigation bar read as clutter */
-  --card-edge: rgba(255,255,255,.045);
-  --surface: rgba(255,255,255,.07);
-  --surface-2: rgba(255,255,255,.115);
-  --border: rgba(255,255,255,.14);
-  --border-strong: rgba(255,255,255,.28);
-  --text: #f2f5fc;
-  --muted: #a9b5d0;
-  --faint: #7c89a8;
-  --brand: #6482ff;
-  --brand-2: #9165ff;
-  --ok: #1fd08c;
-  --warn: #ffad2e;
-  --danger: #ff5169;
-  --radius: 16px;
-  --radius-sm: 10px;
-  --shadow: 0 18px 40px -18px rgba(0,0,0,.8);
+  /* the ground: graphite, not black - black leaves nothing for glass to catch */
+  --bg: #191a1f;
+  --bg-2: #202127;
+  /* the light that drifts over it, and the dots it lights up */
+  --glow: 218, 222, 232;
+  --dot: rgba(255,255,255,.10);
+  --dot-lit: rgba(255,255,255,.26);
+
+  /*
+   * Glass, in three depths. Each is a wash rather than a colour: what you see
+   * through a card is the page, dimmed. Going up the stack the wash thickens
+   * and the hairline brightens, which is the whole of the depth cue.
+   */
+  --glass: rgba(255,255,255,.055);
+  --glass-2: rgba(255,255,255,.085);
+  --glass-3: rgba(255,255,255,.125);
+  --glass-edge: rgba(255,255,255,.10);
+  --glass-edge-2: rgba(255,255,255,.16);
+  /* the highlight along the top of a pane, which is what sells it as glass */
+  --glass-sheen: rgba(255,255,255,.14);
+  --blur: 22px;
+
+  /* cards are glass now; the names stay so nothing downstream has to change */
+  --card: var(--glass);
+  --card-edge: var(--glass-edge);
+  --surface: var(--glass-2);
+  --surface-2: var(--glass-3);
+  --border: var(--glass-edge);
+  --border-strong: var(--glass-edge-2);
+
+  --text: #f4f5f7;
+  --muted: #b4b7bf;
+  --faint: #868a94;
+
+  /* silver rather than blue: it lifts off graphite without tinting it */
+  --brand: #d7dae2;
+  --brand-2: #9ea3ae;
+  --brand-ink: #14151a;      /* what sits on top of a silver fill */
+
+  /* the three that carry meaning, held back so they read as ink not neon */
+  --ok: #5fcf9e;
+  --warn: #e9b872;
+  --danger: #f08a8a;
+
+  --radius: 14px;
+  --radius-sm: 9px;
+  --shadow: 0 16px 40px -20px rgba(0,0,0,.75);
+  /* the faint shadow behind text, so a word keeps its edge over moving light */
+  --text-shadow: 0 1px 2px rgba(0,0,0,.35);
   --sidebar-w: 258px;
   --ease: cubic-bezier(.22,.68,.35,1);
 }
 
 /*
- * Light mode gets its own accents. The dark ones are mixed for a black page
- * and go pale and thin on a white one - #1fd08c as a word on white is a
- * highlighter pen - so each is taken down to something with ink in it.
+ * Light mode is the same idea upside down: a paper ground, and glass that
+ * darkens rather than lightens what is behind it.
  */
 :root[data-theme="light"] {
-  --bg: #eaeef7;
-  --bg-2: #ffffff;
-  --card: #ffffff;
-  --card-edge: rgba(16,24,45,.07);
-  /* a touch more ink than before: at .028 a filled field was invisible */
-  --surface: rgba(16,24,45,.07);
-  --surface-2: rgba(16,24,45,.115);
-  --border: rgba(16,24,45,.18);
-  --border-strong: rgba(16,24,45,.34);
-  --text: #0b1222;
-  --muted: #404c66;
-  --faint: #64708b;
-  --brand: #3a5fee;
-  --brand-2: #7a3aee;
-  --ok: #0a9a68;
-  --warn: #b9700a;
-  --danger: #d6293f;
-  --shadow: 0 18px 40px -22px rgba(16,24,45,.4);
+  --bg: #e9eaee;
+  --bg-2: #f6f7f9;
+  --glow: 120, 124, 136;
+  --dot: rgba(16,17,20,.075);
+  --dot-lit: rgba(16,17,20,.18);
+
+  --glass: rgba(255,255,255,.62);
+  --glass-2: rgba(255,255,255,.78);
+  --glass-3: rgba(255,255,255,.92);
+  --glass-edge: rgba(16,17,20,.10);
+  --glass-edge-2: rgba(16,17,20,.20);
+  --glass-sheen: rgba(255,255,255,.85);
+
+  --text: #16171b;
+  --muted: #4c505a;
+  --faint: #70747e;
+
+  --brand: #3f434d;
+  --brand-2: #6a6f7a;
+  --brand-ink: #ffffff;
+
+  --ok: #12855c;
+  --warn: #9a6512;
+  --danger: #c0414b;
+
+  --shadow: 0 16px 40px -24px rgba(16,17,20,.35);
+  --text-shadow: 0 1px 1px rgba(255,255,255,.55);
 }
 
 * { box-sizing: border-box; }
@@ -89,16 +142,119 @@ html, body {
 }
 
 body {
-  background:
-    radial-gradient(1100px 620px at 12% -8%, color-mix(in srgb, var(--brand) 11%, transparent), transparent 60%),
-    radial-gradient(900px 520px at 96% 4%, color-mix(in srgb, var(--brand-2) 9%, transparent), transparent 62%),
-    var(--bg);
+  background: var(--bg);
   color: var(--text);
-  font-family: 'Vazirmatn', ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  letter-spacing: -.005em;
+  /* Figtree first for Latin, Vazirmatn behind it for Persian: Figtree carries
+     no Persian glyphs, so each script is drawn by the face made for it */
+  font-family: 'Figtree', 'Vazirmatn', ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  letter-spacing: -.008em;
   font-size: 14px;
-  line-height: 1.65;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/*
+ * The ground, in two fixed layers that move rather than change.
+ *
+ * `.bg-dots` is the dot field, and it does not move at all - a grid that
+ * drifted would make the whole page feel like it was sliding. `.bg-glow` is
+ * one soft light of one unchanging colour, and it is the only thing that
+ * travels: three blobs on long, mismatched loops, so the page is never quite
+ * lit the same way twice without anything ever changing hue.
+ *
+ * Both are fixed and behind everything, painted once. They sit in their own
+ * layer with `will-change: transform`, which keeps the animation on the
+ * compositor - on a phone this is the difference between a page that breathes
+ * and a page that stutters every time you scroll.
+ */
+.bg-dots,
+.bg-glow {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.bg-dots {
+  /* two grids, the finer one offset, so the field reads as dense rather than
+     as graph paper - and the lit one is slightly brighter and slightly larger */
+  background-image:
+    radial-gradient(circle at center, var(--dot-lit) .9px, transparent 1.1px),
+    radial-gradient(circle at center, var(--dot) .7px, transparent .9px);
+  background-size: 46px 46px, 23px 23px;
+  background-position: 0 0, 11px 11px;
+  /* the grid softens at the far corners rather than stopping at a hard line,
+     but it reaches every part of the page you actually look at */
+  -webkit-mask-image: radial-gradient(150% 130% at 50% 40%, #000 55%, transparent 100%);
+  mask-image: radial-gradient(150% 130% at 50% 40%, #000 55%, transparent 100%);
+  opacity: 1;
+}
+
+.bg-glow {
+  filter: blur(80px) saturate(.5);
+  opacity: .62;
+  will-change: transform;
+}
+.bg-glow::before,
+.bg-glow::after,
+.bg-glow > i {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  /* one colour, everywhere - only the position is ever animated */
+  background: radial-gradient(circle at center, rgba(var(--glow), .5), rgba(var(--glow), 0) 68%);
+  will-change: transform;
+}
+/* started spread across the page, not stacked in one corner, so no part of it
+   is ever left in the dark while the three wander */
+.bg-glow::before {
+  width: 58vmax; height: 58vmax; top: -18%; left: -12%;
+  animation: drift-a 34s var(--ease) infinite alternate;
+}
+.bg-glow::after {
+  width: 50vmax; height: 50vmax; top: 18%; left: 52%;
+  animation: drift-b 41s var(--ease) infinite alternate;
+}
+.bg-glow > i {
+  width: 44vmax; height: 44vmax; top: 58%; left: 12%;
+  animation: drift-c 29s var(--ease) infinite alternate;
+}
+
+/* long, co-prime durations so the three never fall back into step */
+@keyframes drift-a {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  50%  { transform: translate3d(38vw, 30vh, 0) scale(1.14); }
+  100% { transform: translate3d(12vw, 62vh, 0) scale(.92); }
+}
+@keyframes drift-b {
+  0%   { transform: translate3d(0, 0, 0) scale(1.06); }
+  50%  { transform: translate3d(-44vw, 34vh, 0) scale(.88); }
+  100% { transform: translate3d(-16vw, -14vh, 0) scale(1.16); }
+}
+@keyframes drift-c {
+  0%   { transform: translate3d(0, 0, 0) scale(.94); }
+  50%  { transform: translate3d(48vw, -40vh, 0) scale(1.2); }
+  100% { transform: translate3d(-8vw, -6vh, 0) scale(1.02); }
+}
+
+/* somebody who has asked for less motion gets a still page, lit the same way */
+@media (prefers-reduced-motion: reduce) {
+  .bg-glow::before, .bg-glow::after, .bg-glow > i { animation: none; }
+}
+
+/*
+ * The faint shadow behind every word. It is barely a shadow - one pixel, a
+ * third of an alpha - but over a ground that is never the same twice it is
+ * what keeps a label from dissolving into whatever has just drifted under it.
+ */
+body, .muted, .faint, .hint, label, h1, h2, h3, strong, td, th {
+  text-shadow: var(--text-shadow);
+}
+/* except where a shadow would only smear it: code, numbers, tiny type */
+.mono, .num, code, pre, .link-box, input, textarea, select {
+  text-shadow: none;
 }
 
 body[dir="rtl"] { font-feature-settings: "ss02"; }
@@ -144,10 +300,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .brand { display: flex; align-items: center; gap: 11px; padding: 6px 10px 20px; }
 .brand-mark {
   width: 38px; height: 38px; border-radius: 12px;
-  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  background: linear-gradient(140deg, var(--brand), var(--brand-2));
   display: grid; place-items: center;
-  font-weight: 800; color: #fff; font-size: 17px;
-  box-shadow: 0 8px 22px -8px var(--brand);
+  font-weight: 800; color: var(--brand-ink); font-size: 17px;
+  box-shadow: 0 8px 22px -12px rgba(0,0,0,.6);
 }
 .brand-name { font-weight: 700; font-size: 16px; letter-spacing: .2px; }
 .brand-sub {
@@ -169,9 +325,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .nav-item:hover { background: var(--surface); color: var(--text); }
 .nav-item:active { transform: scale(.985); }
 .nav-item.active {
-  background: linear-gradient(90deg, color-mix(in srgb, var(--brand) 22%, transparent), color-mix(in srgb, var(--brand-2) 10%, transparent));
+  background: var(--glass-3);
   color: var(--text);
-  border-color: color-mix(in srgb, var(--brand) 34%, transparent);
+  border-color: var(--glass-edge-2);
+  box-shadow: inset 0 1px 0 var(--glass-sheen);
 }
 .nav-item svg { width: 18px; height: 18px; flex: none; opacity: .9; }
 .nav-spacer { flex: 1; }
@@ -248,16 +405,44 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 /* ------------------------------ components ------------------------------ */
 
+/*
+ * A pane of glass. Every box on the page is one of these: a wash, a hairline,
+ * a blur of the ground behind it, and a single bright line along the top edge
+ * where the light catches. That top line is what separates glass from a grey
+ * rectangle - without it the blur just reads as a lighter fill.
+ */
+.card,
+.table-wrap,
+.modal,
+.topbar,
+.dock-bar,
+.dock-more,
+.dock-solo,
+.login-card {
+  position: relative;
+  background: var(--glass);
+  border: 1px solid var(--glass-edge);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(1.5);
+  backdrop-filter: blur(var(--blur)) saturate(1.5);
+}
+.card::before,
+.table-wrap::before,
+.modal::before,
+.login-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, var(--glass-sheen) 22%, var(--glass-sheen) 78%, transparent);
+  pointer-events: none;
+  opacity: .8;
+}
+
 .card {
-  background: var(--card);
-  border: 1px solid var(--card-edge);
   border-radius: var(--radius);
   padding: 18px;
   box-shadow: var(--shadow);
-  /* no backdrop-filter here: a card sits on a smooth gradient, so blurring it
-     changes almost nothing on screen and costs one compositor layer per card.
-     A desktop page carries a dozen of them, which is where the lag came from.
-     The glass is kept for the floating chrome, where it reads against content. */
 }
 
 .grid { display: grid; gap: 16px; }
@@ -275,8 +460,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 .bar { height: 6px; border-radius: 99px; background: var(--surface-2); overflow: hidden; margin-top: 12px; }
 .bar > i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--brand), var(--brand-2)); transition: width .5s var(--ease); }
-.bar.warn > i { background: linear-gradient(90deg, var(--warn), #ff8a5c); }
-.bar.danger > i { background: linear-gradient(90deg, var(--danger), #ff4d94); }
+.bar.warn > i { background: linear-gradient(90deg, var(--warn), color-mix(in srgb, var(--warn) 70%, #fff)); }
+.bar.danger > i { background: linear-gradient(90deg, var(--danger), color-mix(in srgb, var(--danger) 70%, #fff)); }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
@@ -293,8 +478,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .btn:active { transform: scale(.97); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn.primary {
-  background: linear-gradient(135deg, var(--brand), var(--brand-2));
-  border-color: transparent; color: #fff;
+  background: linear-gradient(140deg, var(--brand), var(--brand-2));
+  border-color: transparent; color: var(--brand-ink);
+  text-shadow: none;
   box-shadow: 0 10px 24px -12px var(--brand);
 }
 .btn.danger {
@@ -372,13 +558,16 @@ textarea { resize: vertical; min-height: 90px; font-family: ui-monospace, "SFMon
 
 /* -------------------------------- table --------------------------------- */
 
-.table-wrap {
-  overflow-x: auto; border-radius: var(--radius);
-  border: 1px solid var(--card-edge); background: var(--card);
-}
+.table-wrap { overflow-x: auto; border-radius: var(--radius); box-shadow: var(--shadow); }
 table { width: 100%; border-collapse: collapse; min-width: 720px; }
 th, td { padding: 12px 14px; text-align: start; border-bottom: 1px solid var(--border); }
-th { font-size: 12px; color: var(--muted); font-weight: 600; background: var(--surface); position: sticky; top: 0; }
+th {
+  font-size: 11.5px; color: var(--muted); font-weight: 650;
+  letter-spacing: .02em; text-transform: uppercase;
+  background: var(--glass-2);
+  -webkit-backdrop-filter: blur(var(--blur)); backdrop-filter: blur(var(--blur));
+  position: sticky; top: 0;
+}
 tbody tr { transition: background .15s var(--ease); }
 tbody tr:hover { background: var(--surface); }
 tbody tr:last-child td { border-bottom: none; }
@@ -522,9 +711,9 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
 
 .modal-backdrop {
   position: fixed; inset: 0; z-index: 100;
-  background: rgba(6,9,17,.62);
-  backdrop-filter: blur(5px);
-  --dim: rgba(6,9,17,.62);
+  background: rgba(10,11,13,.58);
+  backdrop-filter: blur(6px);
+  --dim: rgba(10,11,13,.58);
   display: grid; place-items: center;
   padding: 20px;
   animation: fade .18s var(--ease);
@@ -532,11 +721,12 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
 .modal {
   width: min(620px, 100%);
   max-height: 88vh; overflow-y: auto;
-  background: var(--bg-2);
-  border: 1px solid var(--border-strong);
+  /* a shade thicker than a card: it is the top of the stack and has to hold
+     its own against whatever it is covering */
+  background: var(--glass-3);
   border-radius: 20px;
-  padding: 22px;
-  box-shadow: 0 40px 90px -30px rgba(0,0,0,.85);
+  padding: 24px;
+  box-shadow: 0 40px 90px -30px rgba(0,0,0,.7);
   animation: pop .24s var(--ease);
 }
 .modal h2 { margin: 0 0 4px; font-size: 17px; }
@@ -684,7 +874,7 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
 .ts-knob {
   position: absolute; top: 2px; left: 2px;
   width: 24px; height: 24px; border-radius: 999px;
-  display: grid; place-items: center; color: #fff;
+  display: grid; place-items: center; color: var(--brand-ink);
   background: linear-gradient(160deg, var(--brand), var(--brand-2));
   box-shadow: 0 5px 12px -3px rgba(0, 0, 0, .5), inset 0 1px 0 rgba(255, 255, 255, .35);
   transform: translateX(var(--tx)) scale(var(--sx, 1), var(--sy, 1));
@@ -831,7 +1021,7 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
   padding: 7px 15px; border-radius: 7px; cursor: pointer;
   font: inherit; font-size: 12.5px; font-weight: 600;
 }
-.seg button.active { background: var(--brand); color: #fff; }
+.seg button.active { background: var(--brand); color: var(--brand-ink); text-shadow: none; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 7px; }
 .chips label {
@@ -899,7 +1089,8 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
 .popup {
   position: absolute; z-index: 60; top: calc(100% + 6px); inset-inline-end: 0;
   min-width: 230px; padding: 6px;
-  background: var(--bg-2); border: 1px solid var(--border-strong);
+  background: var(--glass-3); border: 1px solid var(--glass-edge-2);
+  -webkit-backdrop-filter: blur(var(--blur)); backdrop-filter: blur(var(--blur));
   border-radius: var(--radius-sm); box-shadow: var(--shadow);
 }
 .popup button {
@@ -913,36 +1104,31 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
 
 /* ============================ floating panes ============================ */
 /*
- * One material for every floating surface. It used to be properly glassy -
- * 62% opacity, a 26px blur and saturation pushed to 190% - which meant the
- * header and the navigation bar took their colour from whatever scrolled
- * underneath and were never quite the same twice. They are near enough solid
- * now, with a much lighter blur behind them: a matte pane with a bright top
- * edge, which reads the same over a table as it does over empty page, and
- * costs the compositor a good deal less per frame.
+ * The floating chrome used to be deliberately near-solid - a navy pane at 93%
+ * with a light blur - because a properly translucent one costs the compositor
+ * a layer per surface and takes its colour from whatever scrolls underneath.
+ * That was the right trade when the page had a flat gradient behind it and
+ * nothing to look through to.
+ *
+ * It is the wrong trade now. There is one ground, and the whole point of
+ * everything above it is that you can see the ground through it. So the panes
+ * use the same three depths of glass as the cards, and the cost is paid on
+ * purpose: the blur is what the material is.
  */
 :root {
-  --glass: rgba(19, 25, 43, .93);
-  --glass-edge: rgba(255, 255, 255, .075);
-  --glass-sheen: rgba(255, 255, 255, .035);
-  --glass-shadow: 0 20px 50px -20px rgba(0, 0, 0, .78), 0 2px 10px -4px rgba(0, 0, 0, .55);
+  --glass-shadow: 0 20px 50px -22px rgba(0, 0, 0, .7), 0 2px 10px -4px rgba(0, 0, 0, .45);
   --spring: cubic-bezier(.32, 1.3, .5, 1);
   --glide: cubic-bezier(.22, .68, .24, 1);
 }
 :root[data-theme="light"] {
-  /* nearly opaque: at .68 the blur pulled the dark backdrop through and every
-     light surface came out the same dead grey */
-  --glass: rgba(252, 253, 255, .97);
-  --glass-edge: rgba(16, 24, 45, .08);
-  --glass-sheen: rgba(255, 255, 255, .9);
-  --glass-shadow: 0 20px 50px -22px rgba(16, 24, 45, .34), 0 2px 10px -5px rgba(16, 24, 45, .18);
+  --glass-shadow: 0 20px 50px -24px rgba(16, 17, 20, .3), 0 2px 10px -5px rgba(16, 17, 20, .16);
 }
 
 .glass {
   position: relative;
-  background: var(--glass);
-  -webkit-backdrop-filter: blur(14px) saturate(125%);
-  backdrop-filter: blur(14px) saturate(125%);
+  background: var(--glass-2);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(1.5);
+  backdrop-filter: blur(var(--blur)) saturate(1.5);
   border: 1px solid var(--glass-edge);
   box-shadow: var(--glass-shadow);
 }
@@ -1185,7 +1371,7 @@ tbody tr:nth-child(n+6) { animation-delay: 110ms; }
   to   { opacity: 1; transform: none; }
 }
 .modal-backdrop { animation: fade-in .24s var(--glide) both; -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
-:root[data-theme="light"] .modal-backdrop { background: rgba(38, 48, 74, .34); }
+:root[data-theme="light"] .modal-backdrop { background: rgba(22, 23, 27, .3); }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 
 .popup { animation: popup-in .3s var(--spring) both; }
@@ -1305,4 +1491,89 @@ tbody tr:nth-child(n+6) { animation-delay: 110ms; }
     animation-iteration-count: 1 !important;
     transition-duration: .01ms !important;
   }
+}
+
+
+/* =========================== the finishing pass ==========================
+
+   Four things the panel was missing, gathered rather than scattered so they
+   can be read - and changed - as one decision each.
+
+   1. Sharpness. Glass is soft by nature and a page made of it goes muddy
+      unless the type and the edges are pulled the other way: heavier weights,
+      tighter tracking, and a hairline that is actually visible.
+   2. Alignment. A label and its value, a cell and its header, an icon and its
+      word - none of them lined up, because each was centred by whatever rule
+      reached it first. Here they are centred on purpose.
+   3. Numbers. Tabular figures, so a column of sizes does not jitter.
+   4. Motion. Everything that moves, moves on one curve.
+   ======================================================================== */
+
+/* ---- 1. sharper type ---- */
+h1, h2, h3, .brand-name, .value-lg, .stat .value, .section-title {
+  letter-spacing: -.022em;
+  font-weight: 700;
+}
+h1, .topbar h1 { font-weight: 750; }
+.value-lg, .stat .value { font-weight: 780; }
+label, th, .chip, .btn, .nav-item, .dock-item span, .dock-row span {
+  font-weight: 600;
+}
+.muted { color: var(--muted); }
+.faint { color: var(--faint); }
+.hint { color: var(--faint); font-size: 11.5px; line-height: 1.5; }
+
+/* a hairline you can actually see, on glass */
+.card, .table-wrap, .modal, .topbar, .dock-bar, .dock-more, .dock-solo, .login-card {
+  box-shadow: var(--shadow), inset 0 0 0 1px rgba(255,255,255,.02);
+}
+
+/* ---- 2. things line up ---- */
+/* a cell and its header sit on the same axis, whatever that axis is */
+th, td { vertical-align: middle; }
+/* numbers, status and actions read better centred; names stay at the start */
+th:not(:first-child), td:not(:first-child) { text-align: center; }
+td .row-actions, th:last-child, td:last-child { text-align: center; }
+.row-actions { display: inline-flex; gap: 6px; justify-content: center; align-items: center; }
+td > .num, td > .muted.num { display: block; text-align: center; }
+
+/* a stat card is one column, centred on itself */
+.stat { text-align: center; }
+.stat .label { justify-content: center; }
+.stat .bar { margin-inline: auto; }
+
+/* empty states, dialog headers and the sign-in card are centred properly */
+.empty { display: grid; place-items: center; gap: 10px; text-align: center; padding: 34px 18px; }
+.empty svg { opacity: .5; }
+.modal h2, .modal .modal-sub { text-align: center; }
+.modal-actions { justify-content: center; }
+.login-title, .login-sub, .brand { text-align: center; }
+.login-card .brand { justify-content: center; }
+
+/* every control centres its own contents vertically */
+.btn, .chip, .nav-item, .dock-item, .dock-row, .seg button, .tabs button, .tab {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+}
+.nav-item, .dock-row { justify-content: flex-start; }
+/* `.field label` outranks `.switch`, which is itself a <label> - so saying
+   "labels are blocks" here turned every toggle into a block and dropped its
+   knob on top of its own text. The switch keeps its own layout. */
+.field > label:not(.switch) { display: block; margin-bottom: 6px; }
+.field .switch { display: inline-flex; align-items: center; gap: 9px; }
+.field input, .field select, .field textarea { width: 100%; }
+
+/* ---- 3. figures that do not jitter ---- */
+.num, .value-lg, .stat .value, td .num, .mono, table td, table th {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* ---- 4. one curve for everything ---- */
+.btn, .chip, .nav-item, .card, .dock-item, .seg button, .tabs button, .tab, input, select, textarea {
+  transition:
+    background .2s var(--ease),
+    border-color .2s var(--ease),
+    color .2s var(--ease),
+    box-shadow .2s var(--ease),
+    transform .2s var(--ease);
 }

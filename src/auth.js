@@ -3,7 +3,17 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const db = require('./db');
 
-const SESSION_TTL = 1000 * 60 * 60 * 24 * 7; // 7 days
+/**
+ * How long a sign-in lasts. Seven days unless the admin says otherwise - a
+ * panel on a shared machine wants hours, one on a laptop wants a fortnight,
+ * and neither should have to be talked out of it.
+ */
+const DEFAULT_TTL = 1000 * 60 * 60 * 24 * 7;
+function sessionTtl() {
+  const hours = Number(db.settings.sessionHours) || 0;
+  if (hours > 0) return Math.min(hours, 24 * 365) * 60 * 60 * 1000;
+  return DEFAULT_TTL;
+}
 const COOKIE = 'nexv_session';
 
 function secret() {
@@ -89,7 +99,7 @@ async function login(username, password, ip) {
     userId: user.id,
     ip,
     createdAt: Date.now(),
-    expiresAt: Date.now() + SESSION_TTL
+    expiresAt: Date.now() + sessionTtl()
   };
   db.data.sessions.push(session);
   db.saveNow();
@@ -118,7 +128,7 @@ function cookieOptions(req) {
     httpOnly: true,
     sameSite: 'lax',
     path: '/',
-    maxAge: SESSION_TTL,
+    maxAge: sessionTtl(),
     secure: req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https'
   };
 }

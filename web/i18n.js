@@ -549,6 +549,35 @@ const FA = {
   'mldsa65 seed': 'بذر mldsa65',
   'mldsa65 verify': 'تأیید mldsa65',
 
+  /* --------------------- panel settings: the new tabs ------------------ */
+  'Access': 'دسترسی',
+  'Limits': 'محدودیت‌ها',
+  'Listen domain': 'دامنه شنود',
+  'every address': 'همه آدرس‌ها',
+  'any name': 'هر نامی',
+  'Which address the panel answers on. Empty means all of them.':
+    'پنل روی کدام آدرس جواب می‌دهد. خالی یعنی همه.',
+  'Set it and the panel answers to that name only - a request by IP, or by somebody else’s name pointed here, gets nothing.':
+    'اگر پرش کنید پنل فقط به همان نام جواب می‌دهد — درخواستی که با آی‌پی بیاید، یا با نام کس دیگری که به این سرور اشاره می‌کند، چیزی نمی‌گیرد.',
+  'Stay signed in for (hours)': 'مدت ماندن در حساب (ساعت)',
+  'How long a sign-in lasts. Empty keeps the default of a week.':
+    'یک ورود چقدر معتبر می‌ماند. خالی یعنی پیش‌فرض، یک هفته.',
+  'Trusted proxies': 'پراکسی‌های مورد اعتماد',
+  'Only these may tell the panel who a visitor is. Anything else is believed to be exactly where it connected from - which is what stops a stranger writing your own address into the log. Leave it as the loopback pair unless the panel sits behind a proxy on another machine.':
+    'فقط این‌ها می‌توانند به پنل بگویند بازدیدکننده کیست. بقیه دقیقاً همان‌جایی حساب می‌شوند که از آن وصل شده‌اند — و همین جلوی این را می‌گیرد که یک غریبه آدرس خودتان را در لاگ بنویسد. اگر پنل پشت پراکسی روی ماشین دیگری نیست، همان دو آدرس لوکال را بگذارید بماند.',
+  'IP limit allowlist': 'فهرست مجاز محدودیت آی‌پی',
+  'Addresses the concurrent-IP limit never counts and never cuts off, so one shared office or campus address cannot use up a client’s limit on its own.':
+    'آدرس‌هایی که محدودیت آی‌پی هم‌زمان هرگز آن‌ها را نمی‌شمارد و قطع نمی‌کند، تا یک آدرس مشترکِ دفتر یا دانشگاه به‌تنهایی سهمیه یک کلاینت را پر نکند.',
+  'Warn this many days before expiry': 'چند روز مانده به انقضا هشدار بده',
+  'A client this close to its date is marked as running out - still working, but worth telling somebody about. 0 turns it off.':
+    'کلاینتی که این‌قدر به تاریخش مانده «رو به اتمام» علامت می‌خورد — هنوز کار می‌کند، ولی ارزش خبر دادن دارد. ۰ یعنی خاموش.',
+  'Warn with this much left (GB)': 'با این مقدار باقی‌مانده هشدار بده (گیگابایت)',
+  'The same, for quota rather than days.': 'همان، ولی برای حجم به‌جای روز.',
+  'Restart Xray when a client is cut off': 'وقتی کلاینتی قطع شد Xray ری‌استارت شود',
+  'Rewriting the config stops a cut-off client being offered, but a connection it already holds stays up until Xray restarts. Off by default: a restart is a blip for everybody on the server to end one person’s session early.':
+    'بازنویسی پیکربندی جلوی ارائه شدن کلاینت قطع‌شده را می‌گیرد، ولی اتصالی که از قبل دارد تا ری‌استارت Xray باز می‌ماند. پیش‌فرض خاموش است: ری‌استارت برای همه روی سرور یک وقفه است تا نشست یک نفر زودتر تمام شود.',
+  'Running out': 'رو به اتمام',
+
   /* ------------------------------- bot -------------------------------- */
   'Bot token from @BotFather': 'توکن ربات از ‎@BotFather',
   'Talk to @BotFather, send /newbot, and paste the token here.':

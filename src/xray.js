@@ -679,7 +679,12 @@ function inboundDead(inb) {
 function isOverIpLimit(c) {
   const limit = Number(c.limitIp || 0);
   if (!limit || limit <= 0) return false;
-  return online.forTag(clientTag(c)).ips.length > limit;
+  /* addresses on the allowlist do not count towards the limit: one shared
+     office address is one address to the server and thirty people to whoever
+     is paying, and without this a limit of two is unusable behind any NAT */
+  const netfilter = require('./netfilter');
+  const seen = online.forTag(clientTag(c)).ips.filter((ip) => !netfilter.ipLimitExempt(ip));
+  return seen.length > limit;
 }
 
 /** RFC1918 + loopback + link-local; keeps clients from reaching the server's own LAN. */
@@ -1079,6 +1084,14 @@ async function enforceLimits() {
   if (dirty) {
     db.save();
     await apply();
+    /*
+     * apply() rewrites the config and reloads it, which is enough for a client
+     * that has just been cut off to stop being offered - but an existing
+     * connection it already holds is not torn down by a reload. Restarting is
+     * the only thing that drops it. Off by default, because a restart is a
+     * blip for everybody else on the server to end one person's session early.
+     */
+    if (db.settings.restartXrayOnAutoDisable) await restart();
   }
   return dirty;
 }

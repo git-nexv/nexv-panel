@@ -228,6 +228,15 @@ app.use((req, res, next) => {
   const base = normalizeBasePath(db.settings.webBasePath);
   const [pathname, query] = req.url.split('?');
 
+  /* a panel told to answer on one domain answers on that domain only: a
+     request that arrives by IP, or by somebody else's name pointed at this
+     box, is not served the panel at all */
+  const only = String(db.settings.panelDomain || '').trim().toLowerCase();
+  if (only) {
+    const asked = String(req.headers.host || '').split(':')[0].toLowerCase();
+    if (asked && asked !== only) return res.status(404).end();
+  }
+
   const first = pathname.split('/')[1] || '';
   const reseller = first ? resellers.bySlug(first) : null;
   if (reseller) {
@@ -470,7 +479,10 @@ function createServer(handler, tls) {
 if (require.main === module) {
   bootstrap().then(() => {
     const port = Number(process.env.NEXV_PORT || db.settings.panelPort || 2087);
-    const host = process.env.NEXV_HOST || '0.0.0.0';
+    /* the address the panel answers on. Empty means every address, which is
+       the only sane default on a box you have just installed on; naming one
+       is how you keep the panel off the public interface entirely. */
+    const host = process.env.NEXV_HOST || db.settings.panelListen || '0.0.0.0';
     const tls = process.env.NEXV_NO_TLS ? null : tlsOptions();
     const scheme = tls ? 'https' : 'http';
 
