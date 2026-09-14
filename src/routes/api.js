@@ -585,6 +585,30 @@ function toList(value, existingValue, fallback) {
   return fallback;
 }
 
+/**
+ * What this inbound still needs before Xray will take it.
+ *
+ * Nothing is filled in silently: the form has a Generate button beside each of
+ * these, so an empty one is a mistake worth naming rather than papering over
+ * with a value the admin never saw. And naming it here matters more than it
+ * looks - Xray does not refuse one bad inbound, it refuses the whole config,
+ * so a missing key takes every other inbound on the server down with it.
+ *
+ * Returns the complaint, or '' when it is ready.
+ */
+function inboundMissing(inb) {
+  if (inb.protocol === 'shadowsocks' && !inb.password) {
+    return 'a Shadowsocks password is required - use Generate to make one';
+  }
+  if (inb.protocol === 'wireguard' && !inb.wgPrivateKey) {
+    return 'WireGuard needs a private key - use Generate to make one';
+  }
+  if (inb.security === 'reality' && !(inb.reality && inb.reality.privateKey)) {
+    return 'REALITY needs a key pair - use Generate next to the private key';
+  }
+  return '';
+}
+
 function normalizeInbound(body, existing) {
   const inb = Object.assign({}, existing || {}, {
     remark: transfer.clean(body.remark ?? existing?.remark) || 'inbound',
@@ -631,6 +655,63 @@ function normalizeInbound(body, existing) {
     ocspStapling: Number(body.ocspStapling ?? existing?.ocspStapling ?? 0),
     certUsage: body.certUsage ?? existing?.certUsage ?? 'encipherment',
     certOneTimeLoading: body.certOneTimeLoading ?? existing?.certOneTimeLoading ?? false,
+    /* ---- the inbound's own cap and expiry, like 3x-ui's ---- */
+    totalGB: Number(body.totalGB ?? existing?.totalGB ?? 0),
+    expiryTime: Number(body.expiryTime ?? existing?.expiryTime ?? 0),
+
+    /* ---- raw TCP: proxy protocol and the HTTP disguise ---- */
+    tcpAcceptProxyProtocol: body.tcpAcceptProxyProtocol ?? existing?.tcpAcceptProxyProtocol ?? false,
+    tcpType: body.tcpType ?? existing?.tcpType ?? 'none',
+    tcpRequest: body.tcpRequest ?? existing?.tcpRequest ?? { version: '1.1', method: 'GET', path: ['/'], headers: [] },
+    tcpResponse: body.tcpResponse ?? existing?.tcpResponse ?? { version: '1.1', status: '200', reason: 'OK', headers: [] },
+
+    /* ---- mKCP beyond the seed ---- */
+    kcpMtu: Number(body.kcpMtu ?? existing?.kcpMtu ?? 0),
+    kcpTti: Number(body.kcpTti ?? existing?.kcpTti ?? 0),
+    kcpUplink: Number(body.kcpUplink ?? existing?.kcpUplink ?? 0),
+    kcpDownlink: Number(body.kcpDownlink ?? existing?.kcpDownlink ?? 0),
+    kcpCongestion: body.kcpCongestion ?? existing?.kcpCongestion ?? false,
+    kcpReadBuffer: Number(body.kcpReadBuffer ?? existing?.kcpReadBuffer ?? 0),
+    kcpWriteBuffer: Number(body.kcpWriteBuffer ?? existing?.kcpWriteBuffer ?? 0),
+
+    /* ---- websocket / httpupgrade / xhttp extras ---- */
+    wsAcceptProxyProtocol: body.wsAcceptProxyProtocol ?? existing?.wsAcceptProxyProtocol ?? false,
+    wsHeartbeatPeriod: Number(body.wsHeartbeatPeriod ?? existing?.wsHeartbeatPeriod ?? 0),
+    wsHeaders: body.wsHeaders ?? existing?.wsHeaders ?? [],
+    grpcAuthority: body.grpcAuthority ?? existing?.grpcAuthority ?? '',
+    xhttpStreamUpServerSecs: body.xhttpStreamUpServerSecs ?? existing?.xhttpStreamUpServerSecs ?? '',
+    xhttpPaddingBytes: body.xhttpPaddingBytes ?? existing?.xhttpPaddingBytes ?? '',
+    xhttpNoSSEHeader: body.xhttpNoSSEHeader ?? existing?.xhttpNoSSEHeader ?? false,
+
+    /* ---- socket options ---- */
+    sockoptEnabled: body.sockoptEnabled ?? existing?.sockoptEnabled ?? false,
+    sockopt: Object.assign({
+      mark: 0, tcpKeepAliveInterval: 0, tcpKeepAliveIdle: 0, tcpMaxSeg: 0,
+      tcpUserTimeout: 0, tcpWindowClamp: 0, acceptProxyProtocol: false,
+      tcpFastOpen: false, tcpMptcp: false, penetrate: false, V6Only: false,
+      domainStrategy: '', tcpcongestion: '', tproxy: 'off',
+      dialerProxy: '', interfaceName: ''
+    }, existing?.sockopt || {}, body.sockopt || {}),
+
+    /* ---- TLS extras ---- */
+    tlsAllowInsecure: body.tlsAllowInsecure ?? existing?.tlsAllowInsecure ?? false,
+    disableSystemRoot: body.disableSystemRoot ?? existing?.disableSystemRoot ?? false,
+    enableSessionResumption: body.enableSessionResumption ?? existing?.enableSessionResumption ?? false,
+    verifyPeerCertInNames: body.verifyPeerCertInNames ?? existing?.verifyPeerCertInNames ?? '',
+    certBuildChain: body.certBuildChain ?? existing?.certBuildChain ?? false,
+    echForceQuery: body.echForceQuery ?? existing?.echForceQuery ?? '',
+
+    /* ---- per-protocol extras ---- */
+    ssNetwork: body.ssNetwork ?? existing?.ssNetwork ?? 'tcp,udp',
+    ssIvCheck: body.ssIvCheck ?? existing?.ssIvCheck ?? false,
+    allowTransparent: body.allowTransparent ?? existing?.allowTransparent ?? false,
+    portMap: body.portMap ?? existing?.portMap ?? [],
+    wgNoKernelTun: body.wgNoKernelTun ?? existing?.wgNoKernelTun ?? false,
+    fallbacks: body.fallbacks ?? existing?.fallbacks ?? [],
+
+    /* ---- where the share link should point, when it is not this server ---- */
+    externalProxy: body.externalProxy ?? existing?.externalProxy ?? [],
+
     sniffDestOverride: toList(body.sniffDestOverride, existing?.sniffDestOverride, ['http', 'tls', 'quic']),
     sniffMetadataOnly: body.sniffMetadataOnly ?? existing?.sniffMetadataOnly ?? false,
     sniffRouteOnly: body.sniffRouteOnly ?? existing?.sniffRouteOnly ?? false,
@@ -640,7 +721,10 @@ function normalizeInbound(body, existing) {
     reality: Object.assign({
       dest: 'www.cloudflare.com:443',
       serverNames: ['www.cloudflare.com'],
-      privateKey: '', publicKey: '', shortIds: [''], fingerprint: 'chrome'
+      privateKey: '', publicKey: '', shortIds: [''], fingerprint: 'chrome',
+      show: false, xver: 0, maxTimeDiff: 0,
+      minClientVer: '', maxClientVer: '', spiderX: '',
+      mldsa65Seed: '', mldsa65Verify: ''
     }, existing?.reality || {}, body.reality || {})
   });
 
@@ -675,15 +759,8 @@ router.post('/inbounds', async (req, res) => {
   inb.tag = `inbound-${inb.port}-${inb.id.slice(0, 4)}`;
   inb.createdAt = Date.now();
 
-  // Nothing is filled in silently: the form offers a Generate button for each
-  // of these, so an empty field is a mistake worth naming rather than papering
-  // over with a value the admin never saw.
-  if (inb.protocol === 'shadowsocks' && !inb.password) {
-    return bad(res, 'a Shadowsocks password is required - use Generate to make one');
-  }
-  if (inb.security === 'reality' && !inb.reality.privateKey) {
-    return bad(res, 'REALITY needs a key pair - use Generate next to the private key');
-  }
+  const missing = inboundMissing(inb);
+  if (missing) return bad(res, missing);
 
   db.data.inbounds.push(inb);
   db.saveNow();
@@ -708,6 +785,10 @@ router.put('/inbounds/:id', async (req, res) => {
   updated.tag = before.tag;
   const clash = portConflict(updated.port, updated.listen, updated.id);
   if (clash) return bad(res, clash);
+  /* the same rules as on create: xray would refuse the whole config over one of
+     these, and its own message names none of them in words anybody can act on */
+  const missing = inboundMissing(updated);
+  if (missing) return bad(res, missing);
   d.inbounds[idx] = updated;
   db.saveNow();
   const applied = await xray.apply();

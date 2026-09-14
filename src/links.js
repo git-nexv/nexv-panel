@@ -6,6 +6,29 @@ function hostFor(inb) {
   return inb.address || db.settings.domain || db.settings.serverIP || '127.0.0.1';
 }
 
+/**
+ * Where a share link should actually point.
+ *
+ * An inbound can carry a list of external proxies - a CDN or a relay sitting in
+ * front of this server - and then the link must name that, not the server. Each
+ * entry may also override whether the link claims TLS, because a CDN commonly
+ * terminates TLS itself while the server behind it speaks plain.
+ *
+ * One entry means every client gets it. Several means one link per entry, which
+ * is why this returns a list and buildLink() is called once per address.
+ */
+function addressesFor(inb) {
+  const rows = Array.isArray(inb.externalProxy) ? inb.externalProxy.filter((r) => r && r.dest) : [];
+  if (!rows.length) return [{ host: hostFor(inb), port: Number(inb.port), security: null, remark: '' }];
+  return rows.map((r) => ({
+    host: String(r.dest),
+    port: Number(r.port) || Number(inb.port),
+    // 'same' leaves the inbound's own security alone; the other two force it
+    security: r.forceTls === 'tls' ? 'tls' : (r.forceTls === 'none' ? 'none' : null),
+    remark: String(r.remark || '')
+  }));
+}
+
 function streamParams(inb) {
   const p = {};
   const net = inb.network || 'tcp';
@@ -139,11 +162,20 @@ function qs(obj) {
     .join('&');
 }
 
-function buildLink(inb, client) {
-  const host = hostFor(inb);
-  const port = inb.port;
-  const remark = remarkFor(inb, client);
+/**
+ * One link. `where` is an entry from addressesFor(); left out, it is the server
+ * itself, which is what every caller that does not care about external proxies
+ * gets by default.
+ */
+function buildLink(inb, client, where) {
+  const at = where || addressesFor(inb)[0];
+  const host = at.host;
+  const port = at.port;
+  const base = remarkFor(inb, client);
+  const remark = at.remark ? `${base} · ${at.remark}` : base;
   const params = streamParams(inb);
+  // an address in front may terminate TLS itself, or add it
+  if (at.security) params.security = at.security;
 
   if (inb.protocol === 'vless') {
     if (client.flow) params.flow = client.flow;
@@ -167,7 +199,7 @@ function buildLink(inb, client) {
       type: 'none',
       host: inb.wsHost || '',
       path: inb.wsPath || '',
-      tls: (inb.security === 'tls') ? 'tls' : '',
+      tls: (params.security === 'tls') ? 'tls' : '',
       sni: inb.sni || '',
       alpn: '',
       fp: inb.fingerprint || ''
@@ -205,10 +237,12 @@ function subscriptionFor(subId) {
     if (c.enable === false && !c.blockedReason) continue;
     const inb = d.inbounds.find((i) => i.id === c.inboundId);
     if (!inb || inb.enable === false) continue;
-    const link = buildLink(inb, c);
-    if (link) links.push(link);
+    for (const where of addressesFor(inb)) {
+      const link = buildLink(inb, c, where);
+      if (link) links.push(link);
+    }
   }
   return links;
 }
 
-module.exports = { buildLink, subscriptionFor, hostFor, remarkFor, DEFAULT_REMARK, REMARK_TOKENS };
+module.exports = { buildLink, subscriptionFor, hostFor, addressesFor, remarkFor, DEFAULT_REMARK, REMARK_TOKENS };

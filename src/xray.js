@@ -99,6 +99,8 @@ function tlsSettings(inb, net) {
       usage: inb.certUsage || 'encipherment',
       oneTimeLoading: !!inb.certOneTimeLoading
     };
+    // only meaningful when the certificate is being issued by xray itself
+    if (base.usage === 'issue' && inb.certBuildChain) base.buildChain = true;
     if (inb.certContent && inb.keyContent) {
       return [Object.assign(base, {
         certificate: String(inb.certContent).split('\n'),
@@ -126,12 +128,112 @@ function tlsSettings(inb, net) {
   if (inb.curvePreferences && inb.curvePreferences.length) out.curvePreferences = inb.curvePreferences;
   if (inb.masterKeyLog) out.masterKeyLog = inb.masterKeyLog;
   if (inb.echServerKeys) out.echServerKeys = inb.echServerKeys;
-  if (inb.fingerprint || inb.echConfigList) {
+  if (inb.disableSystemRoot) out.disableSystemRoot = true;
+  if (inb.enableSessionResumption) out.enableSessionResumption = true;
+  if (inb.verifyPeerCertInNames) {
+    out.verifyPeerCertInNames = String(inb.verifyPeerCertInNames)
+      .split(',').map((n) => n.trim()).filter(Boolean);
+  }
+  if (inb.echForceQuery) out.echForceQuery = inb.echForceQuery;
+  if (inb.fingerprint || inb.echConfigList || inb.tlsAllowInsecure) {
     out.settings = {};
     if (inb.fingerprint) out.settings.fingerprint = inb.fingerprint;
     if (inb.echConfigList) out.settings.echConfigList = inb.echConfigList;
+    if (inb.tlsAllowInsecure) out.settings.allowInsecure = true;
   }
   return out;
+}
+
+/**
+ * Headers, in the two shapes Xray actually wants.
+ *
+ * They are not the same shape, which is easy to get wrong and impossible to
+ * guess: the HTTP disguise on a raw TCP inbound takes {name: [value]}, because
+ * a disguised request may repeat a header; websocket, httpupgrade and xhttp
+ * take {name: value}, a plain string, and reject the array outright. Both are
+ * built from the same list of {name, value} rows the form collects.
+ */
+function headerRows(rows) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => ({ name: String((row && row.name) || '').trim(), value: String((row && row.value) || '') }))
+    .filter((row) => row.name);
+}
+
+/** {name: [value]} - the TCP disguise only. */
+function headerObject(rows) {
+  const out = {};
+  for (const row of headerRows(rows)) out[row.name] = [row.value];
+  return out;
+}
+
+/** {name: value} - websocket, httpupgrade and xhttp. */
+function headerMap(rows) {
+  const out = {};
+  for (const row of headerRows(rows)) out[row.name] = row.value;
+  return out;
+}
+
+/** Only the keys somebody actually filled in; Xray has its own defaults. */
+function pruned(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined || v === null || v === '' || Number.isNaN(v)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * Low-level socket options, the ones that are set on the listening socket
+ * rather than on the protocol. Written only when the switch is on, because an
+ * empty sockopt block changes Xray's behaviour on some of these.
+ */
+function sockoptSettings(inb) {
+  const o = inb.sockopt || {};
+  if (!inb.sockoptEnabled) return null;
+  const out = pruned({
+    mark: Number(o.mark) || undefined,
+    tcpKeepAliveInterval: Number(o.tcpKeepAliveInterval) || undefined,
+    tcpKeepAliveIdle: Number(o.tcpKeepAliveIdle) || undefined,
+    tcpMaxSeg: Number(o.tcpMaxSeg) || undefined,
+    tcpUserTimeout: Number(o.tcpUserTimeout) || undefined,
+    tcpWindowClamp: Number(o.tcpWindowClamp) || undefined,
+    domainStrategy: o.domainStrategy || undefined,
+    tcpcongestion: o.tcpcongestion || undefined,
+    tproxy: o.tproxy && o.tproxy !== 'off' ? o.tproxy : undefined,
+    dialerProxy: o.dialerProxy || undefined,
+    interfaceName: o.interfaceName || undefined
+  });
+  // switches are written even when false only if they were turned on once
+  if (o.acceptProxyProtocol) out.acceptProxyProtocol = true;
+  if (o.tcpFastOpen) out.tcpFastOpen = true;
+  if (o.tcpMptcp) out.tcpMptcp = true;
+  if (o.penetrate) out.penetrate = true;
+  if (o.V6Only) out.V6Only = true;
+  return Object.keys(out).length ? out : null;
+}
+
+/** The HTTP disguise on a raw TCP inbound: a request and a response shape. */
+function tcpHeader(inb) {
+  if (inb.tcpType !== 'http') return { type: 'none' };
+  const req = inb.tcpRequest || {};
+  const res = inb.tcpResponse || {};
+  const paths = Array.isArray(req.path) ? req.path.filter(Boolean) : [];
+  return {
+    type: 'http',
+    request: {
+      version: req.version || '1.1',
+      method: req.method || 'GET',
+      path: paths.length ? paths : ['/'],
+      headers: headerObject(req.headers)
+    },
+    response: {
+      version: res.version || '1.1',
+      status: String(res.status || '200'),
+      reason: res.reason || 'OK',
+      headers: headerObject(res.headers)
+    }
+  };
 }
 
 function streamSettings(inb) {
@@ -141,10 +243,18 @@ function streamSettings(inb) {
   if (net === 'ws') {
     s.wsSettings = { path: inb.wsPath || '/' };
     if (inb.wsHost) s.wsSettings.host = inb.wsHost;
+    if (inb.wsAcceptProxyProtocol) s.wsSettings.acceptProxyProtocol = true;
+    if (Number(inb.wsHeartbeatPeriod)) s.wsSettings.heartbeatPeriod = Number(inb.wsHeartbeatPeriod);
+    const headers = headerMap(inb.wsHeaders);
+    if (Object.keys(headers).length) s.wsSettings.headers = headers;
   } else if (net === 'grpc') {
     s.grpcSettings = { serviceName: inb.grpcServiceName || '', multiMode: !!inb.grpcMultiMode };
+    if (inb.grpcAuthority) s.grpcSettings.authority = inb.grpcAuthority;
   } else if (net === 'httpupgrade') {
     s.httpupgradeSettings = { path: inb.wsPath || '/', host: inb.wsHost || '' };
+    if (inb.wsAcceptProxyProtocol) s.httpupgradeSettings.acceptProxyProtocol = true;
+    const headers = headerMap(inb.wsHeaders);
+    if (Object.keys(headers).length) s.httpupgradeSettings.headers = headers;
   } else if (net === 'xhttp') {
     s.xhttpSettings = { path: inb.wsPath || '/', host: inb.wsHost || '', mode: inb.xhttpMode || 'auto' };
     // all optional; xray falls back to its own defaults when they are absent
@@ -152,25 +262,53 @@ function streamSettings(inb) {
     if (inb.xhttpMaxBufferedUpload) s.xhttpSettings.scMaxBufferedPosts = Number(inb.xhttpMaxBufferedUpload);
     if (inb.xhttpMinUploadInterval) s.xhttpSettings.scMinPostsIntervalMs = String(inb.xhttpMinUploadInterval);
     if (inb.xhttpMaxHeaderBytes) s.xhttpSettings.headerBytes = Number(inb.xhttpMaxHeaderBytes);
+    if (inb.xhttpStreamUpServerSecs) s.xhttpSettings.scStreamUpServerSecs = String(inb.xhttpStreamUpServerSecs);
+    if (inb.xhttpPaddingBytes) s.xhttpSettings.xPaddingBytes = String(inb.xhttpPaddingBytes);
+    if (inb.xhttpNoSSEHeader) s.xhttpSettings.noSSEHeader = true;
+    const headers = headerMap(inb.wsHeaders);
+    if (Object.keys(headers).length) s.xhttpSettings.headers = headers;
   } else if (net === 'kcp') {
-    s.kcpSettings = { seed: inb.kcpSeed || '', header: { type: inb.kcpHeader || 'none' } };
+    s.kcpSettings = Object.assign(
+      { seed: inb.kcpSeed || '', header: { type: inb.kcpHeader || 'none' } },
+      pruned({
+        mtu: Number(inb.kcpMtu) || undefined,
+        tti: Number(inb.kcpTti) || undefined,
+        uplinkCapacity: Number(inb.kcpUplink) || undefined,
+        downlinkCapacity: Number(inb.kcpDownlink) || undefined,
+        readBufferSize: Number(inb.kcpReadBuffer) || undefined,
+        writeBufferSize: Number(inb.kcpWriteBuffer) || undefined
+      })
+    );
+    // congestion is a boolean, so it cannot go through pruned()
+    if (inb.kcpCongestion) s.kcpSettings.congestion = true;
   } else {
-    s.tcpSettings = { header: { type: 'none' } };
+    s.tcpSettings = { header: tcpHeader(inb) };
+    if (inb.tcpAcceptProxyProtocol) s.tcpSettings.acceptProxyProtocol = true;
   }
+
+  const sockopt = sockoptSettings(inb);
+  if (sockopt) s.sockopt = sockopt;
 
   if (s.security === 'tls') {
     s.tlsSettings = tlsSettings(inb, net);
   } else if (s.security === 'reality') {
     const r = inb.reality || {};
     s.realitySettings = {
-      show: false,
+      show: !!r.show,
       dest: r.dest || 'www.cloudflare.com:443',
-      xver: 0,
+      xver: Number(r.xver) || 0,
       serverNames: (r.serverNames && r.serverNames.length ? r.serverNames : ['www.cloudflare.com']),
       privateKey: r.privateKey || '',
       shortIds: (r.shortIds && r.shortIds.length ? r.shortIds : ['']),
       fingerprint: r.fingerprint || 'chrome'
     };
+    Object.assign(s.realitySettings, pruned({
+      maxTimeDiff: Number(r.maxTimeDiff) || undefined,
+      minClientVer: r.minClientVer || undefined,
+      maxClientVer: r.maxClientVer || undefined,
+      spiderX: r.spiderX || undefined,
+      mldsa65Seed: r.mldsa65Seed || undefined
+    }));
   }
   return s;
 }
@@ -194,14 +332,28 @@ function inboundSettings(inb, clients) {
         clients: active.map((c) => ({ password: c.password || c.uuid, email: clientTag(c) })),
         fallbacks: inb.fallbacks || []
       };
-    case 'shadowsocks':
+    case 'shadowsocks': {
+      /*
+       * The two families want the cipher in different places, and getting it
+       * wrong is not a warning - Xray refuses to start with "unsupported cipher
+       * method:" and an empty name. ss-2022 takes it on the inbound and rejects
+       * it on a client; everything older takes it on each client and ignores
+       * the inbound's.
+       */
+      const method = inb.method || '2022-blake3-aes-128-gcm';
+      const is2022 = method.startsWith('2022-');
       return {
-        method: inb.method || '2022-blake3-aes-128-gcm',
+        method,
         password: inb.password || '',
-        network: 'tcp,udp',
-        // ss-2022 multi-user rejects a per-client method; the inbound-level one applies
-        clients: active.map((c) => ({ password: c.password || c.uuid, email: clientTag(c) }))
+        network: inb.ssNetwork || 'tcp,udp',
+        ivCheck: !!inb.ssIvCheck,
+        clients: active.map((c) => {
+          const entry = { password: c.password || c.uuid, email: clientTag(c) };
+          if (!is2022) entry.method = method;
+          return entry;
+        })
       };
+    }
     case 'socks':
       // with no accounts the inbound would be an open proxy, so require auth
       return {
@@ -213,26 +365,43 @@ function inboundSettings(inb, clients) {
     case 'http':
       return {
         accounts: active.map((c) => ({ user: c.email, pass: c.password || c.uuid })),
-        allowTransparent: false
+        allowTransparent: !!inb.allowTransparent
       };
-    case 'dokodemo-door':
-      return {
+    case 'dokodemo-door': {
+      const out = {
         address: inb.targetAddress || '127.0.0.1',
         port: Number(inb.targetPort || 0) || undefined,
         network: inb.targetNetwork || 'tcp,udp',
         followRedirect: !!inb.followRedirect
       };
-    case 'wireguard':
-      return {
+      /* port -> address, for forwarding a range of ports to different places */
+      const map = {};
+      for (const row of (inb.portMap || [])) {
+        const from = String((row && row.name) || '').trim();
+        if (from) map[from] = String((row && row.value) || '');
+      }
+      if (Object.keys(map).length) out.portMap = map;
+      return out;
+    }
+    case 'wireguard': {
+      const out = {
         secretKey: inb.wgPrivateKey || '',
         mtu: Number(inb.wgMtu || 1420),
-        peers: active.map((c) => ({
-          publicKey: c.wgPublicKey || '',
-          allowedIPs: (c.wgAllowedIPs && c.wgAllowedIPs.length)
-            ? c.wgAllowedIPs
-            : ['0.0.0.0/0', '::/0']
-        })).filter((p) => p.publicKey)
+        peers: active.map((c) => {
+          const peer = {
+            publicKey: c.wgPublicKey || '',
+            allowedIPs: (c.wgAllowedIPs && c.wgAllowedIPs.length)
+              ? c.wgAllowedIPs
+              : ['0.0.0.0/0', '::/0']
+          };
+          if (c.wgPresharedKey) peer.preSharedKey = c.wgPresharedKey;
+          if (Number(c.wgKeepAlive)) peer.keepAlive = Number(c.wgKeepAlive);
+          return peer;
+        }).filter((p) => p.publicKey)
       };
+      if (inb.wgNoKernelTun) out.noKernelTun = true;
+      return out;
+    }
     default:
       return { clients: [] };
   }
@@ -486,6 +655,19 @@ function isOverQuota(c) {
 }
 
 /**
+ * An inbound can carry a cap and an expiry of its own, the way 3x-ui's does.
+ *
+ * It is not the sum of its clients' caps: it is the port itself going quiet -
+ * useful for a trial inbound, or a box rented by the month. The same two tests
+ * a client gets, against the inbound's own figures.
+ */
+function inboundDead(inb) {
+  if (isExpired(inb)) return 'expired';
+  if (isOverQuota(inb)) return 'out of quota';
+  return '';
+}
+
+/**
  * More places at once than this client is allowed.
  *
  * The field has been on the client form all along and did nothing whatsoever -
@@ -521,6 +703,8 @@ function buildConfig() {
 
   for (const inb of d.inbounds) {
     if (inb.enable === false) continue;
+    // an inbound past its own expiry or cap stops listening, like a dead client
+    if (inboundDead(inb)) continue;
     const clients = d.clients.filter((c) => c.inboundId === inb.id);
     const entry = {
       tag: inb.tag,
@@ -967,5 +1151,5 @@ module.exports = {
   outboundConfig, outboundStream,
   INBOUND_PROTOCOLS, OUTBOUND_PROTOCOLS, CLIENT_PROTOCOLS, LINK_PROTOCOLS,
   restart, start, stop, collectTraffic, enforceLimits, ensureAccessLog, accessLogUsable, ACCESS_LOG, rateFor,
-  clientTag, isExpired, isOverQuota, generateReality, generateECH, parseECH, run, serviceUser
+  clientTag, isExpired, isOverQuota, inboundDead, generateReality, generateECH, parseECH, run, serviceUser
 };

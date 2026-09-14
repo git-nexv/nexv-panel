@@ -1210,6 +1210,67 @@ function segmented(options, value, onChange) {
 }
 
 /** Multi-select as a row of chips (ALPN, sniffing targets). */
+/**
+ * A list of rows you can add to and take from - headers, port maps, fallbacks,
+ * the external proxies. 3x-ui has four of these and they are all the same
+ * shape: a plus button, then a row of inputs per entry with a minus on the end.
+ *
+ * `columns` describes each input: {key, placeholder, type, width, options}.
+ * The control answers `.rows()` with the current values, so the form reads it
+ * the way it reads any other field.
+ */
+function rowList(initial, columns, opts = {}) {
+  const box = el('div', { class: 'row-list' });
+  const body = el('div');
+  const state = (Array.isArray(initial) ? initial : []).map((r) => Object.assign({}, r));
+
+  const draw = () => {
+    body.innerHTML = '';
+    state.forEach((row, index) => {
+      const line = el('div', { class: 'row', style: 'gap:6px; margin-bottom:6px; align-items:center' });
+      for (const col of columns) {
+        const control = col.options
+          ? selectOf(col.options, row[col.key] ?? col.value ?? '')
+          : el('input', {
+            type: col.type || 'text',
+            value: row[col.key] ?? col.value ?? '',
+            placeholder: col.placeholder || col.key
+          });
+        control.style.flex = col.width || '1';
+        control.style.minWidth = '0';
+        /* a select that is never touched still has a value, and it is the one
+           the row should carry - otherwise the default silently saves as '' */
+        if (row[col.key] === undefined || row[col.key] === '') row[col.key] = control.value;
+        control.addEventListener('input', () => { row[col.key] = control.value; });
+        control.addEventListener('change', () => { row[col.key] = control.value; });
+        line.append(control);
+      }
+      line.append(el('button', {
+        class: 'btn icon ghost', type: 'button', title: 'Remove', html: icon('trash'),
+        onclick: () => { state.splice(index, 1); draw(); }
+      }));
+      body.append(line);
+    });
+    hydrateIcons(body);
+  };
+
+  const addBtn = el('button', {
+    class: 'btn', type: 'button', html: `${icon('plus')} ${opts.addLabel || 'Add'}`,
+    onclick: () => {
+      const fresh = {};
+      for (const col of columns) fresh[col.key] = col.value ?? '';
+      state.push(fresh);
+      draw();
+    }
+  });
+  box.append(body, el('div', { class: 'row' }, [addBtn]));
+  draw();
+  box.rows = () => state
+    .map((r) => Object.assign({}, r))
+    .filter((r) => columns.some((c) => String(r[c.key] ?? '').trim() !== ''));
+  return box;
+}
+
 function chipSet(options, selected) {
   const box = el('div', { class: 'chips' });
   for (const opt of options) {
@@ -1247,6 +1308,13 @@ function inboundForm(existing) {
     full: true, hint: 'Used in share links. Defaults to the panel domain or server IP.'
   });
   const enable = add('Basics', 'Enabled', toggle(v.enable !== false));
+  const totalGB = add('Basics', 'Total traffic (GB)', text(v.totalGB || 0, { type: 'number' }), {
+    hint: '0 means no limit. The whole inbound stops when it is reached.'
+  });
+  const expiryDays = add('Basics', 'Expires in (days)', text(
+    v.expiryTime ? Math.max(0, Math.ceil((v.expiryTime - Date.now()) / 86400000)) : 0,
+    { type: 'number' }
+  ), { hint: '0 never expires. The whole inbound stops on the day.' });
 
   /* ------------------------------ Protocol ------------------------------ */
   const protocol = add('Protocol', 'Protocol', selectOf(
@@ -1261,15 +1329,42 @@ function inboundForm(existing) {
     full: true, hint: 'Must match the cipher; Generate makes a key of the right size'
   });
   const ssPassword = ssPasswordRow.input;
+  const ssNetwork = add('Protocol', 'Network', selectOf(['tcp,udp', 'tcp', 'udp'], v.ssNetwork || 'tcp,udp'));
+  const ssIvCheck = add('Protocol', 'ivCheck', toggle(v.ssIvCheck), {
+    hint: 'Rejects a repeated initialisation vector - replay protection for the older ciphers.'
+  });
   const udp = add('Protocol', 'UDP relay', toggle(v.udp !== false));
+  const allowTransparent = add('Protocol', 'Allow transparent', toggle(v.allowTransparent));
   const targetAddress = add('Protocol', 'Forward to address', text(v.targetAddress || '127.0.0.1'));
   const targetPort = add('Protocol', 'Forward to port', text(v.targetPort || 0, { type: 'number' }));
   const targetNetwork = add('Protocol', 'Forwarded networks', selectOf(['tcp,udp', 'tcp', 'udp'], v.targetNetwork || 'tcp,udp'));
   const followRedirect = add('Protocol', 'Follow redirect', toggle(v.followRedirect));
+  const portMap = rowList(v.portMap || [], [
+    { key: 'name', placeholder: 'port', width: '1' },
+    { key: 'value', placeholder: 'address:port', width: '2' }
+  ], { addLabel: 'Add a mapping' });
+  add('Protocol', 'Port mapping', portMap, {
+    full: true, hint: 'Send one incoming port somewhere different from the address above.'
+  });
   const wgPrivateKeyRow = generatedField(v.wgPrivateKey || '', 'wireguard', { placeholder: 'press Generate' });
   add('Protocol', 'WireGuard private key', wgPrivateKeyRow, { full: true });
   const wgPrivateKey = wgPrivateKeyRow.input;
   const wgMtu = add('Protocol', 'MTU', text(v.wgMtu || 1420, { type: 'number' }));
+  const wgNoKernelTun = add('Protocol', 'No kernel tun', toggle(v.wgNoKernelTun), {
+    hint: 'Use the userspace implementation even where the kernel one is available.'
+  });
+
+  /* fallbacks: where a connection goes when it does not look like this protocol */
+  const fallbacks = rowList(v.fallbacks || [], [
+    { key: 'name', placeholder: 'SNI', width: '1' },
+    { key: 'alpn', placeholder: 'ALPN', width: '1' },
+    { key: 'path', placeholder: 'Path', width: '1' },
+    { key: 'dest', placeholder: 'Dest', width: '1' },
+    { key: 'xver', placeholder: 'xVer', type: 'number', width: '0.6', value: 0 }
+  ], { addLabel: 'Add a fallback' });
+  add('Protocol', 'Fallbacks', fallbacks, {
+    full: true, hint: 'Traffic that does not match is handed to the first fallback that fits.'
+  });
 
   /* ------------------------------- Stream ------------------------------- */
   const network = add('Stream', 'Transmission', selectOf([
@@ -1277,16 +1372,99 @@ function inboundForm(existing) {
     { value: 'grpc', label: 'gRPC' }, { value: 'httpupgrade', label: 'HTTPUpgrade' },
     { value: 'xhttp', label: 'XHTTP' }, { value: 'kcp', label: 'mKCP' }
   ], v.network || 'tcp'));
+  /* raw TCP: the proxy-protocol switch and the HTTP disguise */
+  const tcpAcceptProxyProtocol = add('Stream', 'Proxy protocol', toggle(v.tcpAcceptProxyProtocol), {
+    hint: 'Read the real client address from a PROXY-protocol header in front.'
+  });
+  const tcpCamouflage = add('Stream', 'HTTP camouflage', toggle(v.tcpType === 'http'), {
+    hint: 'Wrap the stream in something that reads like an ordinary HTTP exchange.'
+  });
+  const tcpReqVersion = add('Stream', 'Request version', text((v.tcpRequest && v.tcpRequest.version) || '1.1'));
+  const tcpReqMethod = add('Stream', 'Request method', text((v.tcpRequest && v.tcpRequest.method) || 'GET'));
+  const tcpReqPath = add('Stream', 'Request path', text(((v.tcpRequest && v.tcpRequest.path) || ['/']).join(',')), {
+    full: true, hint: 'One or more, separated by commas.'
+  });
+  const tcpReqHeaders = rowList((v.tcpRequest && v.tcpRequest.headers) || [], [
+    { key: 'name', placeholder: 'name', width: '1' },
+    { key: 'value', placeholder: 'value', width: '2' }
+  ], { addLabel: 'Add a header' });
+  add('Stream', 'Request headers', tcpReqHeaders, { full: true });
+  const tcpResVersion = add('Stream', 'Response version', text((v.tcpResponse && v.tcpResponse.version) || '1.1'));
+  const tcpResStatus = add('Stream', 'Response status', text((v.tcpResponse && v.tcpResponse.status) || '200'));
+  const tcpResReason = add('Stream', 'Status text', text((v.tcpResponse && v.tcpResponse.reason) || 'OK'));
+  const tcpResHeaders = rowList((v.tcpResponse && v.tcpResponse.headers) || [], [
+    { key: 'name', placeholder: 'name', width: '1' },
+    { key: 'value', placeholder: 'value', width: '2' }
+  ], { addLabel: 'Add a header' });
+  add('Stream', 'Response headers', tcpResHeaders, { full: true });
+
   const wsHost = add('Stream', 'Host', text(v.wsHost || ''));
   const wsPath = add('Stream', 'Path', text(v.wsPath || '/'));
+  const wsAcceptProxyProtocol = add('Stream', 'Accept proxy protocol', toggle(v.wsAcceptProxyProtocol));
+  const wsHeartbeatPeriod = add('Stream', 'Heartbeat period', text(v.wsHeartbeatPeriod || '', { type: 'number' }), {
+    placeholder: 'off', hint: 'Seconds between pings that keep a quiet connection open.'
+  });
+  const wsHeaders = rowList(v.wsHeaders || [], [
+    { key: 'name', placeholder: 'name', width: '1' },
+    { key: 'value', placeholder: 'value', width: '2' }
+  ], { addLabel: 'Add a header' });
+  add('Stream', 'Headers', wsHeaders, { full: true });
   const xhttpMode = add('Stream', 'Mode', selectOf(['auto', 'packet-up', 'stream-up', 'stream-one'], v.xhttpMode || 'auto'));
   const xhttpMaxUploadSize = add('Stream', 'Max upload size (bytes)', text(v.xhttpMaxUploadSize || ''), { placeholder: 'xray default' });
   const xhttpMaxBufferedUpload = add('Stream', 'Max buffered upload', text(v.xhttpMaxBufferedUpload || '', { type: 'number' }), { placeholder: '30' });
   const xhttpMinUploadInterval = add('Stream', 'Min upload interval (ms)', text(v.xhttpMinUploadInterval || ''), { placeholder: 'e.g. 50-150' });
   const xhttpMaxHeaderBytes = add('Stream', 'Server max header bytes', text(v.xhttpMaxHeaderBytes || '', { type: 'number' }), { placeholder: 'xray default' });
+  const xhttpStreamUpServerSecs = add('Stream', 'Stream-up server', text(v.xhttpStreamUpServerSecs || ''), { placeholder: 'e.g. 20-80' });
+  const xhttpPaddingBytes = add('Stream', 'Padding bytes', text(v.xhttpPaddingBytes || ''), { placeholder: 'e.g. 100-1000' });
+  const xhttpNoSSEHeader = add('Stream', 'No SSE header', toggle(v.xhttpNoSSEHeader));
   const grpcService = add('Stream', 'gRPC service name', text(v.grpcServiceName || 'nexv-grpc'));
+  const grpcAuthority = add('Stream', 'gRPC authority', text(v.grpcAuthority || ''), { placeholder: 'optional' });
+  const grpcMultiMode = add('Stream', 'Multi mode', toggle(v.grpcMultiMode));
   const kcpSeed = add('Stream', 'mKCP seed', text(v.kcpSeed || ''));
   const kcpHeader = add('Stream', 'mKCP header', selectOf(['none', 'srtp', 'utp', 'wechat-video', 'dtls', 'wireguard'], v.kcpHeader || 'none'));
+  const kcpMtu = add('Stream', 'mKCP MTU', text(v.kcpMtu || '', { type: 'number' }), { placeholder: '1350' });
+  const kcpTti = add('Stream', 'TTI (ms)', text(v.kcpTti || '', { type: 'number' }), { placeholder: '50' });
+  const kcpUplink = add('Stream', 'Uplink (MB/s)', text(v.kcpUplink || '', { type: 'number' }), { placeholder: '5' });
+  const kcpDownlink = add('Stream', 'Downlink (MB/s)', text(v.kcpDownlink || '', { type: 'number' }), { placeholder: '20' });
+  const kcpCongestion = add('Stream', 'Congestion', toggle(v.kcpCongestion));
+  const kcpReadBuffer = add('Stream', 'Read buffer (MB)', text(v.kcpReadBuffer || '', { type: 'number' }), { placeholder: '2' });
+  const kcpWriteBuffer = add('Stream', 'Write buffer (MB)', text(v.kcpWriteBuffer || '', { type: 'number' }), { placeholder: '2' });
+
+  /* ---- socket options: set on the listening socket, not the protocol ---- */
+  const sockoptEnabled = add('Stream', 'Sockopt', toggle(v.sockoptEnabled), {
+    full: true, hint: 'Low-level socket settings. Leave off unless you know you need them.'
+  });
+  const so = v.sockopt || {};
+  const soMark = add('Stream', 'Route mark', text(so.mark || '', { type: 'number' }));
+  const soKeepInterval = add('Stream', 'TCP keep-alive interval', text(so.tcpKeepAliveInterval || '', { type: 'number' }));
+  const soKeepIdle = add('Stream', 'TCP keep-alive idle', text(so.tcpKeepAliveIdle || '', { type: 'number' }));
+  const soMaxSeg = add('Stream', 'TCP max segment', text(so.tcpMaxSeg || '', { type: 'number' }));
+  const soUserTimeout = add('Stream', 'TCP user timeout', text(so.tcpUserTimeout || '', { type: 'number' }));
+  const soWindowClamp = add('Stream', 'TCP window clamp', text(so.tcpWindowClamp || '', { type: 'number' }));
+  const soProxyProtocol = add('Stream', 'Sockopt proxy protocol', toggle(so.acceptProxyProtocol));
+  const soFastOpen = add('Stream', 'TCP fast open', toggle(so.tcpFastOpen));
+  const soMptcp = add('Stream', 'Multipath TCP', toggle(so.tcpMptcp));
+  const soPenetrate = add('Stream', 'Penetrate', toggle(so.penetrate));
+  const soV6Only = add('Stream', 'IPv6 only', toggle(so.V6Only));
+  const soDomainStrategy = add('Stream', 'Sockopt domain strategy', selectOf(
+    ['', 'AsIs', 'UseIP', 'UseIPv4', 'UseIPv6', 'ForceIP', 'ForceIPv4', 'ForceIPv6'], so.domainStrategy || ''
+  ));
+  const soCongestion = add('Stream', 'TCP congestion', selectOf(['', 'bbr', 'cubic', 'reno'], so.tcpcongestion || ''));
+  const soTproxy = add('Stream', 'TProxy', selectOf(['off', 'redirect', 'tproxy'], so.tproxy || 'off'));
+  const soDialerProxy = add('Stream', 'Dialer proxy', text(so.dialerProxy || ''), { placeholder: 'an outbound tag' });
+  const soInterface = add('Stream', 'Interface name', text(so.interfaceName || ''), { placeholder: 'eth0' });
+
+  /* ---- external proxy: where the share link should point instead ---- */
+  const externalProxy = rowList(v.externalProxy || [], [
+    { key: 'forceTls', options: [{ value: 'same', label: 'Same' }, { value: 'none', label: 'None' }, { value: 'tls', label: 'TLS' }], width: '1' },
+    { key: 'dest', placeholder: 'host', width: '1.6' },
+    { key: 'port', placeholder: 'port', type: 'number', width: '0.8', value: 443 },
+    { key: 'remark', placeholder: 'remark', width: '1.2' }
+  ], { addLabel: 'Add an address' });
+  add('Stream', 'External proxy', externalProxy, {
+    full: true,
+    hint: 'Hand out links that point somewhere else - a CDN or a relay in front of this server.'
+  });
 
   /* ------------------------------ Security ------------------------------ */
   let security = v.security || 'none';
@@ -1309,6 +1487,14 @@ function inboundForm(existing) {
     full: true, placeholder: 'X25519,P-256'
   });
   const rejectUnknownSni = add('Security', 'Reject unknown SNI', toggle(v.rejectUnknownSni));
+  const tlsAllowInsecure = add('Security', 'Allow insecure', toggle(v.tlsAllowInsecure), {
+    hint: 'Accept a certificate that does not verify. For testing only.'
+  });
+  const disableSystemRoot = add('Security', 'Disable system root', toggle(v.disableSystemRoot));
+  const enableSessionResumption = add('Security', 'Session resumption', toggle(v.enableSessionResumption));
+  const verifyPeerCertInNames = add('Security', 'Verify peer cert in names', text(v.verifyPeerCertInNames || ''), {
+    full: true, placeholder: 'example.com, www.example.com'
+  });
 
   let certSource = (v.certContent && v.keyContent) ? 'content' : 'path';
   const certSeg = segmented(
@@ -1347,6 +1533,9 @@ function inboundForm(existing) {
   const ocspStapling = add('Security', 'OCSP stapling (s)', text(v.ocspStapling || 0, { type: 'number' }));
   const certOneTimeLoading = add('Security', 'One time loading', toggle(v.certOneTimeLoading));
   const certUsage = add('Security', 'Usage option', selectOf(['encipherment', 'verify', 'issue'], v.certUsage || 'encipherment'));
+  const certBuildChain = add('Security', 'Build chain', toggle(v.certBuildChain), {
+    hint: 'Only when the usage above is "issue".'
+  });
   const masterKeyLog = add('Security', 'Master key log', text(v.masterKeyLog || ''), { full: true, placeholder: '/path/to/sslkeylog.txt' });
 
   const echKeysRow = actionField(v.echServerKeys || '', 'Get new ECH cert', async (input) => {
@@ -1361,6 +1550,7 @@ function inboundForm(existing) {
   const echConfig = add('Security', 'ECH config', el('textarea', { style: 'min-height:90px' }, [v.echConfigList || '']), {
     full: true, hint: 'Handed to clients; filled in by the button above.'
   });
+  const echForceQuery = add('Security', 'ECH force query', selectOf(['', 'none', 'half', 'full'], v.echForceQuery || ''));
 
   const rDest = add('Security', 'REALITY dest', text((v.reality && v.reality.dest) || 'www.cloudflare.com:443'));
   const rNames = add('Security', 'REALITY server names', text((v.reality && (v.reality.serverNames || []).join(',')) || 'www.cloudflare.com'));
@@ -1374,6 +1564,16 @@ function inboundForm(existing) {
   const rShortRow = generatedField((v.reality && (v.reality.shortIds || []).join(',')) || '', 'shortid');
   add('Security', 'REALITY short IDs', rShortRow);
   const rShort = rShortRow.input;
+  const rSpiderX = add('Security', 'SpiderX', text((v.reality && v.reality.spiderX) || ''), { placeholder: '/' });
+  const rShow = add('Security', 'Show', toggle(v.reality && v.reality.show), {
+    hint: 'Log the REALITY handshake. Noisy; for working out why a client will not connect.'
+  });
+  const rXver = add('Security', 'Xver', text((v.reality && v.reality.xver) || 0, { type: 'number' }));
+  const rMaxTimeDiff = add('Security', 'Max time difference (ms)', text((v.reality && v.reality.maxTimeDiff) || 0, { type: 'number' }));
+  const rMinClientVer = add('Security', 'Min client version', text((v.reality && v.reality.minClientVer) || ''), { placeholder: '1.8.0' });
+  const rMaxClientVer = add('Security', 'Max client version', text((v.reality && v.reality.maxClientVer) || ''), { placeholder: 'any' });
+  const rMldsaSeed = add('Security', 'mldsa65 seed', text((v.reality && v.reality.mldsa65Seed) || ''), { full: true });
+  const rMldsaVerify = add('Security', 'mldsa65 verify', text((v.reality && v.reality.mldsa65Verify) || ''), { full: true });
 
   /* ------------------------------ Sniffing ------------------------------ */
   const sniffing = add('Sniffing', 'Sniffing', toggle(v.sniffing !== false));
@@ -1392,28 +1592,61 @@ function inboundForm(existing) {
     // wireguard and dokodemo-door carry no xray transport of their own
     const hasStream = proto !== 'wireguard' && proto !== 'dokodemo-door';
 
-    show([fieldOf(ssMethod), fieldOf(ssPassword)], proto === 'shadowsocks');
+    show([fieldOf(ssMethod), fieldOf(ssPassword), fieldOf(ssNetwork), fieldOf(ssIvCheck)], proto === 'shadowsocks');
     show(fieldOf(udp), proto === 'socks');
-    show([fieldOf(targetAddress), fieldOf(targetPort), fieldOf(targetNetwork), fieldOf(followRedirect)], proto === 'dokodemo-door');
-    show([fieldOf(wgPrivateKey), fieldOf(wgMtu)], proto === 'wireguard');
+    show(fieldOf(allowTransparent), proto === 'http');
+    show([fieldOf(targetAddress), fieldOf(targetPort), fieldOf(targetNetwork),
+      fieldOf(followRedirect), fieldOf(portMap)], proto === 'dokodemo-door');
+    show([fieldOf(wgPrivateKey), fieldOf(wgMtu), fieldOf(wgNoKernelTun)], proto === 'wireguard');
+    // fallbacks are a VLESS and Trojan idea; nothing else reads them
+    show(fieldOf(fallbacks), proto === 'vless' || proto === 'trojan');
 
     show(fieldOf(network), hasStream);
-    show([fieldOf(wsHost), fieldOf(wsPath)], hasStream && ['ws', 'httpupgrade', 'xhttp'].includes(net));
-    show([fieldOf(xhttpMode), fieldOf(xhttpMaxUploadSize), fieldOf(xhttpMaxBufferedUpload),
-      fieldOf(xhttpMinUploadInterval), fieldOf(xhttpMaxHeaderBytes)], hasStream && net === 'xhttp');
-    show(fieldOf(grpcService), hasStream && net === 'grpc');
-    show([fieldOf(kcpSeed), fieldOf(kcpHeader)], hasStream && net === 'kcp');
+    const rawTcp = hasStream && net === 'tcp';
+    show([fieldOf(tcpAcceptProxyProtocol), fieldOf(tcpCamouflage)], rawTcp);
+    const disguised = rawTcp && toggleValue(tcpCamouflage);
+    show([fieldOf(tcpReqVersion), fieldOf(tcpReqMethod), fieldOf(tcpReqPath), fieldOf(tcpReqHeaders),
+      fieldOf(tcpResVersion), fieldOf(tcpResStatus), fieldOf(tcpResReason), fieldOf(tcpResHeaders)], disguised);
+
+    const webish = hasStream && ['ws', 'httpupgrade', 'xhttp'].includes(net);
+    show([fieldOf(wsHost), fieldOf(wsPath), fieldOf(wsHeaders)], webish);
+    show(fieldOf(wsAcceptProxyProtocol), hasStream && (net === 'ws' || net === 'httpupgrade'));
+    show(fieldOf(wsHeartbeatPeriod), hasStream && net === 'ws');
+    show([fieldOf(xhttpMode), fieldOf(xhttpMaxHeaderBytes),
+      fieldOf(xhttpPaddingBytes), fieldOf(xhttpNoSSEHeader)], hasStream && net === 'xhttp');
+    // these three only mean anything in the mode that uses them
+    show([fieldOf(xhttpMaxUploadSize), fieldOf(xhttpMaxBufferedUpload), fieldOf(xhttpMinUploadInterval)],
+      hasStream && net === 'xhttp' && xhttpMode.value === 'packet-up');
+    show(fieldOf(xhttpStreamUpServerSecs), hasStream && net === 'xhttp' && xhttpMode.value === 'stream-up');
+    show([fieldOf(grpcService), fieldOf(grpcAuthority), fieldOf(grpcMultiMode)], hasStream && net === 'grpc');
+    show([fieldOf(kcpSeed), fieldOf(kcpHeader), fieldOf(kcpMtu), fieldOf(kcpTti),
+      fieldOf(kcpUplink), fieldOf(kcpDownlink), fieldOf(kcpCongestion),
+      fieldOf(kcpReadBuffer), fieldOf(kcpWriteBuffer)], hasStream && net === 'kcp');
+
+    show(fieldOf(sockoptEnabled), hasStream);
+    const sockopt = hasStream && toggleValue(sockoptEnabled);
+    show([fieldOf(soMark), fieldOf(soKeepInterval), fieldOf(soKeepIdle), fieldOf(soMaxSeg),
+      fieldOf(soUserTimeout), fieldOf(soWindowClamp), fieldOf(soProxyProtocol), fieldOf(soFastOpen),
+      fieldOf(soMptcp), fieldOf(soPenetrate), fieldOf(soV6Only), fieldOf(soDomainStrategy),
+      fieldOf(soCongestion), fieldOf(soTproxy), fieldOf(soDialerProxy), fieldOf(soInterface)], sockopt);
+    show(fieldOf(externalProxy), hasStream);
 
     const tls = hasStream && security === 'tls';
     const reality = hasStream && security === 'reality';
     show(fieldOf(securitySeg), hasStream);
     show([fieldOf(sni), fieldOf(cipherSuites), fieldOf(tlsMinVersion), fieldOf(tlsMaxVersion),
       fieldOf(fingerprint), fieldOf(alpn), fieldOf(curvePreferences), fieldOf(rejectUnknownSni),
+      fieldOf(tlsAllowInsecure), fieldOf(disableSystemRoot), fieldOf(enableSessionResumption),
+      fieldOf(verifyPeerCertInNames),
       fieldOf(certSeg), fieldOf(ocspStapling), fieldOf(certOneTimeLoading), fieldOf(certUsage),
-      fieldOf(masterKeyLog), fieldOf(echKeys), fieldOf(echConfig), setCertBtn.closest('.field')], tls);
+      fieldOf(masterKeyLog), fieldOf(echKeys), fieldOf(echConfig), fieldOf(echForceQuery),
+      setCertBtn.closest('.field')], tls);
     show([fieldOf(certFile), fieldOf(keyFile)], tls && certSource === 'path');
     show([fieldOf(certContent), fieldOf(keyContent)], tls && certSource === 'content');
-    show([fieldOf(rDest), fieldOf(rNames), fieldOf(rPriv), fieldOf(rPub), fieldOf(rShort)], reality);
+    show(fieldOf(certBuildChain), tls && certUsage.value === 'issue');
+    show([fieldOf(rDest), fieldOf(rNames), fieldOf(rPriv), fieldOf(rPub), fieldOf(rShort),
+      fieldOf(rSpiderX), fieldOf(rShow), fieldOf(rXver), fieldOf(rMaxTimeDiff),
+      fieldOf(rMinClientVer), fieldOf(rMaxClientVer), fieldOf(rMldsaSeed), fieldOf(rMldsaVerify)], reality);
 
     // REALITY only works over raw TCP or gRPC/xhttp; keep the pairing sane
     if (reality && (net === 'ws' || net === 'httpupgrade')) {
@@ -1423,7 +1656,9 @@ function inboundForm(existing) {
       sync();
     }
   }
-  [protocol, network].forEach((c) => c.addEventListener('change', sync));
+  /* anything that opens or closes a group of fields redraws the form */
+  [protocol, network, xhttpMode, certUsage].forEach((c) => c.addEventListener('change', sync));
+  [tcpCamouflage, sockoptEnabled].forEach((c) => c.addEventListener('click', () => setTimeout(sync, 0)));
   sync();
 
   modal({
@@ -1460,8 +1695,73 @@ function inboundForm(existing) {
           xhttpMinUploadInterval: xhttpMinUploadInterval.value,
           xhttpMaxHeaderBytes: xhttpMaxHeaderBytes.value,
           grpcServiceName: grpcService.value,
+          grpcAuthority: grpcAuthority.value.trim(),
+          grpcMultiMode: toggleValue(grpcMultiMode),
           kcpSeed: kcpSeed.value,
           kcpHeader: kcpHeader.value,
+          kcpMtu: Number(kcpMtu.value) || 0,
+          kcpTti: Number(kcpTti.value) || 0,
+          kcpUplink: Number(kcpUplink.value) || 0,
+          kcpDownlink: Number(kcpDownlink.value) || 0,
+          kcpCongestion: toggleValue(kcpCongestion),
+          kcpReadBuffer: Number(kcpReadBuffer.value) || 0,
+          kcpWriteBuffer: Number(kcpWriteBuffer.value) || 0,
+
+          totalGB: Number(totalGB.value) || 0,
+          expiryTime: Number(expiryDays.value) > 0
+            ? Date.now() + Number(expiryDays.value) * 86400000
+            : 0,
+
+          tcpAcceptProxyProtocol: toggleValue(tcpAcceptProxyProtocol),
+          tcpType: toggleValue(tcpCamouflage) ? 'http' : 'none',
+          tcpRequest: {
+            version: tcpReqVersion.value.trim() || '1.1',
+            method: tcpReqMethod.value.trim() || 'GET',
+            path: tcpReqPath.value.split(',').map((x) => x.trim()).filter(Boolean),
+            headers: tcpReqHeaders.rows()
+          },
+          tcpResponse: {
+            version: tcpResVersion.value.trim() || '1.1',
+            status: tcpResStatus.value.trim() || '200',
+            reason: tcpResReason.value.trim() || 'OK',
+            headers: tcpResHeaders.rows()
+          },
+
+          wsAcceptProxyProtocol: toggleValue(wsAcceptProxyProtocol),
+          wsHeartbeatPeriod: Number(wsHeartbeatPeriod.value) || 0,
+          wsHeaders: wsHeaders.rows(),
+          xhttpStreamUpServerSecs: xhttpStreamUpServerSecs.value.trim(),
+          xhttpPaddingBytes: xhttpPaddingBytes.value.trim(),
+          xhttpNoSSEHeader: toggleValue(xhttpNoSSEHeader),
+
+          sockoptEnabled: toggleValue(sockoptEnabled),
+          sockopt: {
+            mark: Number(soMark.value) || 0,
+            tcpKeepAliveInterval: Number(soKeepInterval.value) || 0,
+            tcpKeepAliveIdle: Number(soKeepIdle.value) || 0,
+            tcpMaxSeg: Number(soMaxSeg.value) || 0,
+            tcpUserTimeout: Number(soUserTimeout.value) || 0,
+            tcpWindowClamp: Number(soWindowClamp.value) || 0,
+            acceptProxyProtocol: toggleValue(soProxyProtocol),
+            tcpFastOpen: toggleValue(soFastOpen),
+            tcpMptcp: toggleValue(soMptcp),
+            penetrate: toggleValue(soPenetrate),
+            V6Only: toggleValue(soV6Only),
+            domainStrategy: soDomainStrategy.value,
+            tcpcongestion: soCongestion.value,
+            tproxy: soTproxy.value,
+            dialerProxy: soDialerProxy.value.trim(),
+            interfaceName: soInterface.value.trim()
+          },
+          externalProxy: externalProxy.rows().map((r) => Object.assign({}, r, { port: Number(r.port) || 443 })),
+
+          ssNetwork: ssNetwork.value,
+          ssIvCheck: toggleValue(ssIvCheck),
+          allowTransparent: toggleValue(allowTransparent),
+          portMap: portMap.rows(),
+          wgNoKernelTun: toggleValue(wgNoKernelTun),
+          fallbacks: fallbacks.rows().map((f) => Object.assign({}, f, { xver: Number(f.xver) || 0 })),
+
           security,
           sni: sni.value,
           cipherSuites: cipherSuites.value,
@@ -1471,6 +1771,12 @@ function inboundForm(existing) {
           alpn: alpn.values(),
           curvePreferences: curvePreferences.value,
           rejectUnknownSni: toggleValue(rejectUnknownSni),
+          tlsAllowInsecure: toggleValue(tlsAllowInsecure),
+          disableSystemRoot: toggleValue(disableSystemRoot),
+          enableSessionResumption: toggleValue(enableSessionResumption),
+          verifyPeerCertInNames: verifyPeerCertInNames.value.trim(),
+          certBuildChain: toggleValue(certBuildChain),
+          echForceQuery: echForceQuery.value,
           certFile: certSource === 'path' ? certFile.value : '',
           keyFile: certSource === 'path' ? keyFile.value : '',
           certContent: certSource === 'content' ? certContent.value : '',
@@ -1490,7 +1796,15 @@ function inboundForm(existing) {
             serverNames: rNames.value.split(',').map((x) => x.trim()).filter(Boolean),
             privateKey: rPriv.value,
             publicKey: rPub.value,
-            shortIds: rShort.value.split(',').map((x) => x.trim()).filter(Boolean)
+            shortIds: rShort.value.split(',').map((x) => x.trim()).filter(Boolean),
+            spiderX: rSpiderX.value.trim(),
+            show: toggleValue(rShow),
+            xver: Number(rXver.value) || 0,
+            maxTimeDiff: Number(rMaxTimeDiff.value) || 0,
+            minClientVer: rMinClientVer.value.trim(),
+            maxClientVer: rMaxClientVer.value.trim(),
+            mldsa65Seed: rMldsaSeed.value.trim(),
+            mldsa65Verify: rMldsaVerify.value.trim()
           }
         };
         try {

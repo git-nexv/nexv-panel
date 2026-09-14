@@ -431,6 +431,107 @@ const FA = {
   'Whatever is left unused comes back to your balance if you delete this client.':
     'هرچه از حجم مصرف نشده باشد، اگر این کلاینت را حذف کنید به موجودی‌تان برمی‌گردد.',
 
+  /* --------------- the inbound form, option for option ---------------- */
+  'Total traffic (GB)': 'ترافیک کل (گیگابایت)',
+  '0 means no limit. The whole inbound stops when it is reached.':
+    '۰ یعنی بی‌حد. وقتی پر شود کل اینباند می‌ایستد.',
+  'Expires in (days)': 'انقضا (روز)',
+  '0 never expires. The whole inbound stops on the day.':
+    '۰ یعنی هیچ‌وقت. در آن روز کل اینباند می‌ایستد.',
+  'ivCheck': 'بررسی IV',
+  'Rejects a repeated initialisation vector - replay protection for the older ciphers.':
+    'بردار اولیه تکراری را رد می‌کند — محافظت در برابر بازپخش، برای رمزنگاری‌های قدیمی‌تر.',
+  'Allow transparent': 'حالت شفاف',
+  'Port mapping': 'نگاشت پورت',
+  'Add a mapping': 'افزودن نگاشت',
+  'Send one incoming port somewhere different from the address above.':
+    'یک پورت ورودی را به جایی غیر از آدرس بالا بفرست.',
+  'No kernel tun': 'بدون tun هسته',
+  'Use the userspace implementation even where the kernel one is available.':
+    'حتی جایی که پیاده‌سازی هسته هست، از پیاده‌سازی فضای کاربر استفاده کن.',
+  'Fallbacks': 'فال‌بک‌ها',
+  'Add a fallback': 'افزودن فال‌بک',
+  'Traffic that does not match is handed to the first fallback that fits.':
+    'ترافیکی که تطبیق نکند به اولین فال‌بک مناسب سپرده می‌شود.',
+
+  'Proxy protocol': 'پروتکل پراکسی',
+  'Read the real client address from a PROXY-protocol header in front.':
+    'آدرس واقعی کلاینت را از هدر PROXY-protocol جلویی بخوان.',
+  'HTTP camouflage': 'استتار HTTP',
+  'Wrap the stream in something that reads like an ordinary HTTP exchange.':
+    'جریان را در چیزی بپیچ که مثل یک تبادل عادی HTTP خوانده شود.',
+  'Request version': 'نسخه درخواست',
+  'Request method': 'متد درخواست',
+  'Request path': 'مسیر درخواست',
+  'One or more, separated by commas.': 'یک یا چند تا، با کاما جدا شده.',
+  'Request headers': 'هدرهای درخواست',
+  'Response version': 'نسخه پاسخ',
+  'Response status': 'کد پاسخ',
+  'Status text': 'متن وضعیت',
+  'Response headers': 'هدرهای پاسخ',
+  'Add a header': 'افزودن هدر',
+  'Headers': 'هدرها',
+  'Accept proxy protocol': 'پذیرش پروتکل پراکسی',
+  'Heartbeat period': 'دوره ضربان',
+  'Seconds between pings that keep a quiet connection open.':
+    'فاصله ثانیه‌ای پینگ‌هایی که اتصال ساکت را باز نگه می‌دارند.',
+  'Stream-up server': 'سرور stream-up',
+  'Padding bytes': 'بایت‌های پرکننده',
+  'No SSE header': 'بدون هدر SSE',
+  'gRPC authority': 'authority در gRPC',
+  'Multi mode': 'حالت چندگانه',
+  'mKCP MTU': 'MTU در mKCP',
+  'TTI (ms)': 'TTI (میلی‌ثانیه)',
+  'Uplink (MB/s)': 'آپلینک (مگابایت بر ثانیه)',
+  'Downlink (MB/s)': 'دانلینک (مگابایت بر ثانیه)',
+  'Congestion': 'کنترل ازدحام',
+  'Read buffer (MB)': 'بافر خواندن (مگابایت)',
+  'Write buffer (MB)': 'بافر نوشتن (مگابایت)',
+
+  'Sockopt': 'تنظیمات سوکت',
+  'Low-level socket settings. Leave off unless you know you need them.':
+    'تنظیمات سطح‌پایین سوکت. تا وقتی مطمئن نیستید خاموش بگذارید.',
+  'Route mark': 'علامت مسیر',
+  'TCP keep-alive interval': 'فاصله keep-alive در TCP',
+  'TCP keep-alive idle': 'بیکاری keep-alive در TCP',
+  'TCP max segment': 'بیشترین قطعه TCP',
+  'TCP user timeout': 'مهلت کاربر TCP',
+  'TCP window clamp': 'محدودیت پنجره TCP',
+  'Sockopt proxy protocol': 'پروتکل پراکسی سوکت',
+  'TCP fast open': 'باز شدن سریع TCP',
+  'Multipath TCP': 'TCP چندمسیره',
+  'Penetrate': 'نفوذ',
+  'IPv6 only': 'فقط IPv6',
+  'Sockopt domain strategy': 'راهبرد دامنه سوکت',
+  'TCP congestion': 'ازدحام TCP',
+  'TProxy': 'TProxy',
+  'Dialer proxy': 'پراکسی شماره‌گیر',
+  'an outbound tag': 'تگ یک اوت‌باند',
+  'Interface name': 'نام رابط شبکه',
+  'External proxy': 'پراکسی بیرونی',
+  'Add an address': 'افزودن آدرس',
+  'Hand out links that point somewhere else - a CDN or a relay in front of this server.':
+    'لینک‌هایی بده که به جای دیگری اشاره کنند — یک CDN یا رله‌ای جلوی این سرور.',
+
+  'Allow insecure': 'پذیرش گواهی نامعتبر',
+  'Accept a certificate that does not verify. For testing only.':
+    'گواهی‌ای که تأیید نمی‌شود را بپذیر. فقط برای تست.',
+  'Disable system root': 'غیرفعال کردن ریشه سیستم',
+  'Session resumption': 'از سرگیری نشست',
+  'Verify peer cert in names': 'بررسی گواهی طرف مقابل در نام‌ها',
+  'Build chain': 'ساخت زنجیره',
+  'Only when the usage above is "issue".': 'فقط وقتی کاربرد بالا روی «issue» باشد.',
+  'ECH force query': 'پرس‌وجوی اجباری ECH',
+  'Show': 'نمایش لاگ',
+  'Log the REALITY handshake. Noisy; for working out why a client will not connect.':
+    'دست‌دادن REALITY را لاگ می‌کند. پرسروصداست؛ برای فهمیدن اینکه چرا کلاینتی وصل نمی‌شود.',
+  'Xver': 'Xver',
+  'Max time difference (ms)': 'بیشترین اختلاف زمان (میلی‌ثانیه)',
+  'Min client version': 'کمترین نسخه کلاینت',
+  'Max client version': 'بیشترین نسخه کلاینت',
+  'mldsa65 seed': 'بذر mldsa65',
+  'mldsa65 verify': 'تأیید mldsa65',
+
   /* ------------------------------- bot -------------------------------- */
   'Bot token from @BotFather': 'توکن ربات از ‎@BotFather',
   'Talk to @BotFather, send /newbot, and paste the token here.':
