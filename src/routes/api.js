@@ -543,6 +543,16 @@ router.post('/update', async (req, res) => {
 router.get('/update/log', (req, res) => res.json(update.state()));
 
 /**
+ * The outcome, once, so the page that missed the restart can still say what
+ * happened. Marking it read is a POST because it changes what the next page
+ * load sees - otherwise "updated to 3.31.0" would greet you forever.
+ */
+router.post('/update/seen', (req, res) => {
+  const settled = update.settle();
+  res.json({ ok: true, state: settled.state || '', to: settled.to || '' });
+});
+
+/**
  * Ports the panel itself owns. An inbound on one of these passes `xray -test`
  * and then kills the service on start, because the address is already taken.
  */

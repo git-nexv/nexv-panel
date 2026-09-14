@@ -83,7 +83,32 @@ function start({ from, to }) {
   return { from, to };
 }
 
-/** What the last update did, plus the tail of its output. */
+/** Long enough for a slow link to finish; past it, something has gone wrong. */
+const RUN_LIMIT_MS = 20 * 60 * 1000;
+
+/** The last thing the updater complained about, for the one-line summary. */
+function failureLine(log) {
+  const lines = String(log || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    // the CLI marks its own errors with [x]
+    if (lines[i].startsWith('[x]')) return lines[i].replace(/^\[x\]\s*/, '');
+  }
+  return '';
+}
+
+/**
+ * What the last update did, plus the tail of its output.
+ *
+ * The state on disk only ever said "running": nothing wrote the end of it,
+ * because the thing that would have written it - the panel - is the thing the
+ * updater restarts halfway through. So the outcome is worked out here instead
+ * of recorded: the panel that answers this question is the one the update
+ * produced, and its own version is the answer.
+ *
+ * That is what makes an update legible after the fact. Before, a page that
+ * missed the moment of the restart had no way of ever learning what happened,
+ * which is why reloading it seemed to fix things at random.
+ */
 function state(lines = 40) {
   let info = null;
   try { info = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch (_) { /* never updated */ }
@@ -91,7 +116,57 @@ function state(lines = 40) {
   try {
     log = fs.readFileSync(LOG_FILE, 'utf8').split('\n').slice(-lines).join('\n').trim();
   } catch (_) { /* no log yet */ }
-  return { ...(info || {}), log };
+
+  const out = { ...(info || {}), log };
+  if (out.state === 'running') {
+    const current = require('../package.json').version;
+    const age = Date.now() - (Number(out.startedAt) || 0);
+    /* the updater marks its own end, which is the only signal that separates
+       "still working" from "stopped without restarting anything" */
+    if (/^UPDATE-FAILED$/m.test(log)) {
+      out.state = 'failed';
+      out.reason = failureLine(log) || 'the updater stopped';
+    } else if (out.to && current === out.to) {
+      // we are the panel it produced
+      out.state = 'done';
+      out.finishedAt = out.finishedAt || Date.now();
+    } else if (/^UPDATE-DONE$/m.test(log)) {
+      out.state = 'done';
+      out.finishedAt = out.finishedAt || Date.now();
+    } else if (age > RUN_LIMIT_MS) {
+      out.state = 'failed';
+      out.reason = 'it did not finish in time';
+    }
+  }
+  // the marker is for us, not for the person reading the output
+  out.log = String(out.log || '').replace(/^UPDATE-(DONE|FAILED)$/gm, '').trim();
+  out.current = require('../package.json').version;
+  out.running = out.state === 'running';
+  out.age = out.startedAt ? Date.now() - Number(out.startedAt) : 0;
+  return out;
 }
 
-module.exports = { available, start, state };
+/**
+ * Put the record beyond "running" for good.
+ *
+ * state() can work the outcome out every time, but only while the record is
+ * there to work from; writing it down once means a later page load gets the
+ * answer without re-deriving it, and that the "updated to x" note is shown
+ * once rather than on every load forever.
+ */
+function settle() {
+  const now = state();
+  if (!now.startedAt || now.state === 'running') return now;
+  writeState({
+    startedAt: now.startedAt,
+    finishedAt: now.finishedAt || Date.now(),
+    from: now.from,
+    to: now.to,
+    state: now.state,
+    reason: now.reason || '',
+    announced: true
+  });
+  return now;
+}
+
+module.exports = { available, start, state, settle, RUN_LIMIT_MS };

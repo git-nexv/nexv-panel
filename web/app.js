@@ -4733,7 +4733,7 @@ async function renderAccount(view) {
  * Offer the update in place. The server hands the job to systemd and restarts
  * itself, so the browser watches /health until the new version answers.
  */
-function updateDialog(info) {
+function updateDialog(info, resuming) {
   if (!info) return;
   // the dialog re-checks as it opens, so a stale chip is never acted on
   const fresh = !info.updateAvailable;
@@ -4741,6 +4741,23 @@ function updateDialog(info) {
   const progress = el('div', { class: 'link-box', hidden: true, style: 'margin-top:12px; max-height:150px' });
   const body = el('div', {}, [note, progress]);
   const say = (text) => { progress.hidden = false; progress.textContent = t(text); };
+
+  /*
+   * An update is already under way. That comes first, before anything about
+   * whether this panel could start one: it is running either way, and watching
+   * it is the only thing this dialog is for right now.
+   */
+  if (resuming && resuming.running) {
+    note.textContent = t('An update is already running. You can close this page; it carries on.');
+    say(resuming.log || 'Working\u2026');
+    watchUpdate(resuming.to, say, resuming.to === resuming.current);
+    return modal({
+      title: `Updating to ${resuming.to || info.latest}`,
+      subtitle: `This panel is running ${resuming.current || info.current}.`,
+      body,
+      width: 460
+    });
+  }
 
   if (!info.canUpdate) {
     note.textContent = t(info.updateBlockedBy || 'Update from the server\u2019s terminal.');
@@ -4809,8 +4826,18 @@ function updateDialog(info) {
 }
 
 /** Poll until the restarted panel reports the new version, then reload. */
+/**
+ * Watch an update through to the other side.
+ *
+ * Twenty minutes rather than five: fetching from GitHub and installing on a
+ * filtered link is slow, and giving up at five minutes was telling people it
+ * had failed while it was still working. Losing the page no longer loses the
+ * thread either - the panel knows an update is running and boot() picks this
+ * back up, so closing the tab and coming back is a way of checking on it
+ * rather than a way of starting again.
+ */
 async function watchUpdate(target, say, sameVersion) {
-  const deadline = Date.now() + 5 * 60 * 1000;
+  const deadline = Date.now() + 20 * 60 * 1000;
   let wentDown = false;
   let wait = 800;
   while (Date.now() < deadline) {
@@ -4826,13 +4853,59 @@ async function watchUpdate(target, say, sameVersion) {
     const restarted = health && (sameVersion ? (wentDown || health.uptime < 20) : health.version === target);
     if (restarted) {
       say(`Updated to ${health.version}. Reloading\u2026`);
+      api.post('/update/seen', {}).catch(() => { /* the reload will ask again */ });
       return setTimeout(() => location.reload(), 1200);
     }
-    let tail = '';
-    try { tail = (await api.get('/update/log')).log || ''; } catch (_) { /* still down */ }
-    if (tail) say(tail);
+    let progress = null;
+    try { progress = await api.get('/update/log'); } catch (_) { /* still down */ }
+    if (progress && progress.state === 'failed') {
+      /* translated in pieces: the sentence carries the updater's own output
+         after it, and a multi-line blob matches no pattern in the dictionary */
+      const why = t(progress.reason || 'see the output below');
+      return say(`${t(`The update stopped: ${why}`)}\n\n${progress.log || ''}`.trim());
+    }
+    if (progress && progress.log) say(progress.log);
+    else if (wentDown) say('The panel is restarting\u2026');
   }
-  say('The update is taking longer than expected. Check the server with: nexv logs 50');
+  say('Still going after twenty minutes. Check the server with: nexv logs 50');
+}
+
+/**
+ * An update is running, and this page was not the one that started it - or was,
+ * and got reloaded. Either way it should say so rather than look idle.
+ */
+async function resumeUpdate() {
+  if (isReseller()) return;
+  let progress = null;
+  try { progress = await api.get('/update/log'); } catch (_) { return; }
+  if (!progress || !progress.startedAt) return;
+
+  if (progress.running) {
+    /* say so on the key too, and keep saying it: the version check runs on a
+       timer and would otherwise paint "up to date" over the top of it */
+    const paint = () => {
+      const chip = document.getElementById('updateChip');
+      if (!chip) return;
+      chip.classList.add('ready');
+      chip.title = t('An update is running');
+      chip.innerHTML = `${icon('update', 15)}<span>${t('Updating\u2026')}</span>`;
+    };
+    paint();
+    const keep = setInterval(paint, 2000);
+    setTimeout(() => clearInterval(keep), 20 * 60 * 1000);
+    return updateDialog(
+      state.version || { current: progress.current, latest: progress.to, updateAvailable: true, canUpdate: true },
+      progress
+    );
+  }
+  /* it finished while nobody was looking: say so once, then forget it */
+  if (progress.state === 'done' && !progress.announced) {
+    toast(`Updated to ${progress.to}`);
+    api.post('/update/seen', {}).catch(() => {});
+  } else if (progress.state === 'failed' && !progress.announced) {
+    toast(`The last update did not finish: ${progress.reason || 'see Logs'}`, 'err');
+    api.post('/update/seen', {}).catch(() => {});
+  }
 }
 
 
@@ -5484,7 +5557,9 @@ async function boot() {
   hydrateIcons();
   buildDock();
   navigate(location.hash.slice(1) || 'dashboard');
-  checkForUpdate();
+  /* an update started before this page existed, or before it was reloaded;
+     after the version check, so the key it paints is not painted over */
+  checkForUpdate().then(resumeUpdate, resumeUpdate);
   /* Asking is cheap - the server answers from a number it keeps warm itself,
      without touching the network - so ask often enough that a release shows up
      while you are looking at the panel rather than the next time you sign in. */

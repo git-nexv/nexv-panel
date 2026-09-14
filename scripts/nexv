@@ -133,12 +133,32 @@ lock_sum() {
 
 act_update() {
   need_root
-  local before after
+  local before after rc
 
+  # Every step is announced, because the panel shows this output while it waits
+  # and a silent five minutes is indistinguishable from a hang.
   echo "Fetching the latest version..."
   before="$(lock_sum)"
-  git -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH" -q || { err "Could not reach the repository"; return 1; }
-  git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH" -q
+
+  # A filtered link does not refuse the connection, it stalls on it. Without a
+  # limit git waits forever, the panel waits on git, and the person watching is
+  # told nothing at all. Give up after ten minutes, or sooner if the transfer
+  # drops under 1 KB/s for a minute, and say which of the two it was.
+  timeout 600 git -C "$INSTALL_DIR" \
+    -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 \
+    fetch --depth 1 origin "$BRANCH" -q
+  rc=$?
+  if [[ $rc -ne 0 ]]; then
+    if [[ $rc -eq 124 ]]; then
+      err "Could not reach the repository: it did not answer within ten minutes."
+    else
+      err "Could not reach the repository (git exited $rc)."
+    fi
+    echo "UPDATE-FAILED"
+    return 1
+  fi
+
+  git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH" -q || { err "Could not apply the new files"; echo "UPDATE-FAILED"; return 1; }
   after="$(lock_sum)"
 
   # npm install is nearly all of the time an update takes, and nearly every
@@ -146,8 +166,15 @@ act_update() {
   # when there is nothing installed yet - and skip it otherwise.
   if [[ $before != "$after" || ! -d $INSTALL_DIR/node_modules ]]; then
     echo "Dependencies changed - installing..."
-    ( cd "$INSTALL_DIR" && npm install --omit=dev --no-audit --no-fund --prefer-offline --no-progress --loglevel=error ) \
-      || { err "npm install failed"; return 1; }
+    ( cd "$INSTALL_DIR" && timeout 900 npm install --omit=dev --no-audit --no-fund \
+        --prefer-offline --no-progress --fetch-timeout=120000 --fetch-retries=2 --loglevel=error )
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+      [[ $rc -eq 124 ]] && err "npm install gave up after fifteen minutes - the registry is not answering." \
+                       || err "npm install failed (exit $rc)."
+      echo "UPDATE-FAILED"
+      return 1
+    fi
   else
     echo "Dependencies unchanged - skipping npm install."
   fi
@@ -156,6 +183,7 @@ act_update() {
   echo "Restarting the panel..."
   systemctl restart "$SERVICE"
   ok "Panel updated"
+  echo "UPDATE-DONE"
   # a fresh install generates a secret web path; never let the admin lose it
   sleep 2
   act_url

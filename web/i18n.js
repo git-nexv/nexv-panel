@@ -384,6 +384,23 @@ const FA = {
 
   /* ---------------------------- updating ------------------------------ */
   'Starting the update…': 'شروع به‌روزرسانی…',
+  'An update is running': 'یک به‌روزرسانی در حال اجراست',
+  'Updating…': 'در حال به‌روزرسانی…',
+  'An update is already running. You can close this page; it carries on.':
+    'یک به‌روزرسانی از قبل در جریان است. می‌توانید این صفحه را ببندید؛ خودش ادامه می‌دهد.',
+  'Working…': 'در حال کار…',
+  'The panel is restarting…': 'پنل در حال ری‌استارت است…',
+  'Still going after twenty minutes. Check the server with: nexv logs 50':
+    'بعد از بیست دقیقه هنوز ادامه دارد. سرور را با این دستور ببینید: nexv logs 50',
+  'Could not reach the repository: it did not answer within ten minutes.':
+    'نتوانست به مخزن برسد: تا ده دقیقه جوابی نداد.',
+  'npm install gave up after fifteen minutes - the registry is not answering.':
+    'نصب npm بعد از پانزده دقیقه رها شد — رجیستری جواب نمی‌دهد.',
+  'Could not apply the new files': 'نتوانست فایل‌های تازه را اعمال کند',
+  'the updater stopped': 'به‌روزرسان متوقف شد',
+  'it did not finish in time': 'در زمان مقرر تمام نشد',
+  'see the output below': 'خروجی پایین را ببینید',
+  'see Logs': 'رویدادها را ببینید',
   'just now': 'همین حالا',
   'a minute ago': 'یک دقیقه پیش',
   'a moment ago': 'لحظاتی پیش',
@@ -934,6 +951,10 @@ const PATTERNS = [
   [/^(\d+) minutes ago$/, (m) => `${m[1]} دقیقه پیش`],
   [/^(\d+) hours ago$/, (m) => `${m[1]} ساعت پیش`],
   [/^(.+) is missing - update with: nexv update$/, (m) => `${m[1]} وجود ندارد — با این دستور به‌روزرسانی کنید: nexv update`],
+  [/^Updating to (.+)$/, (m) => `در حال به‌روزرسانی به ${m[1]}`],
+  [/^Updated to (.+)$/, (m) => `به ${m[1]} به‌روز شد`],
+  [/^The update stopped: (.+)$/, (m) => `به‌روزرسانی متوقف شد: ${m[1]}`],
+  [/^The last update did not finish: (.+)$/, (m) => `آخرین به‌روزرسانی تمام نشد: ${m[1]}`],
   [/^You are on (.+)$/, (m) => `شما روی ${m[1]} هستید`],
   [/^This panel is running (.+)\.$/, (m) => `این پنل ${m[1]} را اجرا می‌کند.`],
   [/^Updated to (.+)\. Reloading…$/, (m) => `به ${m[1]} به‌روز شد. در حال بارگذاری مجدد…`],
