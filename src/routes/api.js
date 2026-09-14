@@ -905,18 +905,20 @@ router.post('/inbounds/import', async (req, res) => {
   if (clash) return bad(res, clash);
 
   /*
-   * A client name is unique across the panel. Renaming people silently would
-   * break the links they already hold, so by default a clash stops the import;
-   * `replace` is for the case the admin means - the same people, moved here.
+   * A client name is unique among one owner's clients. Renaming people silently
+   * would break the links they already hold, so by default a clash stops the
+   * import; `replace` is for the case the admin means - the same people, moved
+   * here. An import is the leader's, so a reseller's client of the same name is
+   * not in the way.
    */
-  const taken = new Set(db.data.clients.map((c) => c.email));
+  const taken = new Set(db.data.clients.filter((c) => !c.resellerId).map((c) => c.email));
   const collisions = clients.filter((c) => taken.has(c.email)).map((c) => c.email);
   if (collisions.length && !body.replace) {
     return bad(res, `these client names already exist: ${collisions.slice(0, 5).join(', ')}${collisions.length > 5 ? '…' : ''}. Tick "replace" to move them here.`);
   }
   if (collisions.length) {
     const names = new Set(collisions);
-    db.data.clients = db.data.clients.filter((c) => !names.has(c.email));
+    db.data.clients = db.data.clients.filter((c) => c.resellerId || !names.has(c.email));
   }
 
   inbound.id = db.id();
@@ -1003,6 +1005,38 @@ function owns(req, client) {
   return client.resellerId === req.reseller.id;
 }
 
+/**
+ * Is this client name free?
+ *
+ * A name belongs to whoever made it. The leader's "ali" and a reseller's "ali"
+ * are two different people who have never met, and neither panel has any
+ * business telling the other what to call its customers - so the check is
+ * against the clients of the same owner and nobody else's.
+ *
+ * Xray is not the reason the rule existed: what goes into its config is
+ * clientTag(), which carries the client's own id and so is unique whatever the
+ * name. The one place a name really is an identifier is SOCKS and HTTP, where
+ * it is the login the client types, and there it has to be free on that
+ * inbound no matter who owns it.
+ *
+ * Returns the complaint, or '' when the name may be used.
+ */
+function nameTaken(client, inbound, ignoreId) {
+  const name = client.email;
+  const mine = String(client.resellerId || '');
+  const others = db.data.clients.filter((c) => c.id !== ignoreId);
+
+  if (others.some((c) => c.email === name && String(c.resellerId || '') === mine)) {
+    return 'that client name is already in use';
+  }
+  const protocol = inbound && inbound.protocol;
+  if ((protocol === 'socks' || protocol === 'http')
+      && others.some((c) => c.email === name && c.inboundId === inbound.id)) {
+    return 'on a SOCKS or HTTP inbound the name is the login, so it has to be free on that inbound';
+  }
+  return '';
+}
+
 function normalizeClient(body, existing, inbound) {
   const c = Object.assign({}, existing || {}, {
     // a newline in a name makes the export unreadable to other panels
@@ -1086,9 +1120,8 @@ router.get('/clients', (req, res) => {
 async function createClient(inbound, body) {
   const client = normalizeClient(body, null, inbound);
   if (!client.email) throw new Error('a client name (email) is required');
-  if (db.data.clients.some((c) => c.email === client.email)) {
-    throw new Error('that client name is already in use');
-  }
+  const clash = nameTaken(client, inbound, null);
+  if (clash) throw new Error(clash);
   client.id = db.id();
   client.inboundId = inbound.id;
   client.up = 0;
@@ -1172,9 +1205,8 @@ router.put('/clients/:id', async (req, res) => {
   const updated = normalizeClient(req.body || {}, before, inb);
   updated.id = before.id;
   updated.inboundId = inb.id;
-  if (d.clients.some((c) => c.id !== updated.id && c.email === updated.email)) {
-    return bad(res, 'that client name is already in use');
-  }
+  const clash = nameTaken(updated, inb, updated.id);
+  if (clash) return bad(res, clash);
   d.clients[idx] = updated;
   db.saveNow();
   await xray.apply();

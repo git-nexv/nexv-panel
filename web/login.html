@@ -11,8 +11,8 @@
 <div class="login-wrap">
   <!-- the two things a person may want before they can reach Settings -->
   <div class="login-keys">
-    <button class="lang-key" id="langToggle" type="button" title="Language">EN</button>
-    <button class="theme-switch" id="themeToggle" type="button" role="switch" title="Light or dark">
+    <button class="lang-key" id="langToggle" type="button" data-en-title="Language" title="Language">EN</button>
+    <button class="theme-switch" id="themeToggle" type="button" role="switch" data-en-title="Light or dark" title="Light or dark">
       <span class="ts-mark ts-sun" data-icon="sun"></span>
       <span class="ts-mark ts-moon" data-icon="theme"></span>
       <span class="ts-knob"><span class="ts-face"></span></span>
@@ -50,28 +50,19 @@ const BASE = window.__NEXV_BASE__ || './';
 
 /* ---- the same two keys the panel's header carries ---- */
 const I18N = window.NEXV_I18N;
-const SIGN_IN = { en: 'Sign in', fa: 'ورود' };
-const SIGNING = { en: 'Signing in…', fa: 'در حال ورود…' };
-const LOGIN_TEXT = {
-  fa: {
-    'Welcome back': 'خوش آمدید',
-    'Sign in to manage your server': 'برای مدیریت سرورتان وارد شوید',
-    'Username': 'نام کاربری',
-    'Password': 'رمز عبور',
-    'Xray-core management': 'مدیریت هسته Xray'
-  }
-};
 
+/* the dictionary is the panel's own, so a word translated there is translated
+   here too and there is no second copy to keep in step */
 function paintLanguage() {
-  const code = I18N.lang();
-  document.getElementById('langToggle').textContent = code === 'fa' ? 'FA' : 'EN';
-  const words = LOGIN_TEXT[code];
+  document.getElementById('langToggle').textContent = I18N.lang() === 'fa' ? 'FA' : 'EN';
   for (const node of document.querySelectorAll('[data-en]')) {
-    const english = node.getAttribute('data-en');
-    node.textContent = (words && words[english]) || english;
+    node.textContent = I18N.t(node.getAttribute('data-en'));
+  }
+  for (const node of document.querySelectorAll('[data-en-title]')) {
+    node.setAttribute('title', I18N.t(node.getAttribute('data-en-title')));
   }
   const button = document.getElementById('submitBtn');
-  if (!button.disabled) button.textContent = SIGN_IN[code] || SIGN_IN.en;
+  if (!button.disabled) button.textContent = I18N.t('Sign in');
 }
 
 I18N.setLang(I18N.stored() || (document.documentElement.dataset.lang || 'en'));
@@ -108,17 +99,17 @@ paintLanguage();
  */
 const RESELLER = window.__NEXV_RESELLER__ || null;
 const REGISTER_TEXT = {
-  en: { title: 'Set up your panel', sub: 'Choose a username and password. This happens once.', go: 'Create my account' },
-  fa: { title: 'پنل خود را بسازید', sub: 'یک نام کاربری و رمز انتخاب کنید. این کار فقط یک بار انجام می‌شود.', go: 'ساخت حساب' }
+  title: 'Set up your panel',
+  sub: 'Choose a username and password. This happens once.',
+  go: 'Create my account'
 };
 const registering = () => !!(RESELLER && RESELLER.register);
 
 function paintRegister() {
   if (!registering()) return;
-  const words = REGISTER_TEXT[I18N.lang()] || REGISTER_TEXT.en;
-  document.querySelector('.login-title').textContent = words.title;
-  document.querySelector('.login-sub').textContent = words.sub;
-  if (!submitBtn.disabled) submitBtn.textContent = words.go;
+  document.querySelector('.login-title').textContent = I18N.t(REGISTER_TEXT.title);
+  document.querySelector('.login-sub').textContent = I18N.t(REGISTER_TEXT.sub);
+  if (!submitBtn.disabled) submitBtn.textContent = I18N.t(REGISTER_TEXT.go);
   document.getElementById('password').setAttribute('autocomplete', 'new-password');
 }
 document.getElementById('langToggle').addEventListener('click', () => setTimeout(paintRegister, 0));
@@ -131,16 +122,14 @@ function fail(message) {
   errorBox.textContent = message;
   errorBox.classList.remove('hidden');
   submitBtn.disabled = false;
-  submitBtn.textContent = registering()
-    ? (REGISTER_TEXT[I18N.lang()] || REGISTER_TEXT.en).go
-    : (SIGN_IN[I18N.lang()] || SIGN_IN.en);
+  submitBtn.textContent = I18N.t(registering() ? REGISTER_TEXT.go : 'Sign in');
 }
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   errorBox.classList.add('hidden');
   submitBtn.disabled = true;
-  submitBtn.textContent = SIGNING[I18N.lang()] || SIGNING.en;
+  submitBtn.textContent = I18N.t('Signing in…');
 
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), 20000);

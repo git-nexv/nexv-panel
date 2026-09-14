@@ -120,10 +120,19 @@ function duration(seconds) {
   return `${m}m`;
 }
 
+/**
+ * A date, in the calendar the reader actually uses.
+ *
+ * "14 Sept 2026" in the middle of a Persian page is not a translation problem
+ * you can solve with a dictionary - the month names and the calendar itself are
+ * wrong. Persian gets fa-IR, which is Jalali with Persian digits; everything
+ * else keeps the unambiguous day-month-year it had.
+ */
 function fmtDate(ts) {
-  if (!ts) return 'Never';
+  if (!ts) return t('Never');
+  const locale = (window.NEXV_I18N && window.NEXV_I18N.lang() === 'fa') ? 'fa-IR' : 'en-GB';
   try {
-    return new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(ts));
+    return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(ts));
   } catch (_) { return new Date(ts).toLocaleString(); }
 }
 
@@ -377,8 +386,10 @@ function statCard(label, withBar) {
   return {
     node,
     set(nextValue, nextSub, percent, kind) {
-      if (value.textContent !== nextValue) value.textContent = nextValue;
-      const subText = nextSub || '';
+      // straight into the node, so this is the only place t() can be applied
+      const shown = t(nextValue);
+      if (value.textContent !== shown) value.textContent = shown;
+      const subText = t(nextSub || '');
       if (sub.textContent !== subText) sub.textContent = subText;
       if (!bar) return;
       const width = `${Math.min(100, percent || 0)}%`;
@@ -520,7 +531,10 @@ async function renderDashboard(view) {
     ])
   );
 
-  const write = (node, text) => { if (node.textContent !== text) node.textContent = text; };
+  const write = (node, text) => {
+    const shown = t(text);
+    if (node.textContent !== shown) node.textContent = shown;
+  };
 
   const paint = async () => {
     let status;
@@ -543,12 +557,12 @@ async function renderDashboard(view) {
     const running = status.xray.running;
     const stateClass = `chip ${running ? 'ok' : 'danger'}`;
     if (xrayState.className !== stateClass) xrayState.className = stateClass;
-    const stateHtml = `<i></i>${running ? 'Running' : 'Stopped'}`;
+    const stateHtml = `<i></i>${t(running ? 'Running' : 'Stopped')}`;
     if (xrayState.innerHTML !== stateHtml) xrayState.innerHTML = stateHtml;
     write(xrayVersion, status.xray.version || 'version unknown');
 
     write(serverLines.hostname, `Hostname: ${s.hostname}`);
-    write(serverLines.domain, `Panel domain: ${status.settings.domain || 'not set'}`);
+    write(serverLines.domain, `Panel domain: ${status.settings.domain || t('not set')}`);
     write(serverLines.load, `Load average: ${s.loadavg.map((n) => n.toFixed(2)).join(' / ')}`);
     write(serverLines.counts, `Outbounds: ${status.counts.outbounds} \u00b7 Routing rules: ${status.counts.routingRules}`);
     write(serverLines.clients, `Expired: ${status.counts.clientsExpired} \u00b7 Out of quota: ${status.counts.clientsDepleted}`);
@@ -643,7 +657,7 @@ function mountTable(wrap, table) {
 }
 
 function emptyState(wrap, message) {
-  wrap.innerHTML = `<div class="empty">${icon('empty', 42)}<div>${message}</div></div>`;
+  wrap.innerHTML = `<div class="empty">${icon('empty', 42)}<div>${t(message)}</div></div>`;
 }
 
 /* ----------------------------- page: inbounds ---------------------------- */
@@ -2846,9 +2860,9 @@ async function renderSettings(view) {
     try {
       const result = await api.post('/settings/remark-preview', { template: template.value });
       preview.textContent = result.preview || '(empty)';
-      previewNote.textContent = result.sample
+      previewNote.textContent = t(result.sample
         ? 'Made-up figures — there is no client to try it on yet.'
-        : `As it would name ${result.from}’s config.`;
+        : `As it would name ${result.from}’s config.`);
     } catch (err) { preview.textContent = err.message; }
   };
   template.addEventListener('input', () => {
@@ -3817,9 +3831,9 @@ async function renderBot(view) {
   const statusChip = el('span', { class: 'chip' });
   const paintStatus = (status) => {
     statusChip.className = `chip ${status.running ? 'ok' : ''}`;
-    statusChip.innerHTML = `<i></i>${status.running
+    statusChip.innerHTML = `<i></i>${t(status.running
       ? `Running${status.username ? ` as @${status.username}` : ''}`
-      : 'Stopped'}`;
+      : 'Stopped')}`;
   };
   paintStatus(data.status);
 
@@ -4268,7 +4282,7 @@ async function renderBot(view) {
 async function renderLogs(view) {
   const logs = await api.get('/logs');
   if (!logs.length) {
-    view.append(el('div', { class: 'card empty', html: `${icon('empty', 42)}<div>Nothing logged yet.</div>` }));
+    view.append(el('div', { class: 'card empty', html: `${icon('empty', 42)}<div>${t('Nothing logged yet.')}</div>` }));
     return;
   }
   const wrap = el('div', { class: 'table-wrap' });
