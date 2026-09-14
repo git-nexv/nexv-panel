@@ -1392,6 +1392,9 @@ function inboundForm(existing) {
 
 /* ------------------------------ page: clients ---------------------------- */
 
+/** Sold with the clock unwound, and not yet used. */
+const waitingToStart = (c) => !!c.startAfterFirstUse && !c.expiryTime && (c.expiryDays || 0) > 0;
+
 /*
  * One word for where a client stands, for the chip at the end of its row. Only
  * one can be shown, so the order decides: a client the admin switched off reads
@@ -1566,13 +1569,21 @@ async function renderClients(view) {
       ]),
       el('td', { class: 'muted num', text: c.totalGB ? `${c.totalGB} GB` : 'Unlimited' }),
       el('td', { class: 'muted' }, [
-        el('div', { text: fmtDate(c.expiryTime) }),
-        left !== null ? el('div', { class: 'faint', style: 'font-size:11px', text: left > 0 ? `${left} days left` : 'past due' }) : null
+        el('div', { text: waitingToStart(c) ? 'Not started' : fmtDate(c.expiryTime) }),
+        waitingToStart(c)
+          ? el('div', { class: 'faint', style: 'font-size:11px', text: `${c.expiryDays} days on first use` })
+          : (left !== null ? el('div', { class: 'faint', style: 'font-size:11px', text: left > 0 ? `${left} days left` : 'past due' }) : null)
       ]),
       el('td', {}, [statusChip]),
       el('td', {}, [el('div', { class: 'row-actions' }, [
         shareable ? el('button', { class: 'btn icon ghost', title: 'QR code and links', html: icon('qr'), onclick: () => showClientLink(c) }) : null,
-        shareable ? el('button', { class: 'btn icon ghost', title: 'Copy config link', html: icon('copy'), onclick: () => copy(c.link) }) : null,
+        el('button', {
+          class: 'btn icon ghost', title: 'Copy the subscription link', html: icon('copy'),
+          /* the subscription, not the raw config: it survives the config being
+             changed, carries the quota and expiry back to the app, and is the
+             one link worth giving anybody */
+          onclick: () => copy(c.subLink || c.link)
+        }),
         el('button', {
           class: 'btn icon ghost', title: 'Where its traffic goes',
           html: icon('activity'), onclick: () => showClientActivity(c)
@@ -1918,8 +1929,36 @@ function clientForm(existing) {
     hint: 'How much traffic this client may use in total. 0 means unlimited.'
   });
 
-  const days = el('input', { type: 'number', min: '0', value: v.expiryTime ? Math.max(0, daysLeft(v.expiryTime)) : 30 });
+  const days = el('input', {
+    type: 'number', min: '0',
+    value: v.expiryTime ? Math.max(0, daysLeft(v.expiryTime)) : (v.expiryDays || 30)
+  });
   formField(form, 'Valid for (days)', days, { hint: '0 means no expiry' });
+
+  /*
+   * Sold today, installed on Friday. Somebody who buys a month and does not
+   * get round to adding the link for four days has paid for four days of
+   * nothing, so the clock can be left unwound until the config is first used.
+   */
+  const startOnUse = el('input', { type: 'checkbox' });
+  startOnUse.checked = !!v.startAfterFirstUse;
+  const startedNote = el('div', { class: 'hint' });
+  const paintStarted = () => {
+    startedNote.textContent = v.startedAt
+      ? `First used ${fmtDate(v.startedAt)} — the clock is running.`
+      : (startOnUse.checked
+        ? 'The days begin the first time this config carries traffic, not now.'
+        : 'The days begin as soon as you save.');
+  };
+  startOnUse.addEventListener('change', paintStarted);
+  paintStarted();
+  formField(form, 'Start the clock', el('div', {}, [
+    el('label', { class: 'switch' }, [
+      startOnUse, el('span', { class: 'track' }),
+      el('span', { class: 'muted', text: 'Only after the first use' })
+    ]),
+    startedNote
+  ]), { full: true });
 
   const limitIp = formField(form, 'Concurrent IP limit', el('input', { type: 'number', min: '0', value: v.limitIp || 0 }), {
     hint: 'Addresses seen at once in a five-minute window. Over it, the client is cut off until the extras go quiet. 0 means no limit.'
@@ -1948,13 +1987,18 @@ function clientForm(existing) {
       kind: 'primary',
       onClick: async (close) => {
         const dayCount = Number(days.value);
+        /* waiting for first use means no expiry is written yet - the days are
+           kept to one side and become a date when traffic first moves */
+        const waiting = startOnUse.checked && !v.startedAt;
         const payload = {
           email: email.value.trim(),
           inboundId: inboundSel.value,
           uuid: uuid.value.trim() || undefined,
           password: password.value.trim() || undefined,
           totalGB: Number(totalGB.value),
-          expiryTime: dayCount > 0 ? Date.now() + dayCount * 86400000 : 0,
+          startAfterFirstUse: startOnUse.checked,
+          expiryDays: dayCount,
+          expiryTime: waiting ? 0 : (dayCount > 0 ? Date.now() + dayCount * 86400000 : 0),
           limitIp: Number(limitIp.value),
           flow: flowSel.value,
           wgPublicKey: wgPublicKey.value.trim(),
@@ -3049,13 +3093,22 @@ async function renderBot(view) {
           } catch (err) { toast(err.message, 'err'); }
         }
       }),
-      startBtn,
+      /* the token being valid is not the same as the bot being able to reach
+         you, and it is the second one that a sale depends on */
       el('button', {
-        class: 'btn ghost', text: 'Send me a test message',
-        onclick: async () => {
-          try { await api.post('/bot/ping', {}); toast('Sent'); } catch (err) { toast(err.message, 'err'); }
+        class: 'btn ghost', text: 'Send me a test order',
+        title: 'Sends the message a real receipt would send, so you can see it arrive',
+        onclick: async (event) => {
+          const key = event.currentTarget;
+          key.disabled = true;
+          try {
+            await api.post('/bot/test-message', {});
+            toast('Sent — check Telegram');
+          } catch (err) { toast(err.message, 'err'); }
+          key.disabled = false;
         }
-      })
+      }),
+      startBtn,
     ]),
     el('div', { class: 'hint', style: 'margin-top:12px', text: data.adminLinked
       ? 'The admin chat is linked, so orders and alerts can reach you.'

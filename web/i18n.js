@@ -159,6 +159,31 @@ const FA = {
   '0 means no expiry': '۰ یعنی بدون انقضا',
   'How much traffic this client may use in total. 0 means unlimited.':
     'مجموع ترافیکی که این کلاینت می‌تواند مصرف کند. ۰ یعنی نامحدود.',
+  'Start the clock': 'شروع شمارش',
+  'Only after the first use': 'فقط بعد از اولین استفاده',
+  'The days begin the first time this config carries traffic, not now.':
+    'روزها از اولین باری که این کانفیگ ترافیک رد کند شروع می‌شوند، نه از حالا.',
+  'The days begin as soon as you save.': 'روزها به‌محض ذخیره شروع می‌شوند.',
+  'Not started': 'شروع نشده',
+  'Copy the subscription link': 'کپی لینک سابسکریپشن',
+  'Copied to clipboard': 'کپی شد',
+
+  /* ---------------------------- outbounds ----------------------------- */
+  'Chain to another server': 'اتصال به سرور دیگر',
+  'New outbound': 'اوت‌باند جدید',
+  'Test this outbound': 'تست این اوت‌باند',
+  'Add a server to chain to': 'افزودن سروری برای اتصال زنجیره‌ای',
+  'Read it': 'بخوانش',
+  'Server address': 'آدرس سرور',
+  'Server port': 'پورت سرور',
+  'Security': 'امنیت',
+  'Fingerprint': 'اثر انگشت',
+  'REALITY public key': 'کلید عمومی REALITY',
+  'REALITY short id': 'شناسه کوتاه REALITY',
+  'The name to ask the far server for': 'نامی که از سرور مقابل خواسته می‌شود',
+  'Only from these inbounds': 'فقط از این اینباندها',
+  'Send me a test order': 'یک سفارش آزمایشی برایم بفرست',
+  'Sent — check Telegram': 'ارسال شد — تلگرام را ببینید',
 
   /* ----------------------------- activity ----------------------------- */
   'Sites': 'سایت‌ها',

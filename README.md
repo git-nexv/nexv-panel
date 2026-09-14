@@ -126,9 +126,14 @@ corner still reads - `web/i18n.js` is one table and a line fixes one.
 - **Dashboard** — CPU, memory, disk, live network speed, Xray state, totals.
 - **Inbounds** — a tabbed editor (Basics, Protocol, Stream, Security, Sniffing)
   covering transport options, TLS and REALITY, certificates and sniffing.
-- **Clients** — accounts per inbound, with quota, expiry, QR codes and links,
-  a live count of who is active, disabled, expired or out of quota, a search
-  box, and one menu that clears out everyone a quota or a date has finished.
+- **Clients** — accounts per inbound, with quota, expiry, QR codes and links.
+  A client can be sold with its clock unwound: the days begin the first time
+  the config carries traffic, so somebody who buys on Monday and installs on
+  Friday has not lost four days of the month they paid for. The copy key hands
+  over the subscription link, which keeps working when the config behind it
+  changes. There is also a live count of who is active, disabled, expired or
+  out of quota, a search box, and one menu that clears out everyone a quota or
+  a date has finished.
   A client's concurrent IP limit is enforced: over it, the client is cut off
   until the extra addresses go quiet, and the Clients page says so. Each client
   also has a "what is it doing" view: where its connections went, grouped into
@@ -146,6 +151,15 @@ corner still reads - `web/i18n.js` is one table and a line fixes one.
 - **Routing** — ordered rules that pick an outbound per domain, IP, port or user.
   Rules pick their inbounds from a list of the ones you have, rather than asking
   you to retype a generated tag.
+- **Bot** — a Telegram bot that sells subscriptions. A buyer picks a plan, pays
+  by card or crypto, and sends a photo of the receipt; the config is handed over
+  **the moment the receipt arrives**, so nobody waits on the admin being awake.
+  The admin gets the receipt with the buyer's username and numeric id and two
+  keys: approve, or reject. Rejecting cuts the config off and renames it, in the
+  buyer's own app, to say the payment was not approved — so a reversed sale is
+  not a mystery to support. "Send me a test order" sends that same message with
+  made-up figures, which is the one way to find out the bot can reach you before
+  a real sale depends on it.
 - **Settings** — six tabs: general (domain, ports, secret path), config names,
   TLS files, backup and restore, the account, and the event log.
   - **Config names** is a template for what each config calls itself in the

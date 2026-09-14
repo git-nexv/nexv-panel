@@ -89,6 +89,10 @@ function remarkValues(inb, client) {
   const expiry = Number(client.expiryTime || 0);
   const daysLeft = expiry ? Math.ceil((expiry - Date.now()) / 86400000) : 0;
 
+  /* bought but not started: it has its full run ahead of it, and saying the
+     infinity sign there would be a promise the panel is not making */
+  const waiting = !expiry && client.startAfterFirstUse && (client.expiryDays || 0) > 0;
+
   return {
     inbound: inb.remark || inb.tag || '',
     client: client.email || '',
@@ -96,7 +100,7 @@ function remarkValues(inb, client) {
     quota: quota ? readable(quota) : INFINITY,
     usage: quota ? `${readable(used)} / ${readable(quota)}` : readable(used),
     left: quota ? readable(Math.max(0, quota - used)) : INFINITY,
-    days: expiry ? (daysLeft > 0 ? String(daysLeft) : '0') : INFINITY,
+    days: expiry ? (daysLeft > 0 ? String(daysLeft) : '0') : (waiting ? String(client.expiryDays) : INFINITY),
     expiry: expiry ? new Date(expiry).toISOString().slice(0, 10) : INFINITY,
     protocol: inb.protocol || '',
     port: String(inb.port || ''),
@@ -111,6 +115,13 @@ function remarkValues(inb, client) {
  * the admin can see and fix, where a missing word is a mystery.
  */
 function remarkFor(inb, client, template) {
+  /*
+   * A client cut off for a reason the buyer should see - a receipt that did
+   * not hold up - carries that reason as its whole name. It is the only thing
+   * the panel can put in front of somebody whose app is still pointed at us.
+   */
+  if (client.blockedReason) return String(client.blockedReason);
+
   const tpl = template !== undefined && template !== null && template !== ''
     ? String(template)
     : (db.settings.remarkTemplate || DEFAULT_REMARK);
@@ -185,7 +196,13 @@ function subscriptionFor(subId) {
   const clients = d.clients.filter((c) => c.subId === subId);
   const links = [];
   for (const c of clients) {
-    if (c.enable === false) continue;
+    /*
+     * A blocked client stays in the list on purpose. It cannot connect - Xray
+     * does not carry it at all - but its entry still arrives in the app, and
+     * its name is the reason it stopped working. Dropping it would leave the
+     * buyer with a subscription that silently empties itself.
+     */
+    if (c.enable === false && !c.blockedReason) continue;
     const inb = d.inbounds.find((i) => i.id === c.inboundId);
     if (!inb || inb.enable === false) continue;
     const link = buildLink(inb, c);

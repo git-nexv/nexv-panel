@@ -468,7 +468,35 @@ async function takeReceipt(ctx, message) {
   order.receiptAt = Date.now();
   db.saveNow();
 
-  await send(ctx.chatId, 'رسید شما دریافت شد ✅\nپس از تایید، کانفیگ همینجا برایتان ارسال می‌شود.');
+  /*
+   * Hand the config over now, check the receipt afterwards.
+   *
+   * A buyer who has paid should be connected in the next few seconds, not
+   * whenever the admin next looks at their phone - and the admin loses nothing
+   * by it, because rejecting a receipt later cuts the config off and tells the
+   * buyer why. Waiting only ever cost the honest customer.
+   */
+  const handed = await deliverOrder(order);
+  if (handed.ok) {
+    order.status = 'delivered';
+    order.clientId = handed.client.id;
+    db.saveNow();
+    await send(ctx.chatId, [
+      '<b>اشتراک شما آماده است ✅</b>',
+      `${escapeHtml(order.planName)}`,
+      '',
+      'لینک اشتراک:',
+      `<code>${escapeHtml(handed.url)}</code>`,
+      '',
+      'این لینک را در برنامه‌تان به‌عنوان Subscription اضافه کنید.',
+      'رسید شما در حال بررسی است؛ در صورت تایید نشدن، اشتراک قطع می‌شود.'
+    ].join('\n'), backRow());
+  } else {
+    order.status = 'pending';
+    order.error = handed.error;
+    db.saveNow();
+    await send(ctx.chatId, 'رسید شما دریافت شد ✅\nپس از بررسی، کانفیگ همینجا برایتان ارسال می‌شود.');
+  }
 
   const admin = adminChat();
   if (!admin) return true;
@@ -477,7 +505,11 @@ async function takeReceipt(ctx, message) {
     `اشتراک: ${escapeHtml(order.planName)}`,
     `مبلغ: ${escapeHtml(String(order.price))} ${escapeHtml(b.currency)}`,
     `روش: ${order.method === 'crypto' ? 'ارز دیجیتال' : order.method === 'card' ? 'کارت به کارت' : '-'}`,
-    ...buyerLines(order)
+    ...buyerLines(order),
+    '',
+    handed.ok
+      ? `کانفیگ همین حالا تحویل داده شد: <code>${escapeHtml(handed.client.email)}</code>\nاگر رسید درست نبود، «رد» بزنید تا قطع شود.`
+      : `تحویل خودکار انجام نشد: ${escapeHtml(handed.error || 'نامشخص')}`
   ].join('\n');
   const keys = [[
     { text: '✅ تایید', callback_data: `b:ok:${order.id}` },
@@ -528,64 +560,125 @@ async function cancelOrder(ctx, orderId) {
   return showScreen(ctx, 'start');
 }
 
-/** The admin approved: cut a real client on the plan's inbound and deliver it. */
+/**
+ * Cut a real client on the plan's inbound and work out its subscription link.
+ * Shared by the delivery that happens the moment a receipt arrives and by the
+ * admin approving an order that could not be delivered then.
+ */
+async function deliverOrder(order) {
+  const b = bot();
+  const plan = b.plans.find((p) => p.id === order.planId);
+  const inbound = db.data.inbounds.find((i) => i.id === (plan && plan.inboundId));
+  if (!plan || !inbound) return { ok: false, error: 'اشتراک یا اینباند آن پیدا نشد' };
+
+  try {
+    const client = await require('./routes/api').createClient(inbound, {
+      email: `tg-${order.userId}-${String(order.id).slice(0, 4)}`,
+      totalGB: plan.gb || 0,
+      /* the clock starts when they first use it, not when they paid: a buyer
+         who installs tomorrow has not lost a day of what they bought */
+      startAfterFirstUse: true,
+      expiryDays: plan.days || 0,
+      expiryTime: 0,
+      tgId: String(order.userId),
+      comment: `${plan.name} - فروش ربات`
+    });
+    return { ok: true, client, plan, url: require('./routes/api').subUrl(client.subId) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+/** The admin looked at the receipt and it was good. */
 async function approveOrder(ctx, orderId) {
   const b = bot();
   const order = b.orders.find((o) => o.id === orderId);
   if (!order) return send(ctx.chatId, 'این سفارش پیدا نشد.');
   if (order.status === 'done') return send(ctx.chatId, 'این سفارش قبلاً تایید شده است.');
-  if (order.status === 'rejected') return send(ctx.chatId, 'این سفارش قبلاً رد شده است.');
 
-  const plan = b.plans.find((p) => p.id === order.planId);
-  const inbound = db.data.inbounds.find((i) => i.id === (plan && plan.inboundId));
-  if (!plan || !inbound) {
-    order.status = 'failed';
-    db.saveNow();
-    return send(ctx.chatId, 'اشتراک یا اینباند آن پیدا نشد — در پنل درستش کنید و از خریدار بخواهید دوباره سفارش بدهد.');
+  /* delivered on receipt: approving only lifts the hold and, if it had been
+     rejected in between, puts the config back */
+  if (order.clientId) {
+    const client = db.data.clients.find((c) => c.id === order.clientId);
+    if (client) {
+      const wasOff = client.blockedReason;
+      client.blockedReason = '';
+      client.enable = true;
+      db.saveNow();
+      await require('./xray').apply();
+      order.status = 'done';
+      db.saveNow();
+      if (wasOff) {
+        await send(order.userId, 'پرداخت شما تایید شد ✅ اشتراکتان دوباره فعال است.');
+      } else {
+        await send(order.userId, 'پرداخت شما تایید شد ✅ ممنون از خریدتان.');
+      }
+      return send(ctx.chatId, `تایید شد. کلاینت ${escapeHtml(client.email)} فعال است.`);
+    }
   }
 
-  let client;
-  try {
-    client = await require('./routes/api').createClient(inbound, {
-      email: `tg-${order.userId}-${String(order.id).slice(0, 4)}`,
-      totalGB: plan.gb || 0,
-      expiryTime: plan.days ? Date.now() + plan.days * 86400000 : 0,
-      tgId: String(order.userId),
-      comment: `${plan.name} - فروش ربات`
-    });
-  } catch (err) {
+  // not delivered at the time - do it now
+  const handed = await deliverOrder(order);
+  if (!handed.ok) {
     order.status = 'failed';
-    order.error = err.message;
+    order.error = handed.error;
     db.saveNow();
-    return send(ctx.chatId, `ساخت کلاینت ناموفق بود: ${escapeHtml(err.message)}`);
+    return send(ctx.chatId, `ساخت کلاینت ناموفق بود: ${escapeHtml(handed.error)}`);
   }
 
   order.status = 'done';
-  order.clientId = client.id;
+  order.clientId = handed.client.id;
   db.saveNow();
 
-  const url = require('./routes/api').subUrl(client.subId);
   await send(order.userId, [
     '<b>اشتراک شما آماده شد ✅</b>',
-    `${escapeHtml(plan.name)} · ${plan.gb ? `${plan.gb} گیگ` : 'نامحدود'} · ${plan.days} روز`,
+    `${escapeHtml(handed.plan.name)} · ${handed.plan.gb ? `${handed.plan.gb} گیگ` : 'نامحدود'} · ${handed.plan.days} روز`,
     '',
     'لینک اشتراک:',
-    `<code>${escapeHtml(url)}</code>`,
+    `<code>${escapeHtml(handed.url)}</code>`,
     '',
     'این لینک را در برنامه‌تان به عنوان Subscription اضافه کنید و هر وقت لازم شد آن را به‌روز کنید.'
   ].join('\n'));
-  return send(ctx.chatId, `تایید شد. کلاینت ${escapeHtml(client.email)} ساخته و برای خریدار ارسال شد.`);
+  return send(ctx.chatId, `تایید شد. کلاینت ${escapeHtml(handed.client.email)} ساخته و برای خریدار ارسال شد.`);
 }
+
+/**
+ * The receipt did not hold up.
+ *
+ * The config was handed over the moment it arrived, so rejecting has to take
+ * it back: the client stops working, and its name in the buyer's app becomes
+ * the reason. A config that simply vanishes is a support message; one that
+ * says why is not.
+ */
+const REJECTED_NOTICE = '\u26d4 پرداخت شما تایید نشد';
 
 async function rejectOrder(ctx, orderId) {
   const order = bot().orders.find((o) => o.id === orderId);
-  if (!order || order.status === 'done' || order.status === 'rejected') {
+  if (!order || order.status === 'rejected') {
     return send(ctx.chatId, 'چیزی برای رد کردن نیست.');
   }
   order.status = 'rejected';
+
+  let cut = false;
+  if (order.clientId) {
+    const client = db.data.clients.find((c) => c.id === order.clientId);
+    if (client) {
+      client.enable = false;
+      client.blockedReason = REJECTED_NOTICE;
+      cut = true;
+    }
+  }
   db.saveNow();
-  await send(order.userId, 'پرداخت شما تایید نشد. اگر فکر می‌کنید اشتباهی رخ داده با پشتیبانی تماس بگیرید.');
-  return send(ctx.chatId, 'رد شد و به خریدار اطلاع داده شد.');
+  if (cut) await require('./xray').apply();
+
+  await send(order.userId, [
+    'پرداخت شما تایید نشد.',
+    cut ? 'اشتراکتان غیرفعال شد.' : '',
+    'اگر فکر می‌کنید اشتباهی رخ داده با پشتیبانی تماس بگیرید.'
+  ].filter(Boolean).join('\n'));
+  return send(ctx.chatId, cut
+    ? 'رد شد. کانفیگ خریدار قطع شد و دلیلش روی نام کانفیگ نوشته شد.'
+    : 'رد شد و به خریدار اطلاع داده شد.');
 }
 
 
@@ -730,6 +823,7 @@ async function act(ctx, action, value) {
     // approval buttons live in the admin's own chat, never in the buyer's
     case 'ok': return ctx.isAdmin ? approveOrder(ctx, value) : send(ctx.chatId, 'فقط ادمین می‌تواند این کار را انجام دهد.');
     case 'no': return ctx.isAdmin ? rejectOrder(ctx, value) : send(ctx.chatId, 'فقط ادمین می‌تواند این کار را انجام دهد.');
+    case 'noop': return ctx.answer ? ctx.answer('این فقط یک پیام آزمایشی است.', true) : undefined;
     case 'text': return reply(ctx, fill(value, ctx), backRow());
     default: return showScreen(ctx, 'start');
   }
@@ -885,5 +979,5 @@ function resume() {
 
 module.exports = {
   bot, defaults, starterScreens, migrateStarter, start, stop, status, whoAmI, resume,
-  send, escapeHtml, payWays, call, channel, gateOn, joinLink
+  send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines
 };

@@ -248,15 +248,52 @@ router.post('/bot/reset-screens', (req, res) => {
   res.json({ screens: b.screens });
 });
 
-/** Send a message to the admin's chat, to prove the wiring end to end. */
-router.post('/bot/ping', async (req, res) => {
+/**
+ * Prove the path a real sale takes.
+ *
+ * "Test the token" only proves Telegram knows the bot. The thing that silently
+ * fails is the next step: the admin has never messaged the bot, so there is no
+ * chat to send an order to, and the first anyone learns of it is a sale that
+ * nobody was told about. This sends the admin the message a real receipt would
+ * send, buttons and all - which also shows them what to expect.
+ */
+router.post('/bot/test-message', async (req, res) => {
   const b = telegram.bot();
-  const target = b.adminChatId || (/^\d+$/.test(b.adminId || '') ? b.adminId : '');
-  if (!target) {
-    return bad(res, 'no admin chat yet - send /start to the bot from the admin account once');
+  if (!b.token) return bad(res, 'set the bot token first');
+
+  const chat = b.adminChatId || b.adminId;
+  if (!chat) {
+    return bad(res, 'no admin chat yet - open the bot in Telegram from your own account and send it /start, then try again');
   }
-  await telegram.send(target, 'Test message from the NexV panel ✅');
-  res.json({ ok: true });
+
+  try {
+    await telegram.call('sendMessage', {
+      chat_id: chat,
+      parse_mode: 'HTML',
+      text: [
+        '<b>پیام آزمایشی</b>',
+        '',
+        'اگر این را می‌بینید، ربات می‌تواند به شما پیام بدهد و سفارش‌های واقعی هم به همین‌جا می‌آیند.',
+        '',
+        'یک سفارش واقعی این شکلی می‌رسد:',
+        'اشتراک: نمونه · مبلغ: ۱۰۰٬۰۰۰ ' + telegram.escapeHtml(b.currency || ''),
+        'خریدار: @example (۱۲۳۴۵۶۷۸۹)',
+        '',
+        'کانفیگ در همان لحظه به خریدار داده می‌شود؛ اگر رسید درست نبود «رد» را بزنید تا قطع شود.'
+      ].join('\n'),
+      reply_markup: {
+        inline_keyboard: [[
+          { text: '✅ تایید (آزمایشی)', callback_data: 'b:noop:' },
+          { text: '✖️ رد (آزمایشی)', callback_data: 'b:noop:' }
+        ]]
+      }
+    });
+  } catch (err) {
+    return bad(res, `Telegram refused it: ${err.message}`);
+  }
+
+  logEvent('bot', 'sent a test message to the admin');
+  res.json({ ok: true, chat: String(chat) });
 });
 
 /**
@@ -843,6 +880,16 @@ function normalizeClient(body, existing, inbound) {
     flow: body.flow ?? existing?.flow ?? '',
     totalGB: Number(body.totalGB ?? existing?.totalGB ?? 0),
     expiryTime: Number(body.expiryTime ?? existing?.expiryTime ?? 0),
+    /*
+     * Sold but not started. Somebody who buys on Monday and installs on Friday
+     * has lost four days of a month they paid for, so the clock can be left
+     * unwound until the config is first used: expiryDays is held here and
+     * turned into a real expiryTime the moment traffic first moves.
+     */
+    startAfterFirstUse: body.startAfterFirstUse ?? existing?.startAfterFirstUse ?? false,
+    expiryDays: Number(body.expiryDays ?? existing?.expiryDays ?? 0),
+    /* set when a sale was reversed; turning the client back on clears it */
+    blockedReason: body.blockedReason ?? existing?.blockedReason ?? '',
     limitIp: Number(body.limitIp ?? existing?.limitIp ?? 0),
     tgId: body.tgId ?? existing?.tgId ?? '',
     comment: transfer.clean(body.comment ?? existing?.comment),
@@ -883,6 +930,9 @@ router.get('/clients', (req, res) => {
       depleted: xray.isOverQuota(c),
       overIps: xray.isOverIpLimit(c),
       link: inb ? links.buildLink(inb, c) : '',
+      /* what the copy key hands over: a subscription link keeps working when
+         the config behind it is changed, where a pasted vless:// does not */
+      subLink: c.subId ? subUrl(c.subId) : '',
       // moving traffic right now counts as online even before a new connection
       // shows up in the access log, which is only read every ten seconds
       online: live.online || rate.up + rate.down > 0,
@@ -1005,6 +1055,8 @@ router.post('/clients/:id/toggle', async (req, res) => {
   const client = db.data.clients.find((c) => c.id === req.params.id);
   if (!client) return bad(res, 'client not found', 404);
   client.enable = client.enable === false;
+  // switching one back on is the admin overruling whatever cut it off
+  if (client.enable) client.blockedReason = '';
   db.saveNow();
   await xray.apply();
   res.json(client);

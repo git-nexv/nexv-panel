@@ -816,6 +816,24 @@ async function collectTraffic() {
     }
     c.up = (c.up || 0) + delta.up;
     c.down = (c.down || 0) + delta.down;
+
+    /*
+     * First traffic on a client sold with the clock unwound: this is the
+     * moment it was actually used, so this is when its month starts. Traffic
+     * rather than a connection, because an app that is merely added to and
+     * never opened still opens a connection or two.
+     */
+    if (c.startAfterFirstUse && !c.expiryTime && c.expiryDays > 0) {
+      c.expiryTime = now + c.expiryDays * 86400000;
+      c.startedAt = now;
+      d.logs.unshift({
+        at: now,
+        type: 'client',
+        message: `${c.email} was used for the first time - its ${c.expiryDays} days start now`
+      });
+      if (d.logs.length > 500) d.logs.length = 500;
+    }
+
     c.lastSeen = now;
     if (window) {
       rates.set(c.id, { up: delta.up / window, down: delta.down / window, at: now });
