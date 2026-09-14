@@ -189,6 +189,85 @@ const FA = {
   'Copy their sign-in address': 'کپی آدرس ورود آن‌ها',
   'Your bot': 'ربات شما',
   'Your own bot settings': 'تنظیمات ربات خودتان',
+  'Panels you have sold. Each one signs in at its own address and spends a balance you credit.':
+    'پنل‌هایی که فروخته‌اید. هرکدام از آدرس خودش وارد می‌شود و از موجودی‌ای که شارژ می‌کنید خرج می‌کند.',
+  'New reseller panel': 'پنل نمایندگی جدید',
+  'Create the panel': 'ساخت پنل',
+  'A panel gets an address of its own. Hand that over; whoever opens it first makes the account.':
+    'هر پنل آدرس مخصوص خودش را می‌گیرد. آن را تحویل بدهید؛ هرکس اول بازش کند حساب را می‌سازد.',
+  'Every client they make goes on this inbound. They never see the choice.':
+    'هر کلاینتی که می‌سازند روی همین اینباند می‌نشیند. خودشان این انتخاب را نمی‌بینند.',
+  'What a gigabyte costs them, in your currency.': 'هر گیگ برایشان چقدر آب می‌خورد، به پول خودتان.',
+  'No reseller panels yet. Create one and hand over its address.':
+    'هنوز پنل نمایندگی‌ای نساخته‌اید. یکی بسازید و آدرسش را تحویل بدهید.',
+  'Panel': 'پنل',
+  'Last seen': 'آخرین بازدید',
+  'Open': 'باز کردن',
+  'Suspend / re-open': 'تعلیق / بازگشایی',
+  'Suspended': 'معلق',
+  'Re-opened': 'بازگشایی شد',
+  'Panel deleted': 'پنل حذف شد',
+  'Codes': 'کدها',
+  'Worth': 'ارزش',
+  'For': 'برای',
+  'not yet': 'هنوز نه',
+  'anyone (gift)': 'هرکسی (هدیه)',
+  'Spent so far': 'خرج‌شده تا اینجا',
+  'Their bot': 'ربات آن‌ها',
+  'Last signed in': 'آخرین ورود',
+  'never': 'هرگز',
+  'set up': 'تنظیم شده',
+  'not set up': 'تنظیم نشده',
+  'Their clients': 'کلاینت‌های آن‌ها',
+  'They have not sold anything yet.': 'هنوز چیزی نفروخته‌اند.',
+  'Adjust the balance': 'اصلاح موجودی',
+  'Make a code for them': 'یک کد برایشان بساز',
+  'A positive number adds, a negative one takes back.':
+    'عدد مثبت اضافه می‌کند، عدد منفی پس می‌گیرد.',
+  'Amount': 'مبلغ',
+  'why': 'دلیل',
+  'who this is': 'این شخص کیست',
+  'History': 'تاریخچه',
+  'When': 'چه زمانی',
+  'Change': 'تغییر',
+  'Why': 'چرا',
+  'A gift code': 'کد هدیه',
+  'Only this panel can use it, and only once.': 'فقط همین پنل می‌تواند استفاده کند، و فقط یک بار.',
+  'Anybody with the code can use it, once. Good for handing out a trial.':
+    'هرکسی که کد را داشته باشد یک بار می‌تواند استفاده کند. برای دادن یک تست خوب است.',
+  'Send them this address. Whoever opens it first chooses the username and password.':
+    'این آدرس را برایشان بفرستید. هرکس اول بازش کند نام کاربری و گذرواژه را انتخاب می‌کند.',
+  'It is the only way in, and it is the only secret protecting it — send it to the right person.':
+    'تنها راه ورود همین است و تنها چیزی که از آن محافظت می‌کند همین — برای آدم درست بفرستیدش.',
+  'Copy the address': 'کپی آدرس',
+  'Pick one': 'یکی را انتخاب کنید',
+  'Save changes': 'ذخیره تغییرات',
+  'Sign-in': 'ورود',
+  'Their username': 'نام کاربری آن‌ها',
+  'Signs in as': 'ورود با نام',
+  'Username and password': 'نام کاربری و گذرواژه',
+  'They sign in at': 'آدرس ورود آن‌ها',
+  'Address': 'آدرس',
+  'Make the account': 'ساخت حساب',
+  'Save the sign-in': 'ذخیره اطلاعات ورود',
+  'Change it': 'تغییرش بده',
+  'Remove the account': 'حذف حساب',
+  'Account removed': 'حساب حذف شد',
+  'Copy all three': 'کپی هر سه',
+  'Think of one': 'یکی بساز',
+  'no account yet': 'هنوز حسابی ندارد',
+  'at least eight characters': 'حداقل هشت کاراکتر',
+  'Fill these in to make the account yourself, or leave both blank and whoever opens the address chooses them.':
+    'این‌ها را پر کنید تا خودتان حساب را بسازید، یا هر دو را خالی بگذارید تا هرکس اول آدرس را باز کرد خودش انتخاب کند.',
+  'Kept scrambled once saved — nobody can read it back, so copy it now if you need it.':
+    'پس از ذخیره رمزنگاری می‌شود و دیگر قابل خواندن نیست — اگر لازمش دارید همین حالا کپی کنید.',
+  'Leave the password blank to keep the one they have. Setting a new one signs them out everywhere.':
+    'گذرواژه را خالی بگذارید تا همان قبلی بماند. اگر گذرواژه تازه بگذارید، از همه‌جا خارج می‌شود.',
+  'Changing this does not sign them out.': 'تغییر این مورد باعث خروج آن‌ها نمی‌شود.',
+  'Fill this in and hand it over, instead of letting them choose it themselves.':
+    'این را پر کنید و تحویلشان بدهید، به‌جای اینکه خودشان انتخاب کنند.',
+  'This is the only time the password is readable. Send all three.':
+    'این تنها باری است که گذرواژه خوانده می‌شود. هر سه را بفرستید.',
   'Not set up': 'تنظیم نشده',
   'Set up': 'تنظیم شده',
 
@@ -307,7 +386,19 @@ const PATTERNS = [
   [/^Hide hostnames$/, () => 'پنهان کردن هاست‌ها'],
   [/^(\d+) hosts$/, (m) => `${m[1]} هاست`],
   [/^Show everyone$/, () => 'نمایش همه'],
-  [/^Show only the (.+) ones$/, () => 'فقط همین‌ها را نشان بده']
+  [/^Show only the (.+) ones$/, () => 'فقط همین‌ها را نشان بده'],
+  [/^Edit (.+)$/, (m) => `ویرایش ${m[1]}`],
+  [/^(.+) is ready$/, (m) => `${m[1]} آماده است`],
+  [/^about (\d+) GB$/, (m) => `حدود ${m[1]} گیگ`],
+  [/^A code for (.+)$/, (m) => `یک کد برای ${m[1]}`],
+  [/^Delete the panel "(.+)"\? Their sign-in stops working\. The clients they sold are kept\.$/,
+    (m) => `پنل «${m[1]}» حذف شود؟ ورودشان از کار می‌افتد. کلاینت‌هایی که فروخته‌اند می‌مانند.`],
+  [/^Balance is now (.+)$/, (m) => `موجودی حالا ${m[1]} است`],
+  [/^signs in as (.+)$/, (m) => `ورود با نام ${m[1]}`],
+  [/^Sign-in for (.+)$/, (m) => `اطلاعات ورود ${m[1]}`],
+  [/^(.+) can sign in now$/, (m) => `${m[1]} حالا می‌تواند وارد شود`],
+  [/^Remove the account "(.+)"\? They are signed out, and the next person to open their address chooses a new username and password\. Their clients and balance are kept\.$/,
+    (m) => `حساب «${m[1]}» حذف شود؟ از پنل خارج می‌شود و هرکس بعداً آدرسش را باز کند نام کاربری و گذرواژه تازه انتخاب می‌کند. کلاینت‌ها و موجودی‌اش می‌ماند.`]
 ];
 
 let current = 'en';

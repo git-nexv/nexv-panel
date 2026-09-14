@@ -211,6 +211,7 @@ const ICONS = {
   search: '<path d="M10 3a7 7 0 1 1-4.2 12.6l-3.1 3.1-1.4-1.4 3.1-3.1A7 7 0 0 1 10 3Zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10Z"/>',
   activity: '<path d="M4 13h3l2.5 6 5-14 2.5 8h3v2h-4.5L13 9.5 9.5 20 6 15H4v-2Z"/>',
   admins: '<path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm-7 8v-1c0-2.7 4.5-4 7-4s7 1.3 7 4v1H5Zm14.5-9.5 1.2 2.4 2.6.4-1.9 1.8.5 2.6-2.4-1.3-2.4 1.3.5-2.6-1.9-1.8 2.6-.4 1.2-2.4Z"/>',
+  key: '<path d="M14 2a8 8 0 1 0-7.5 10.6L3 16.1V21h5v-2h2v-2h2l1.6-1.6A8 8 0 0 0 14 2Zm2.5 6.5a2 2 0 1 1-2-2 2 2 0 0 1 2 2Z"/>',
   empty: '<path d="M4 6h16v12H4V6Zm2 2v8h12V8H6Z" opacity=".7"/>'
 };
 
@@ -3083,7 +3084,10 @@ async function renderAdmins(view) {
       tbody.append(el('tr', {}, [
         el('td', {}, [
           el('strong', { text: admin.name }),
-          el('div', { class: 'faint', style: 'font-size:11px', text: admin.registered ? 'account made' : 'has not signed in yet' })
+          el('div', {
+            class: 'faint', style: 'font-size:11px',
+            text: admin.username ? `signs in as ${admin.username}` : 'no account yet'
+          })
         ]),
         el('td', {}, [
           el('div', { class: 'num', text: admin.balance.toLocaleString() }),
@@ -3106,6 +3110,10 @@ async function renderAdmins(view) {
           }),
           el('button', { class: 'btn icon ghost', title: 'Open', html: icon('activity'), onclick: () => adminDetail(admin.id) }),
           el('button', { class: 'btn icon ghost', title: 'Edit', html: icon('edit'), onclick: () => adminForm(admin) }),
+          el('button', {
+            class: 'btn icon ghost', title: 'Username and password', html: icon('key'),
+            onclick: () => credentialsDialog(admin)
+          }),
           el('button', {
             class: 'btn icon ghost', title: 'Suspend / re-open', html: icon('power'),
             onclick: async () => {
@@ -3184,6 +3192,32 @@ function adminForm(existing) {
   const balance = existing ? null : formField(form, 'Opening balance', el('input', { type: 'number', min: '0', value: 0 }));
   const note = formField(form, 'Note', el('input', { value: v.note || '', placeholder: 'who this is' }), { full: true });
 
+  /* the sign-in, filled in here or left to them. On an existing panel it has a
+     dialog of its own, because a password reset is not something to do by
+     accident while changing a price */
+  let username = null;
+  let password = null;
+  if (!existing) {
+    form.append(el('div', { class: 'field full' }, [el('div', { class: 'section-title', text: 'Sign-in' })]));
+    username = formField(form, 'Their username', el('input', { placeholder: 'reza', autocomplete: 'off' }));
+    password = passwordField(form, '');
+    form.append(el('div', { class: 'field full' }, [el('div', {
+      class: 'hint',
+      text: 'Fill these in to make the account yourself, or leave both blank and whoever opens the address chooses them.'
+    })]));
+  } else {
+    form.append(el('div', { class: 'field full' }, [
+      el('label', { text: 'Sign-in' }),
+      el('div', { class: 'row', style: 'align-items:center;gap:10px' }, [
+        el('div', { class: 'muted', text: v.username ? `signs in as ${v.username}` : 'no account yet' }),
+        el('button', {
+          class: 'btn', type: 'button', html: `${icon('key')} Username and password`,
+          onclick: (event) => { event.target.closest('.modal-backdrop').remove(); credentialsDialog(v); }
+        })
+      ])
+    ]));
+  }
+
   modal({
     title: existing ? `Edit ${v.name}` : 'New reseller panel',
     subtitle: existing ? '' : 'A panel gets an address of its own. Hand that over; whoever opens it first makes the account.',
@@ -3200,13 +3234,18 @@ function adminForm(existing) {
           note: note.value
         };
         if (balance) payload.balance = Number(balance.value);
+        const typedPass = password ? password.value : '';
+        if (username && (username.value.trim() || typedPass)) {
+          payload.username = username.value.trim();
+          payload.password = typedPass;
+        }
         try {
           const saved = existing
             ? await api.put(`/admins/${existing.id}`, payload)
             : await api.post('/admins', payload);
           close();
           render();
-          if (!existing) showAdminAddress(saved);
+          if (!existing) showAdminAddress(saved, typedPass);
           else toast('Saved');
         } catch (err) { toast(err.message, 'err'); }
       }
@@ -3214,8 +3253,119 @@ function adminForm(existing) {
   });
 }
 
+/**
+ * A password box you can read what you typed in, with a button that thinks of
+ * one for you. The leader has to be able to read it: they are about to send it
+ * to somebody, and it is the last moment it exists in readable form.
+ */
+function passwordField(form, value) {
+  const input = el('input', { type: 'text', value: value || '', placeholder: 'at least eight characters', autocomplete: 'new-password' });
+  const box = el('div', { class: 'field' }, [
+    el('label', { text: 'Password' }),
+    el('div', { class: 'row', style: 'gap:8px' }, [input]),
+    el('div', { class: 'hint', text: 'Kept scrambled once saved — nobody can read it back, so copy it now if you need it.' })
+  ]);
+  input.style.flex = '1';
+  box.querySelector('.row').append(el('button', {
+    class: 'btn', type: 'button', title: 'Think of one', html: icon('sparkle'),
+    onclick: () => { input.value = madePassword(); input.focus(); input.select(); }
+  }));
+  form.append(box);
+  return input;
+}
+
+/** Readable at a glance and still not guessable: no l/I/1, no O/0. */
+function madePassword() {
+  const pool = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = new Uint8Array(14);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => pool[b % pool.length]).join('');
+}
+
+/**
+ * What one reseller signs in with: make it, read the name back, change either
+ * half, or throw the account away so the address makes a fresh one.
+ */
+function credentialsDialog(admin) {
+  const form = el('div', { class: 'form-grid' });
+  const username = formField(form, 'Username', el('input', {
+    value: admin.username || '', placeholder: 'reza', autocomplete: 'off'
+  }), { hint: admin.username ? 'Changing this does not sign them out.' : '' });
+  const password = passwordField(form, '');
+  if (admin.username) {
+    form.append(el('div', { class: 'field full' }, [el('div', {
+      class: 'hint',
+      text: 'Leave the password blank to keep the one they have. Setting a new one signs them out everywhere.'
+    })]));
+  }
+
+  const url = `${location.origin}/${admin.slug}/`;
+  form.append(el('div', { class: 'field full' }, [
+    el('label', { text: 'They sign in at' }),
+    el('div', { class: 'link-box', text: url })
+  ]));
+
+  const actions = [{
+    label: admin.username ? 'Save the sign-in' : 'Make the account',
+    kind: 'primary',
+    onClick: async (close) => {
+      try {
+        const typed = password.value;
+        const result = await api.post(`/admins/${admin.id}/credentials`, {
+          username: username.value.trim(),
+          password: typed
+        });
+        close();
+        render();
+        if (typed) handOver(result.admin, typed);
+        else toast('Saved');
+      } catch (err) { toast(err.message, 'err'); }
+    }
+  }];
+  if (admin.username) {
+    actions.unshift({
+      label: 'Remove the account',
+      kind: 'danger',
+      onClick: (close) => {
+        close();
+        confirmDialog(`Remove the account "${admin.username}"? They are signed out, and the next person to open their address chooses a new username and password. Their clients and balance are kept.`, async () => {
+          try {
+            await api.del(`/admins/${admin.id}/credentials`);
+            toast('Account removed');
+            render();
+          } catch (err) { toast(err.message, 'err'); }
+        });
+      }
+    });
+  }
+
+  modal({
+    title: `Sign-in for ${admin.name}`,
+    subtitle: admin.username ? '' : 'Fill this in and hand it over, instead of letting them choose it themselves.',
+    body: form, width: 560, actions
+  });
+}
+
+/** The three things a reseller needs, on one screen, once. */
+function handOver(admin, password) {
+  const url = `${location.origin}/${admin.slug}/`;
+  const all = `${url}\n${admin.username}\n${password}`;
+  modal({
+    title: `${admin.name} can sign in now`,
+    subtitle: 'This is the only time the password is readable. Send all three.',
+    body: el('div', { class: 'form-grid' }, [
+      el('div', { class: 'field full' }, [el('label', { text: 'Address' }), el('div', { class: 'link-box', text: url })]),
+      el('div', { class: 'field' }, [el('label', { text: 'Username' }), el('div', { class: 'link-box', text: admin.username })]),
+      el('div', { class: 'field' }, [el('label', { text: 'Password' }), el('div', { class: 'link-box', text: password })])
+    ]),
+    width: 560,
+    actions: [{ label: 'Copy all three', kind: 'primary', onClick: () => copy(all) }]
+  });
+}
+
 /** The one thing a new panel is worth nothing without. */
-function showAdminAddress(admin) {
+function showAdminAddress(admin, password) {
+  if (admin.username && password) return handOver(admin, password);
   const url = `${location.origin}/${admin.slug}/`;
   modal({
     title: `${admin.name} is ready`,
@@ -3250,6 +3400,15 @@ async function adminDetail(id) {
     el('div', { class: 'field' }, [el('label', { text: 'Clients' }), el('div', { class: 'value-lg', text: `${a.clients}` })]),
     el('div', { class: 'field' }, [el('label', { text: 'Sold' }), el('div', { class: 'value-lg', text: `${a.soldGB} GB` })]),
     el('div', { class: 'field' }, [el('label', { text: 'Price per GB' }), el('div', { class: 'value-lg', text: a.pricePerGB.toLocaleString() })]),
+    el('div', { class: 'field' }, [
+      el('label', { text: 'Signs in as' }),
+      el('div', { class: 'value-lg', text: a.username || '—' }),
+      el('button', {
+        class: 'btn', style: 'margin-top:8px',
+        html: `${icon('key')} ${a.username ? 'Change it' : 'Make the account'}`,
+        onclick: (event) => { event.target.closest('.modal-backdrop').remove(); credentialsDialog(a); }
+      })
+    ]),
     el('div', { class: 'field' }, [el('label', { text: 'Last signed in' }), el('div', { class: 'muted', text: a.lastLoginAt ? fmtDate(a.lastLoginAt) : 'never' })]),
     el('div', { class: 'field' }, [el('label', { text: 'Their bot' }), el('div', { class: 'muted', text: a.hasBot ? 'set up' : 'not set up' })])
   ]));

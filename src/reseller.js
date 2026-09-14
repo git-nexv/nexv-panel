@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const db = require('./db');
+const auth = require('./auth');
 
 const DATA_DIR = process.env.NEXV_DATA_DIR || '/etc/nexv/data';
 const BOT_DIR = path.join(DATA_DIR, 'bots');
@@ -223,6 +224,90 @@ function writeBot(reseller, value) {
   return value;
 }
 
+/* --------------------------- their sign-in ------------------------------- */
+
+/**
+ * A reseller signs in as an ordinary user, so their account is one of
+ * db.data.users with role 'reseller' pointing back here. Two ways one comes
+ * into being: the leader fills it in from the Admins page, or - when the
+ * leader leaves it blank - whoever opens the address first chooses it.
+ */
+function userOf(reseller) {
+  if (!reseller || !reseller.userId) return null;
+  return (db.data.users || []).find((u) => u.id === reseller.userId) || null;
+}
+
+function usernameOf(reseller) {
+  const user = userOf(reseller);
+  return user ? user.username : '';
+}
+
+/** Free for this reseller to take: not in use by anybody but themselves. */
+function usernameTaken(name, reseller) {
+  const wanted = String(name || '').trim();
+  return (db.data.users || []).some(
+    (u) => u.username === wanted && u.id !== (reseller && reseller.userId)
+  );
+}
+
+/**
+ * Set or change what a reseller signs in with.
+ *
+ * The password is only ever kept as a bcrypt hash, here as everywhere else, so
+ * there is nothing to read back later - the leader sees the username and sets
+ * a new password when they need one. Changing the password drops that person's
+ * sessions, which is the whole point of changing it.
+ */
+async function setCredentials(reseller, { username, password }) {
+  const name = username === undefined ? usernameOf(reseller) : String(username || '').trim();
+  const pass = password === undefined || password === null ? '' : String(password);
+  const existing = userOf(reseller);
+
+  if (name.length < 3) return { ok: false, error: 'pick a username of at least three characters' };
+  if (usernameTaken(name, reseller)) return { ok: false, error: 'that username is taken' };
+  if (pass && pass.length < 8) return { ok: false, error: 'pick a password of at least eight characters' };
+  if (!existing && !pass) return { ok: false, error: 'a new account needs a password' };
+
+  if (!existing) {
+    const user = await auth.createUser(name, pass, 'reseller');
+    user.resellerId = reseller.id;
+    reseller.userId = user.id;
+    db.saveNow();
+    return { ok: true, created: true, username: name };
+  }
+
+  const renamed = existing.username !== name;
+  existing.username = name;
+  existing.resellerId = reseller.id;              // repairs a half-made link
+  db.saveNow();
+  if (pass) await auth.setPassword(existing.id, pass);   // also ends their sessions
+  return { ok: true, created: false, renamed, passwordChanged: !!pass, username: name };
+}
+
+/**
+ * Throw the account away and put the panel back to how it started: the address
+ * offers to make an account again. For when the leader hands a panel to
+ * somebody else.
+ */
+function clearCredentials(reseller) {
+  const user = userOf(reseller);
+  if (!user) return false;
+  db.data.users = db.data.users.filter((u) => u.id !== user.id);
+  db.data.sessions = db.data.sessions.filter((s) => s.userId !== user.id);
+  reseller.userId = '';
+  db.saveNow();
+  return true;
+}
+
+/** Something readable to hand over, when the leader cannot think of one. */
+function suggestPassword() {
+  const pool = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = crypto.randomBytes(14);
+  let out = '';
+  for (let i = 0; i < 14; i++) out += pool[bytes[i] % pool.length];
+  return out;
+}
+
 /* ------------------------------ what they see ---------------------------- */
 
 /** Their own clients, and nobody else's. */
@@ -241,6 +326,7 @@ function summary(reseller) {
     slug: reseller.slug,
     enable: reseller.enable !== false,
     registered: !!reseller.userId,
+    username: usernameOf(reseller),
     balance: reseller.balance || 0,
     spent: reseller.spent || 0,
     pricePerGB: reseller.pricePerGB || DEFAULT_PRICE_PER_GB,
@@ -260,5 +346,6 @@ module.exports = {
   DEFAULT_PRICE_PER_GB, BOT_DIR,
   all, codes, byId, bySlug, forUser, create, remove,
   costOf, charge, adjust, issueCode, redeem, makeCode,
-  readBot, writeBot, botFile, clientsOf, summary
+  readBot, writeBot, botFile, clientsOf, summary,
+  userOf, usernameOf, setCredentials, clearCredentials, suggestPassword
 };

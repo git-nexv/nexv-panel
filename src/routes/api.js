@@ -1780,6 +1780,11 @@ router.get('/admins', leaderOnly, (req, res) => {
   });
 });
 
+/** A password the leader can hand over without inventing one. */
+router.get('/admins/suggest-password', leaderOnly, (req, res) => {
+  res.json({ password: resellers.suggestPassword() });
+});
+
 /** Everything the leader could want about one of their people. */
 router.get('/admins/:id', leaderOnly, (req, res) => {
   const reseller = resellers.byId(req.params.id);
@@ -1800,13 +1805,56 @@ router.get('/admins/:id', leaderOnly, (req, res) => {
   });
 });
 
-router.post('/admins', leaderOnly, (req, res) => {
+router.post('/admins', leaderOnly, async (req, res) => {
   const body = req.body || {};
   if (!String(body.name || '').trim()) return bad(res, 'give this panel a name');
   const reseller = resellers.create(body);
+
+  /* the leader may set the sign-in here and hand over a username and password
+     instead of an address that makes its own account */
+  if (String(body.username || '').trim() || body.password) {
+    const made = await resellers.setCredentials(reseller, {
+      username: body.username, password: body.password
+    });
+    if (!made.ok) {
+      resellers.remove(reseller.id);           // no half-made panel left behind
+      return bad(res, made.error);
+    }
+  }
   logEvent('admin', `created the reseller panel "${reseller.name}"`);
   res.json(resellers.summary(reseller));
 });
+
+/**
+ * The leader setting, renaming or resetting what a reseller signs in with.
+ *
+ * There is no reading a password back - it is a bcrypt hash and nothing else -
+ * so this is how a forgotten one is dealt with: set a new one and hand it over.
+ */
+router.post('/admins/:id/credentials', leaderOnly, async (req, res) => {
+  const reseller = resellers.byId(req.params.id);
+  if (!reseller) return bad(res, 'not found', 404);
+  const body = req.body || {};
+  const result = await resellers.setCredentials(reseller, {
+    username: body.username, password: body.password
+  });
+  if (!result.ok) return bad(res, result.error);
+
+  const what = result.created ? 'made the account for'
+    : result.passwordChanged ? 'set a new password for' : 'renamed the account of';
+  logEvent('admin', `${what} the reseller panel "${reseller.name}"`);
+  res.json({ ok: true, ...result, admin: resellers.summary(reseller) });
+});
+
+/** Throw the account away: the address goes back to making its own. */
+router.delete('/admins/:id/credentials', leaderOnly, (req, res) => {
+  const reseller = resellers.byId(req.params.id);
+  if (!reseller) return bad(res, 'not found', 404);
+  if (!resellers.clearCredentials(reseller)) return bad(res, 'this panel has no account yet');
+  logEvent('admin', `removed the account of "${reseller.name}" - the address will make a new one`);
+  res.json({ ok: true, admin: resellers.summary(reseller) });
+});
+
 
 router.put('/admins/:id', leaderOnly, (req, res) => {
   const reseller = resellers.byId(req.params.id);
