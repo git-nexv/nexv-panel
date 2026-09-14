@@ -21,8 +21,27 @@ const auth = require('./auth');
 const DATA_DIR = process.env.NEXV_DATA_DIR || '/etc/nexv/data';
 const BOT_DIR = path.join(DATA_DIR, 'bots');
 
-/** Toman per gigabyte, unless the leader sets otherwise for one reseller. */
+/** What a gigabyte costs when nobody has said otherwise anywhere. */
 const DEFAULT_PRICE_PER_GB = 3000;
+
+/**
+ * The price one reseller pays per gigabyte.
+ *
+ * One number is set for the whole panel and every reseller follows it, so
+ * raising the price is one edit rather than one per person. A reseller with a
+ * number of their own overrides it - that is what `pricePerGB` on the record
+ * means, and zero (or missing) means "whatever the panel says today".
+ */
+function priceFor(reseller) {
+  const own = Number(reseller && reseller.pricePerGB) || 0;
+  if (own > 0) return own;
+  return defaultPrice();
+}
+
+function defaultPrice() {
+  const set = Number(db.settings.pricePerGB) || 0;
+  return set > 0 ? set : DEFAULT_PRICE_PER_GB;
+}
 
 function all() {
   const d = db.data;
@@ -73,7 +92,8 @@ function create({ name, inboundId, balance, pricePerGB, note }) {
     slug: freeSlug(),
     userId: '',                       // set when they register
     balance: Number(balance) || 0,
-    pricePerGB: Number(pricePerGB) > 0 ? Number(pricePerGB) : DEFAULT_PRICE_PER_GB,
+    // 0 means "follow the panel-wide price", which is what most should do
+    pricePerGB: Number(pricePerGB) > 0 ? Number(pricePerGB) : 0,
     inboundId: inboundId || '',
     enable: true,
     note: String(note || ''),
@@ -109,7 +129,7 @@ function remove(id) {
  */
 function costOf(totalGB, reseller) {
   const gb = Number(totalGB) || 0;
-  return Math.round(gb * (Number(reseller.pricePerGB) || DEFAULT_PRICE_PER_GB));
+  return Math.round(gb * priceFor(reseller));
 }
 
 function adjust(reseller, amount, reason) {
@@ -142,6 +162,51 @@ function charge(reseller, totalGB, label) {
   logLine(reseller, -cost, label || 'client created');
   db.saveNow();
   return { ok: true, cost };
+}
+
+/* ------------------------ giving back what is unused --------------------- */
+
+/**
+ * What a client is worth back.
+ *
+ * A reseller buys capacity, not a subscription: a client they delete with most
+ * of its quota untouched is stock they never handed out, and it belongs back in
+ * their balance. The refund is the share of what they actually paid that was
+ * never used - `cost` is kept on the client for exactly this, so a price change
+ * between the sale and the deletion cannot make the refund wrong.
+ *
+ * Only the volume counts. Days are not refunded: time was available whether or
+ * not anybody took it.
+ */
+function refundValue(client) {
+  const totalGB = Number(client.totalGB) || 0;
+  const paid = Math.round(Number(client.cost) || 0);
+  if (totalGB <= 0 || paid <= 0) return { gb: 0, amount: 0 };
+
+  const usedGB = ((Number(client.up) || 0) + (Number(client.down) || 0)) / 1024 ** 3;
+  const leftGB = Math.max(0, totalGB - usedGB);
+  return {
+    gb: leftGB,
+    amount: Math.min(paid, Math.round(paid * (leftGB / totalGB)))
+  };
+}
+
+/** Hand it back, and say how much. Safe to call for a client nobody paid for. */
+function refundClient(client, why) {
+  const owner = client && client.resellerId ? byId(client.resellerId) : null;
+  if (!owner) return { amount: 0, gb: 0 };
+  const { gb, amount } = refundValue(client);
+  if (amount <= 0) return { amount: 0, gb };
+  adjust(owner, amount, why || `${client.email}: unused quota returned`);
+  /*
+   * Nothing more is owed on this client: the unused share has gone back and the
+   * rest was consumed. Subtracting the refund instead of clearing it would let
+   * a second call hand back a share of the remainder - which cannot happen
+   * through the API, since the client is deleted in the same breath, but a
+   * function that pays twice when called twice is a trap to leave lying around.
+   */
+  client.cost = 0;
+  return { amount, gb, balance: owner.balance, reseller: owner };
 }
 
 /* ------------------------------ charge codes ----------------------------- */
@@ -338,7 +403,9 @@ function summary(reseller) {
     username: usernameOf(reseller),
     balance: reseller.balance || 0,
     spent: reseller.spent || 0,
-    pricePerGB: reseller.pricePerGB || DEFAULT_PRICE_PER_GB,
+    pricePerGB: priceFor(reseller),
+    // what is stored rather than what it works out to: 0 means "follow the panel"
+    priceOverride: Number(reseller.pricePerGB) || 0,
     inboundId: reseller.inboundId || '',
     note: reseller.note || '',
     createdAt: reseller.createdAt,
@@ -355,6 +422,7 @@ module.exports = {
   DEFAULT_PRICE_PER_GB, BOT_DIR,
   all, codes, byId, bySlug, forUser, create, remove,
   costOf, charge, adjust, issueCode, redeem, makeCode, KINDS, kindOf,
+  priceFor, defaultPrice, refundValue, refundClient,
   readBot, writeBot, botFile, clientsOf, summary,
   userOf, usernameOf, setCredentials, clearCredentials, suggestPassword
 };

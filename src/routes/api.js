@@ -466,7 +466,7 @@ router.get('/status', async (req, res) => {
         active: mine.filter((c) => c.enable !== false && !xray.isExpired(c) && !xray.isOverQuota(c)).length
       },
       balance: req.reseller.balance || 0,
-      pricePerGB: req.reseller.pricePerGB || resellers.DEFAULT_PRICE_PER_GB,
+      pricePerGB: resellers.priceFor(req.reseller),
       soldGB: mine.reduce((a, c) => a + (Number(c.totalGB) || 0), 0),
       traffic: mine.reduce((acc, c) => {
         acc.up += c.up || 0;
@@ -1056,6 +1056,9 @@ function normalizeClient(body, existing, inbound) {
      * turned into a real expiryTime the moment traffic first moves.
      */
     resellerId: body.resellerId ?? existing?.resellerId ?? '',
+    /* what the reseller paid for this client, in money rather than gigabytes:
+       it is what a refund is a share of, and it survives a price change */
+    cost: Math.max(0, Math.round(Number(body.cost ?? existing?.cost ?? 0)) || 0),
     startAfterFirstUse: body.startAfterFirstUse ?? existing?.startAfterFirstUse ?? false,
     expiryDays: Number(body.expiryDays ?? existing?.expiryDays ?? 0),
     /* set when a sale was reversed; turning the client back on clears it */
@@ -1146,6 +1149,9 @@ async function createClient(inbound, body) {
 
 router.post('/clients', async (req, res) => {
   const body = req.body || {};
+  /* what a client cost is decided here and nowhere else - a reseller who could
+     set it in the form could name their own refund */
+  delete body.cost;
 
   /*
    * A reseller does not choose an inbound and does not choose to pay nothing:
@@ -1162,6 +1168,8 @@ router.post('/clients', async (req, res) => {
     const bill = resellers.charge(req.reseller, gb, `client ${body.email || ''}`.trim());
     if (!bill.ok) return bad(res, bill.error);
     charged = bill.cost;
+    // kept on the client so deleting it can give back exactly the unused share
+    body.cost = bill.cost;
   }
 
   const inb = db.data.inbounds.find((i) => i.id === body.inboundId);
@@ -1187,6 +1195,8 @@ router.put('/clients/:id', async (req, res) => {
   if (idx < 0) return bad(res, 'client not found', 404);
   const before = d.clients[idx];
   if (!owns(req, before)) return bad(res, 'client not found', 404);
+  // as on create: never from the form (normalizeClient keeps what is stored)
+  if (req.body) delete req.body.cost;
 
   /* raising a quota costs the difference; lowering one gives it back, because
      otherwise a reseller who mistypes a number has simply lost the money */
@@ -1197,8 +1207,11 @@ router.put('/clients/:id', async (req, res) => {
     if (nowGB > wasGB) {
       const bill = resellers.charge(req.reseller, nowGB - wasGB, `${before.email}: quota raised`);
       if (!bill.ok) return bad(res, bill.error);
+      req.body.cost = Math.round((Number(before.cost) || 0) + bill.cost);
     } else if (nowGB < wasGB) {
-      resellers.adjust(req.reseller, resellers.costOf(wasGB - nowGB, req.reseller), `${before.email}: quota lowered`);
+      const back = resellers.costOf(wasGB - nowGB, req.reseller);
+      resellers.adjust(req.reseller, back, `${before.email}: quota lowered`);
+      req.body.cost = Math.max(0, Math.round((Number(before.cost) || 0) - back));
     }
     req.body.inboundId = req.reseller.inboundId;
     req.body.resellerId = req.reseller.id;
@@ -1221,12 +1234,19 @@ router.delete('/clients/:id', async (req, res) => {
   const d = db.data;
   const client = d.clients.find((c) => c.id === req.params.id);
   if (!client || !owns(req, client)) return bad(res, 'client not found', 404);
+
+  /* quota nobody used goes back to whoever paid for it - including when it is
+     the leader doing the deleting, because it is still the reseller's money */
+  const back = resellers.refundClient(client, `${client.email}: deleted with quota left`);
+
   d.clients = d.clients.filter((c) => c.id !== client.id);
   online.forget(xray.clientTag(client));
   db.saveNow();
   await xray.apply();
-  logEvent('client', `deleted client ${client.email}`);
-  res.json({ ok: true });
+  logEvent('client', back.amount
+    ? `deleted client ${client.email} - ${back.amount} returned to ${back.reseller.name}`
+    : `deleted client ${client.email}`);
+  res.json({ ok: true, refunded: back.amount, refundedGB: Math.round(back.gb * 100) / 100, balance: back.balance });
 });
 
 /*
@@ -1255,6 +1275,9 @@ router.post('/clients/purge', async (req, res) => {
   if (!doomed.length) return res.json({ ok: true, deleted: 0, names: [] });
 
   const ids = new Set(doomed.map((c) => c.id));
+  // the same rule one at a time: nobody loses balance to a tidy-up
+  let refunded = 0;
+  for (const c of doomed) refunded += resellers.refundClient(c, `${c.email}: deleted with quota left`).amount;
   for (const c of doomed) online.forget(xray.clientTag(c));
   d.clients = d.clients.filter((c) => !ids.has(c.id));
   db.saveNow();
@@ -1263,7 +1286,7 @@ router.post('/clients/purge', async (req, res) => {
   const names = doomed.map((c) => c.email);
   const kind = scope.label ? `${scope.label} ` : '';
   logEvent('client', `deleted ${doomed.length} ${kind}client(s): ${names.slice(0, 8).join(', ')}${names.length > 8 ? '\u2026' : ''}`);
-  res.json({ ok: true, deleted: doomed.length, names });
+  res.json({ ok: true, deleted: doomed.length, names, refunded });
 });
 
 router.post('/clients/:id/toggle', async (req, res) => {
@@ -1767,7 +1790,7 @@ router.put('/settings', async (req, res) => {
   const allowed = ['panelPort', 'webBasePath', 'domain', 'subDomain', 'subPort', 'subPath',
     'tgBotToken', 'tgAdminId', 'theme', 'lang', 'certFile', 'keyFile', 'xrayLogLevel',
     'blockTorrent', 'serverIP', 'trafficResetDay', 'defaultOutbound', 'domainStrategy', 'trackIps',
-    'subTitle', 'panelCertFile', 'panelKeyFile', 'httpRedirect', 'remarkTemplate'];
+    'subTitle', 'panelCertFile', 'panelKeyFile', 'httpRedirect', 'remarkTemplate', 'pricePerGB'];
   // TLS material is read once when the listener is created
   const restartKeys = ['panelPort', 'panelCertFile', 'panelKeyFile', 'certFile', 'keyFile', 'httpRedirect'];
   const s = db.settings;
@@ -1810,7 +1833,7 @@ router.get('/admins', leaderOnly, (req, res) => {
   res.json({
     admins: resellers.all().map(resellers.summary),
     codes: resellers.codes().slice(0, 200),
-    defaultPricePerGB: resellers.DEFAULT_PRICE_PER_GB,
+    defaultPricePerGB: resellers.defaultPrice(),
     inbounds: db.data.inbounds.map((i) => ({ id: i.id, label: `${i.remark} · ${i.protocol}:${i.port}` }))
   });
 });
@@ -1898,6 +1921,7 @@ router.put('/admins/:id', leaderOnly, (req, res) => {
   if (body.name !== undefined) reseller.name = String(body.name).trim() || reseller.name;
   if (body.note !== undefined) reseller.note = String(body.note);
   if (body.inboundId !== undefined) reseller.inboundId = String(body.inboundId);
+  // 0 or blank is not "free", it is "follow the panel-wide price"
   if (body.pricePerGB !== undefined) reseller.pricePerGB = Math.max(0, Number(body.pricePerGB) || 0);
   if (body.enable !== undefined) reseller.enable = !!body.enable;
   db.saveNow();

@@ -1507,6 +1507,24 @@ function inboundForm(existing) {
   });
 }
 
+/**
+ * What to ask before deleting a client.
+ *
+ * On a reseller's panel the unused quota comes back, and how much is the thing
+ * they actually want to know before pressing yes - it is the difference between
+ * deleting a dead config and throwing money away.
+ */
+function deleteClientAsk(c) {
+  const plain = `Delete client "${c.email}"?`;
+  if (!isReseller() || !c.cost) return plain;
+  const total = Number(c.totalGB) || 0;
+  if (total <= 0) return plain;
+  const leftGB = Math.max(0, total - ((c.up || 0) + (c.down || 0)) / 1024 ** 3);
+  const back = Math.min(c.cost, Math.round(c.cost * (leftGB / total)));
+  if (back <= 0) return `Delete client "${c.email}"? Its quota is spent, so nothing comes back.`;
+  return `Delete client "${c.email}"? ${leftGB.toFixed(1)} GB of it was never used, so ${back.toLocaleString()} goes back to your balance.`;
+}
+
 /* ------------------------------ page: clients ---------------------------- */
 
 /** Sold with the clock unwound, and not yet used. */
@@ -1589,7 +1607,11 @@ function purgeClients(scope) {
         close();
         try {
           const result = await api.post('/clients/purge', { scope });
-          toast(result.deleted ? `Deleted ${result.deleted} client(s)` : 'Nothing matched');
+          toast(result.deleted
+            ? (result.refunded
+              ? `Deleted ${result.deleted} client(s) — ${result.refunded.toLocaleString()} returned`
+              : `Deleted ${result.deleted} client(s)`)
+            : 'Nothing matched');
           render();
         } catch (err) { toast(err.message, 'err'); }
       }
@@ -1730,10 +1752,12 @@ async function renderClients(view) {
         }),
         el('button', {
           class: 'btn icon danger', title: 'Delete', html: icon('trash'),
-          onclick: () => confirmDialog(`Delete client "${c.email}"?`, async () => {
+          onclick: () => confirmDialog(deleteClientAsk(c), async () => {
             try {
-              await api.del(`/clients/${c.id}`);
-              toast('Client deleted');
+              const gone = await api.del(`/clients/${c.id}`);
+              toast(gone && gone.refunded
+                ? `Client deleted — ${gone.refunded.toLocaleString()} back`
+                : 'Client deleted');
               render();
             } catch (err) { toast(err.message, 'err'); }
           })
@@ -2077,13 +2101,16 @@ function clientForm(existing) {
       const chargeable = existing ? Math.max(0, gb - was) : gb;
       const cost = chargeable * rate;
       priceNote.className = cost > balance ? 'hint bad-text' : 'hint';
-      priceNote.textContent = cost > balance
+      priceNote.textContent = t(cost > balance
         ? `That costs ${cost.toLocaleString()} and your balance is ${balance.toLocaleString()}.`
-        : `Costs ${cost.toLocaleString()} of your ${balance.toLocaleString()}.`;
+        : `Costs ${cost.toLocaleString()} of your ${balance.toLocaleString()}.`);
     };
     totalGB.addEventListener('input', price);
     price();
-    totalGB.closest('.field').append(priceNote);
+    totalGB.closest('.field').append(priceNote, el('div', {
+      class: 'hint',
+      text: 'Whatever is left unused comes back to your balance if you delete this client.'
+    }));
   }
 
   const days = el('input', {
@@ -3078,6 +3105,30 @@ async function renderAdmins(view) {
   const data = await api.get('/admins');
   state.admins = data;
 
+  /* the price everybody follows, where the people who follow it are listed */
+  const price = el('input', { type: 'number', min: '0', value: data.defaultPricePerGB, style: 'max-width:140px' });
+  const savePrice = el('button', {
+    class: 'btn', text: 'Save',
+    onclick: async () => {
+      try {
+        await api.put('/settings', { pricePerGB: Math.max(0, Number(price.value) || 0) });
+        toast('Price saved');
+        render();
+      } catch (err) { toast(err.message, 'err'); }
+    }
+  });
+  price.addEventListener('keydown', (e) => { if (e.key === 'Enter') savePrice.click(); });
+  view.append(el('div', { class: 'card', style: 'margin-bottom:16px' }, [
+    el('div', { class: 'field' }, [
+      el('label', { text: 'Price per GB for every panel' }),
+      el('div', { class: 'row', style: 'gap:8px;align-items:center' }, [price, savePrice]),
+      el('div', {
+        class: 'hint',
+        text: 'What a gigabyte costs a reseller. Change it here and every panel follows, except any you have given a price of its own.'
+      })
+    ])
+  ]));
+
   if (!data.admins.length) {
     emptyState(wrap, 'No reseller panels yet. Create one and hand over its address.');
   } else {
@@ -3099,7 +3150,12 @@ async function renderAdmins(view) {
         ]),
         el('td', {}, [
           el('div', { class: 'num', text: admin.balance.toLocaleString() }),
-          el('div', { class: 'faint', style: 'font-size:11px', text: `about ${gbLeft} GB` })
+          el('div', {
+            class: 'faint', style: 'font-size:11px',
+            text: admin.priceOverride
+              ? `about ${gbLeft} GB · own price ${admin.pricePerGB.toLocaleString()}`
+              : `about ${gbLeft} GB`
+          })
         ]),
         el('td', { class: 'num', text: `${admin.clients}` }),
         el('td', {}, [
@@ -3203,8 +3259,12 @@ function adminForm(existing) {
     hint: 'Every client they make goes on this inbound. They never see the choice.'
   });
   const price = formField(form, 'Price per GB', el('input', {
-    type: 'number', min: '0', value: v.pricePerGB || data.defaultPricePerGB
-  }), { hint: 'What a gigabyte costs them, in your currency.' });
+    type: 'number', min: '0',
+    value: v.priceOverride || '',
+    placeholder: `${(data.defaultPricePerGB || 0).toLocaleString()} (the panel price)`
+  }), {
+    hint: 'Leave it empty and they pay the panel price, so changing that one number changes them too. Fill it in to give this panel a price of its own.'
+  });
   const balance = existing ? null : formField(form, 'Opening balance', el('input', { type: 'number', min: '0', value: 0 }));
   const note = formField(form, 'Note', el('input', { value: v.note || '', placeholder: 'who this is' }), { full: true });
 
@@ -3246,7 +3306,8 @@ function adminForm(existing) {
         const payload = {
           name: name.value.trim(),
           inboundId: inbound.value,
-          pricePerGB: Number(price.value),
+          // empty means "follow the panel price"; the server reads 0 that way
+          pricePerGB: price.value.trim() === '' ? 0 : Number(price.value),
           note: note.value
         };
         if (balance) payload.balance = Number(balance.value);
@@ -3415,7 +3476,11 @@ async function adminDetail(id) {
     el('div', { class: 'field' }, [el('label', { text: 'Spent so far' }), el('div', { class: 'value-lg', text: (a.spent || 0).toLocaleString() })]),
     el('div', { class: 'field' }, [el('label', { text: 'Clients' }), el('div', { class: 'value-lg', text: `${a.clients}` })]),
     el('div', { class: 'field' }, [el('label', { text: 'Sold' }), el('div', { class: 'value-lg', text: `${a.soldGB} GB` })]),
-    el('div', { class: 'field' }, [el('label', { text: 'Price per GB' }), el('div', { class: 'value-lg', text: a.pricePerGB.toLocaleString() })]),
+    el('div', { class: 'field' }, [
+      el('label', { text: 'Price per GB' }),
+      el('div', { class: 'value-lg', text: a.pricePerGB.toLocaleString() }),
+      el('div', { class: 'faint', style: 'font-size:11px', text: a.priceOverride ? 'a price of its own' : 'the panel price' })
+    ]),
     el('div', { class: 'field' }, [
       el('label', { text: 'Signs in as' }),
       el('div', { class: 'value-lg', text: a.username || '—' }),

@@ -411,6 +411,20 @@ const FA = {
   'Fetching the latest version...': 'در حال گرفتن تازه‌ترین نسخه…',
   'Restarting the panel...': 'در حال ری‌استارت پنل…',
 
+  /* --------------------------- reseller money -------------------------- */
+  'Price per GB for every panel': 'قیمت هر گیگ برای همه پنل‌ها',
+  'What a gigabyte costs a reseller. Change it here and every panel follows, except any you have given a price of its own.':
+    'هر گیگ برای نماینده چقدر آب می‌خورد. اینجا عوضش کنید و همه پنل‌ها دنبالش می‌آیند، جز آن‌هایی که قیمت مخصوص خودشان را داده‌اید.',
+  'Price saved': 'قیمت ذخیره شد',
+  'What this client may use in total. It is what you are charged for.':
+    'این کلاینت در مجموع چقدر می‌تواند مصرف کند. همین است که از شما حساب می‌شود.',
+  'Leave it empty and they pay the panel price, so changing that one number changes them too. Fill it in to give this panel a price of its own.':
+    'خالی بگذارید تا قیمت پنل را بپردازند، پس با عوض کردن همان یک عدد این هم عوض می‌شود. پرش کنید تا این پنل قیمت مخصوص خودش را داشته باشد.',
+  'the panel price': 'قیمت پنل',
+  'a price of its own': 'قیمت مخصوص خودش',
+  'Whatever is left unused comes back to your balance if you delete this client.':
+    'هرچه از حجم مصرف نشده باشد، اگر این کلاینت را حذف کنید به موجودی‌تان برمی‌گردد.',
+
   /* ------------------------------- bot -------------------------------- */
   'Bot token from @BotFather': 'توکن ربات از ‎@BotFather',
   'Talk to @BotFather, send /newbot, and paste the token here.':
@@ -717,6 +731,15 @@ const FA = {
 const PATTERNS = [
   [/^(\d+) cores?$/, (m) => `${m[1]} هسته`],
   [/^of (\d+) total$/, (m) => `از ${m[1]}`],
+  /* Anything below the catch-all "X of Y" further down would never be reached,
+     so sentences that happen to contain " of " are matched up here first. */
+  [/^Costs (.+) of your (.+)\.$/, (m) => `${m[1]} از ${m[2]} شما خرج می‌شود.`],
+  [/^That costs (.+) and your balance is (.+)\.$/,
+    (m) => `این ${m[1]} خرج دارد و موجودی شما ${m[2]} است.`],
+  [/^Delete client "(.+)"\? (.+) GB of it was never used, so (.+) goes back to your balance\.$/,
+    (m) => `کلاینت «${m[1]}» حذف شود؟ ${m[2]} گیگ از آن اصلاً مصرف نشده، پس ${m[3]} به موجودی‌تان برمی‌گردد.`],
+  [/^Delete client "(.+)"\? Its quota is spent, so nothing comes back\.$/,
+    (m) => `کلاینت «${m[1]}» حذف شود؟ حجمش تمام شده، پس چیزی برنمی‌گردد.`],
   [/^(.+) of (.+)$/, (m) => `${m[1]} از ${m[2]}`],
   [/^(\d+) days? left$/, (m) => `${m[1]} روز مانده`],
   [/^Delete client "(.+)"\?$/, (m) => `کلاینت «${m[1]}» حذف شود؟`],
@@ -811,6 +834,10 @@ const PATTERNS = [
     (m) => `نسخه ${m[1]} موجود است. برای نصب، به‌روزرسانی را بزنید.`],
   [/^Still the newest: (.+)$/, (m) => `هنوز تازه‌ترین است: ${m[1]}`],
   [/^Could not start: (.+)$/, (m) => `نتوانست شروع شود: ${m[1]}`],
+  [/^Client deleted — (.+) back$/, (m) => `کلاینت حذف شد — ${m[1]} برگشت`],
+  [/^Deleted (\d+) client\(s\) — (.+) returned$/, (m) => `${m[1]} کلاینت حذف شد — ${m[2]} برگشت`],
+  [/^about (\d+) GB · own price (.+)$/, (m) => `حدود ${m[1]} گیگ · قیمت خودش ${m[2]}`],
+  [/^(\S+) \(the panel price\)$/, (m) => `${m[1]} (قیمت پنل)`],
   [/^Hostname: (.+)$/, (m) => `نام میزبان: ${m[1]}`],
   [/^Panel domain: (.+)$/, (m) => `دامنه پنل: ${m[1]}`],
   [/^Load average: (.+)$/, (m) => `بار متوسط: ${m[1]}`],
