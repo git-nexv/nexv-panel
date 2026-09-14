@@ -15,6 +15,7 @@ const telegram = require('../telegram');
 const online = require('../online');
 const sitekind = require('../sitekind');
 const parselink = require('../parselink');
+const resellers = require('../reseller');
 const probe = require('../probe');
 const botai = require('../botai');
 const system = require('../system');
@@ -65,8 +66,43 @@ router.post('/login', async (req, res) => {
     return bad(res, 'invalid credentials', 401);
   }
   res.cookie(auth.COOKIE, result.token, auth.cookieOptions(req));
+  const mine = resellers.forUser(result.user);
+  if (mine) {
+    mine.lastLoginAt = Date.now();
+    db.saveNow();
+  }
   logEvent('auth', `login: ${result.user.username} from ${ip}`);
   res.json({ ok: true, user: { username: result.user.username, role: result.user.role } });
+});
+
+/**
+ * A reseller making their own account, once.
+ *
+ * The leader hands over an address and nothing else; whoever opens it first
+ * chooses the username and password. The address is the secret, so this works
+ * exactly once per panel - after that the form is a sign-in like any other.
+ */
+router.post('/register', async (req, res) => {
+  const { slug, username, password } = req.body || {};
+  const reseller = resellers.bySlug(slug);
+  if (!reseller || reseller.enable === false) return bad(res, 'this address is not open', 404);
+  if (reseller.userId) return bad(res, 'this panel already has an account - sign in instead');
+
+  const name = String(username || '').trim();
+  if (name.length < 3) return bad(res, 'pick a username of at least three characters');
+  if (String(password || '').length < 8) return bad(res, 'pick a password of at least eight characters');
+  if (db.data.users.some((u) => u.username === name)) return bad(res, 'that username is taken');
+
+  const user = await auth.createUser(name, String(password), 'reseller');
+  user.resellerId = reseller.id;
+  reseller.userId = user.id;
+  db.saveNow();
+
+  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+  const result = await auth.login(name, String(password), ip);
+  if (result) res.cookie(auth.COOKIE, result.token, auth.cookieOptions(req));
+  logEvent('admin', `"${reseller.name}" opened their panel and made an account`);
+  res.json({ ok: true, user: { username: name, role: 'reseller' } });
 });
 
 router.post('/logout', (req, res) => {
@@ -78,7 +114,31 @@ router.post('/logout', (req, res) => {
 router.get('/me', (req, res) => {
   const user = auth.currentUser(req);
   if (!user) return bad(res, 'unauthorized', 401);
-  res.json({ username: user.username, role: user.role });
+
+  /* a reseller's panel is drawn from this: what they may see, what they may
+     spend, and what they have already sold */
+  const mine = resellers.forUser(user);
+  if (mine) {
+    const view = resellers.summary(mine);
+    return res.json({
+      username: user.username,
+      role: 'reseller',
+      reseller: {
+        name: view.name,
+        balance: view.balance,
+        spent: view.spent,
+        pricePerGB: view.pricePerGB,
+        clients: view.clients,
+        active: view.active,
+        soldGB: view.soldGB,
+        usedBytes: view.usedBytes,
+        enable: view.enable,
+        hasBot: view.hasBot,
+        ledger: (mine.ledger || []).slice(0, 20)
+      }
+    });
+  }
+  res.json({ username: user.username, role: user.role || 'admin' });
 });
 
 /** Unauthenticated liveness probe, used by the nexv CLI to report panel state. */
@@ -90,6 +150,42 @@ router.get('/health', (req, res) => res.json({
 
 // everything below requires a session
 router.use(auth.requireAuth);
+
+/*
+ * What a reseller may touch.
+ *
+ * Deny by default, and list what is allowed rather than what is not: a route
+ * added next month is then closed to them until somebody decides otherwise,
+ * which is the way round that fails safely. Their own clients, their own bot,
+ * their own wallet, and nothing that belongs to the server itself - no
+ * inbounds, no outbounds, no routing, no settings, no backup, no Xray
+ * controls, and not the pages showing which sites another person visited.
+ */
+const RESELLER_ALLOWS = [
+  [/^\/me$/, ['GET']],
+  [/^\/logout$/, ['POST']],
+  [/^\/account$/, ['POST']],
+  [/^\/status$/, ['GET']],
+  [/^\/protocols$/, ['GET']],
+  [/^\/clients$/, ['GET', 'POST']],
+  [/^\/clients\/[^/]+$/, ['PUT', 'DELETE']],
+  [/^\/clients\/[^/]+\/(toggle|reset-traffic|forget-ips)$/, ['POST']],
+  [/^\/clients\/[^/]+\/(qrcode|sub)$/, ['GET']],
+  [/^\/wallet\/redeem$/, ['POST']],
+  [/^\/reseller\/bot$/, ['GET', 'PUT']]
+];
+
+router.use((req, res, next) => {
+  req.reseller = resellers.forUser(req.user);
+  if (!req.reseller) return next();
+  if (req.reseller.enable === false) {
+    return bad(res, 'this panel has been suspended - talk to whoever sold it to you', 403);
+  }
+  const path = req.path.replace(/\/+$/, '') || '/';
+  const allowed = RESELLER_ALLOWS.some(([re, methods]) => re.test(path) && methods.includes(req.method));
+  if (!allowed) return bad(res, 'not available on this panel', 403);
+  next();
+});
 
 router.post('/account', async (req, res) => {
   const { username, password, currentPassword } = req.body || {};
@@ -355,6 +451,32 @@ router.post('/bot/ai', async (req, res) => {
 
 router.get('/status', async (req, res) => {
   const d = db.data;
+
+  /*
+   * A reseller is told about their own business and nothing about the machine
+   * it runs on. Load, disk, the Xray version and how many other people are on
+   * here are the leader's to know.
+   */
+  if (req.reseller) {
+    const mine = resellers.clientsOf(req.reseller);
+    return res.json({
+      reseller: true,
+      counts: {
+        clients: mine.length,
+        active: mine.filter((c) => c.enable !== false && !xray.isExpired(c) && !xray.isOverQuota(c)).length
+      },
+      balance: req.reseller.balance || 0,
+      pricePerGB: req.reseller.pricePerGB || resellers.DEFAULT_PRICE_PER_GB,
+      soldGB: mine.reduce((a, c) => a + (Number(c.totalGB) || 0), 0),
+      traffic: mine.reduce((acc, c) => {
+        acc.up += c.up || 0;
+        acc.down += c.down || 0;
+        return acc;
+      }, { up: 0, down: 0 }),
+      bot: { configured: !!resellers.readBot(req.reseller) }
+    });
+  }
+
   const clients = d.clients;
   const totals = clients.reduce((acc, c) => {
     acc.up += c.up || 0;
@@ -871,6 +993,16 @@ router.post('/inbounds/reset-traffic', async (req, res) => {
 
 /* -------------------------------- clients ------------------------------- */
 
+/*
+ * Whose client is this? The leader owns everything; a reseller owns what they
+ * sold. Answering "not found" rather than "not yours" keeps one reseller from
+ * learning that another reseller's client exists by guessing at ids.
+ */
+function owns(req, client) {
+  if (!req.reseller) return true;
+  return client.resellerId === req.reseller.id;
+}
+
 function normalizeClient(body, existing, inbound) {
   const c = Object.assign({}, existing || {}, {
     // a newline in a name makes the export unreadable to other panels
@@ -886,6 +1018,7 @@ function normalizeClient(body, existing, inbound) {
      * unwound until the config is first used: expiryDays is held here and
      * turned into a real expiryTime the moment traffic first moves.
      */
+    resellerId: body.resellerId ?? existing?.resellerId ?? '',
     startAfterFirstUse: body.startAfterFirstUse ?? existing?.startAfterFirstUse ?? false,
     expiryDays: Number(body.expiryDays ?? existing?.expiryDays ?? 0),
     /* set when a sale was reversed; turning the client back on clears it */
@@ -916,9 +1049,11 @@ function normalizeClient(body, existing, inbound) {
 
 router.get('/clients', (req, res) => {
   const d = db.data;
-  const list = req.query.inboundId
+  let list = req.query.inboundId
     ? d.clients.filter((c) => c.inboundId === req.query.inboundId)
     : d.clients;
+  // a reseller sees the people they sold to and nobody else
+  if (req.reseller) list = d.clients.filter((c) => c.resellerId === req.reseller.id);
   res.json(list.map((c) => {
     const inb = d.inbounds.find((i) => i.id === c.inboundId);
     const live = online.forTag(xray.clientTag(c));
@@ -975,11 +1110,39 @@ async function createClient(inbound, body) {
 
 router.post('/clients', async (req, res) => {
   const body = req.body || {};
+
+  /*
+   * A reseller does not choose an inbound and does not choose to pay nothing:
+   * the inbound is the one the leader put them on, and the quota is what their
+   * balance is spent on. Both are settled here rather than trusted from the
+   * form, which is the only place it can be settled safely.
+   */
+  let charged = null;
+  if (req.reseller) {
+    const gb = Number(body.totalGB) || 0;
+    if (gb <= 0) return bad(res, 'set a quota - an unlimited client cannot be priced');
+    body.inboundId = req.reseller.inboundId;
+    body.resellerId = req.reseller.id;
+    const bill = resellers.charge(req.reseller, gb, `client ${body.email || ''}`.trim());
+    if (!bill.ok) return bad(res, bill.error);
+    charged = bill.cost;
+  }
+
   const inb = db.data.inbounds.find((i) => i.id === body.inboundId);
-  if (!inb) return bad(res, 'inbound not found', 404);
+  if (!inb) {
+    if (charged) resellers.adjust(req.reseller, charged, 'refund - inbound missing');
+    return bad(res, req.reseller ? 'this panel has no inbound set up yet - talk to whoever sold it to you' : 'inbound not found', 404);
+  }
+
   try {
-    res.json(await createClient(inb, body));
-  } catch (err) { bad(res, err.message); }
+    const made = await createClient(inb, body);
+    if (req.reseller) made.balance = req.reseller.balance;
+    res.json(made);
+  } catch (err) {
+    // the money goes back if the client did not happen
+    if (charged) resellers.adjust(req.reseller, charged, 'refund - client not created');
+    bad(res, err.message);
+  }
 });
 
 router.put('/clients/:id', async (req, res) => {
@@ -987,6 +1150,23 @@ router.put('/clients/:id', async (req, res) => {
   const idx = d.clients.findIndex((c) => c.id === req.params.id);
   if (idx < 0) return bad(res, 'client not found', 404);
   const before = d.clients[idx];
+  if (!owns(req, before)) return bad(res, 'client not found', 404);
+
+  /* raising a quota costs the difference; lowering one gives it back, because
+     otherwise a reseller who mistypes a number has simply lost the money */
+  if (req.reseller) {
+    const wasGB = Number(before.totalGB) || 0;
+    const nowGB = Number(req.body.totalGB ?? wasGB) || 0;
+    if (nowGB <= 0) return bad(res, 'set a quota - an unlimited client cannot be priced');
+    if (nowGB > wasGB) {
+      const bill = resellers.charge(req.reseller, nowGB - wasGB, `${before.email}: quota raised`);
+      if (!bill.ok) return bad(res, bill.error);
+    } else if (nowGB < wasGB) {
+      resellers.adjust(req.reseller, resellers.costOf(wasGB - nowGB, req.reseller), `${before.email}: quota lowered`);
+    }
+    req.body.inboundId = req.reseller.inboundId;
+    req.body.resellerId = req.reseller.id;
+  }
   const inb = d.inbounds.find((i) => i.id === (req.body.inboundId || before.inboundId));
   if (!inb) return bad(res, 'inbound not found', 404);
   const updated = normalizeClient(req.body || {}, before, inb);
@@ -1005,7 +1185,7 @@ router.put('/clients/:id', async (req, res) => {
 router.delete('/clients/:id', async (req, res) => {
   const d = db.data;
   const client = d.clients.find((c) => c.id === req.params.id);
-  if (!client) return bad(res, 'client not found', 404);
+  if (!client || !owns(req, client)) return bad(res, 'client not found', 404);
   d.clients = d.clients.filter((c) => c.id !== client.id);
   online.forget(xray.clientTag(client));
   db.saveNow();
@@ -1053,7 +1233,7 @@ router.post('/clients/purge', async (req, res) => {
 
 router.post('/clients/:id/toggle', async (req, res) => {
   const client = db.data.clients.find((c) => c.id === req.params.id);
-  if (!client) return bad(res, 'client not found', 404);
+  if (!client || !owns(req, client)) return bad(res, 'client not found', 404);
   client.enable = client.enable === false;
   // switching one back on is the admin overruling whatever cut it off
   if (client.enable) client.blockedReason = '';
@@ -1064,7 +1244,7 @@ router.post('/clients/:id/toggle', async (req, res) => {
 
 router.post('/clients/:id/reset-traffic', async (req, res) => {
   const client = db.data.clients.find((c) => c.id === req.params.id);
-  if (!client) return bad(res, 'client not found', 404);
+  if (!client || !owns(req, client)) return bad(res, 'client not found', 404);
   client.up = 0;
   client.down = 0;
   client.autoDisabled = false;
@@ -1161,7 +1341,7 @@ router.post('/clients/:id/forget-sites', (req, res) => {
 /** Start this client's address list over, after the admin has seen it. */
 router.post('/clients/:id/forget-ips', (req, res) => {
   const client = db.data.clients.find((c) => c.id === req.params.id);
-  if (!client) return bad(res, 'client not found', 404);
+  if (!client || !owns(req, client)) return bad(res, 'client not found', 404);
   const cleared = online.forget(xray.clientTag(client));
   logEvent('client', `cleared ${cleared} recorded address(es) for ${client.email}`);
   res.json({ ok: true, cleared });
@@ -1581,6 +1761,138 @@ router.put('/settings', async (req, res) => {
   await xray.apply();
   logEvent('settings', 'panel settings updated');
   res.json({ ok: true, restartNeeded, webBasePath });
+});
+
+/* ---------------------------- reseller panels ---------------------------- */
+
+/** Only the leader may look at any of this. */
+function leaderOnly(req, res, next) {
+  if (req.reseller) return bad(res, 'not available on this panel', 403);
+  next();
+}
+
+router.get('/admins', leaderOnly, (req, res) => {
+  res.json({
+    admins: resellers.all().map(resellers.summary),
+    codes: resellers.codes().slice(0, 200),
+    defaultPricePerGB: resellers.DEFAULT_PRICE_PER_GB,
+    inbounds: db.data.inbounds.map((i) => ({ id: i.id, label: `${i.remark} · ${i.protocol}:${i.port}` }))
+  });
+});
+
+/** Everything the leader could want about one of their people. */
+router.get('/admins/:id', leaderOnly, (req, res) => {
+  const reseller = resellers.byId(req.params.id);
+  if (!reseller) return bad(res, 'not found', 404);
+  const clients = resellers.clientsOf(reseller);
+  res.json({
+    admin: resellers.summary(reseller),
+    loginPath: `/${reseller.slug}/`,
+    ledger: (reseller.ledger || []).slice(0, 100),
+    codes: resellers.codes().filter((c) => c.resellerId === reseller.id),
+    clients: clients.map((c) => ({
+      id: c.id, email: c.email, totalGB: c.totalGB || 0,
+      up: c.up || 0, down: c.down || 0,
+      expiryTime: c.expiryTime || 0, expiryDays: c.expiryDays || 0,
+      startAfterFirstUse: !!c.startAfterFirstUse,
+      enable: c.enable !== false, createdAt: c.createdAt || 0
+    }))
+  });
+});
+
+router.post('/admins', leaderOnly, (req, res) => {
+  const body = req.body || {};
+  if (!String(body.name || '').trim()) return bad(res, 'give this panel a name');
+  const reseller = resellers.create(body);
+  logEvent('admin', `created the reseller panel "${reseller.name}"`);
+  res.json(resellers.summary(reseller));
+});
+
+router.put('/admins/:id', leaderOnly, (req, res) => {
+  const reseller = resellers.byId(req.params.id);
+  if (!reseller) return bad(res, 'not found', 404);
+  const body = req.body || {};
+  if (body.name !== undefined) reseller.name = String(body.name).trim() || reseller.name;
+  if (body.note !== undefined) reseller.note = String(body.note);
+  if (body.inboundId !== undefined) reseller.inboundId = String(body.inboundId);
+  if (body.pricePerGB !== undefined) reseller.pricePerGB = Math.max(0, Number(body.pricePerGB) || 0);
+  if (body.enable !== undefined) reseller.enable = !!body.enable;
+  db.saveNow();
+  logEvent('admin', `updated the reseller panel "${reseller.name}"`);
+  res.json(resellers.summary(reseller));
+});
+
+router.delete('/admins/:id', leaderOnly, (req, res) => {
+  const reseller = resellers.remove(req.params.id);
+  if (!reseller) return bad(res, 'not found', 404);
+  logEvent('admin', `deleted the reseller panel "${reseller.name}" - their clients are kept`);
+  res.json({ ok: true });
+});
+
+/** Money in or out by hand, for when somebody paid outside the codes. */
+router.post('/admins/:id/balance', leaderOnly, (req, res) => {
+  const reseller = resellers.byId(req.params.id);
+  if (!reseller) return bad(res, 'not found', 404);
+  const amount = Math.round(Number((req.body || {}).amount) || 0);
+  if (!amount) return bad(res, 'give an amount - a positive one to add, a negative one to take back');
+  const balance = resellers.adjust(reseller, amount, String((req.body || {}).reason || 'adjusted by the leader'));
+  logEvent('admin', `${amount > 0 ? 'credited' : 'debited'} ${Math.abs(amount)} to ${reseller.name}`);
+  res.json({ ok: true, balance });
+});
+
+/** A code worth money: tied to one panel, or loose as a gift. */
+router.post('/admins/codes', leaderOnly, (req, res) => {
+  const body = req.body || {};
+  const amount = Math.round(Number(body.amount) || 0);
+  if (amount <= 0) return bad(res, 'a code has to be worth something');
+  const code = resellers.issueCode(body);
+  logEvent('admin', `issued a code worth ${amount}${body.resellerId ? '' : ' (gift, anyone may use it)'}`);
+  res.json(code);
+});
+
+router.delete('/admins/codes/:id', leaderOnly, (req, res) => {
+  const before = resellers.codes().length;
+  db.data.codes = resellers.codes().filter((c) => c.id !== req.params.id);
+  if (db.data.codes.length === before) return bad(res, 'not found', 404);
+  db.saveNow();
+  res.json({ ok: true });
+});
+
+/** The reseller's own end of it: type the code in, get the balance. */
+router.post('/wallet/redeem', (req, res) => {
+  if (!req.reseller) return bad(res, 'not available on this panel', 403);
+  const result = resellers.redeem(req.reseller, (req.body || {}).code);
+  if (!result.ok) return bad(res, result.error);
+  logEvent('admin', `${req.reseller.name} redeemed a code worth ${result.amount}`);
+  res.json(result);
+});
+
+/** Their bot, in their own file, never the leader's. */
+router.get('/reseller/bot', (req, res) => {
+  if (!req.reseller) return bad(res, 'not available on this panel', 403);
+  const stored = resellers.readBot(req.reseller) || {};
+  res.json({
+    brand: stored.brand || req.reseller.name,
+    currency: stored.currency || 'تومان',
+    adminId: stored.adminId || '',
+    hasToken: !!stored.token,
+    plans: stored.plans || [],
+    live: false
+  });
+});
+
+router.put('/reseller/bot', (req, res) => {
+  if (!req.reseller) return bad(res, 'not available on this panel', 403);
+  const body = req.body || {};
+  const stored = resellers.readBot(req.reseller) || {};
+  if (typeof body.token === 'string' && body.token.trim()) stored.token = body.token.trim();
+  if (body.brand !== undefined) stored.brand = String(body.brand).slice(0, 40);
+  if (body.currency !== undefined) stored.currency = String(body.currency).slice(0, 16);
+  if (body.adminId !== undefined) stored.adminId = String(body.adminId).trim();
+  if (Array.isArray(body.plans)) stored.plans = body.plans;
+  stored.updatedAt = Date.now();
+  resellers.writeBot(req.reseller, stored);
+  res.json({ ok: true });
 });
 
 /* ------------------------------ xray control ---------------------------- */

@@ -168,6 +168,30 @@ const FA = {
   'Copy the subscription link': 'کپی لینک سابسکریپشن',
   'Copied to clipboard': 'کپی شد',
 
+  /* ------------------------- reseller panels --------------------------- */
+  'Admins': 'نمایندگان',
+  'Sign out of this panel?': 'از این پنل خارج می‌شوید؟',
+  'Balance': 'موجودی',
+  'My clients': 'کلاینت‌های من',
+  'Sold': 'فروخته‌شده',
+  'Activation code': 'کد فعال‌سازی',
+  'Paid for a top-up? Type the code you were given here.':
+    'شارژ خریده‌اید؟ کدی که گرفته‌اید را اینجا وارد کنید.',
+  'Add to my balance': 'افزودن به موجودی',
+  'Balance history': 'تاریخچه موجودی',
+  'New panel': 'پنل جدید',
+  'Gift code': 'کد هدیه',
+  'Panel name': 'نام پنل',
+  'Their inbound': 'اینباند آن‌ها',
+  'Price per GB': 'قیمت هر گیگ',
+  'Opening balance': 'موجودی اولیه',
+  'Sign-in address': 'آدرس ورود',
+  'Copy their sign-in address': 'کپی آدرس ورود آن‌ها',
+  'Your bot': 'ربات شما',
+  'Your own bot settings': 'تنظیمات ربات خودتان',
+  'Not set up': 'تنظیم نشده',
+  'Set up': 'تنظیم شده',
+
   /* ---------------------------- outbounds ----------------------------- */
   'Chain to another server': 'اتصال به سرور دیگر',
   'New outbound': 'اوت‌باند جدید',

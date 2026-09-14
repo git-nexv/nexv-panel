@@ -100,6 +100,29 @@ document.getElementById('themeToggle').addEventListener('click', () => {
   applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
 });
 paintLanguage();
+
+/*
+ * A reseller panel nobody has claimed yet asks for an account instead of a
+ * sign-in. The address is the only secret protecting it, so this happens once
+ * and then the page is an ordinary sign-in like any other.
+ */
+const RESELLER = window.__NEXV_RESELLER__ || null;
+const REGISTER_TEXT = {
+  en: { title: 'Set up your panel', sub: 'Choose a username and password. This happens once.', go: 'Create my account' },
+  fa: { title: 'پنل خود را بسازید', sub: 'یک نام کاربری و رمز انتخاب کنید. این کار فقط یک بار انجام می‌شود.', go: 'ساخت حساب' }
+};
+const registering = () => !!(RESELLER && RESELLER.register);
+
+function paintRegister() {
+  if (!registering()) return;
+  const words = REGISTER_TEXT[I18N.lang()] || REGISTER_TEXT.en;
+  document.querySelector('.login-title').textContent = words.title;
+  document.querySelector('.login-sub').textContent = words.sub;
+  if (!submitBtn.disabled) submitBtn.textContent = words.go;
+  document.getElementById('password').setAttribute('autocomplete', 'new-password');
+}
+document.getElementById('langToggle').addEventListener('click', () => setTimeout(paintRegister, 0));
+paintRegister();
 const form = document.getElementById('loginForm');
 const errorBox = document.getElementById('error');
 const submitBtn = document.getElementById('submitBtn');
@@ -108,7 +131,9 @@ function fail(message) {
   errorBox.textContent = message;
   errorBox.classList.remove('hidden');
   submitBtn.disabled = false;
-  submitBtn.textContent = SIGN_IN[I18N.lang()] || SIGN_IN.en;
+  submitBtn.textContent = registering()
+    ? (REGISTER_TEXT[I18N.lang()] || REGISTER_TEXT.en).go
+    : (SIGN_IN[I18N.lang()] || SIGN_IN.en);
 }
 
 form.addEventListener('submit', async (event) => {
@@ -121,12 +146,13 @@ form.addEventListener('submit', async (event) => {
   const timer = setTimeout(() => abort.abort(), 20000);
   let res;
   try {
-    res = await fetch(`${BASE}api/login`, {
+    res = await fetch(`${BASE}api/${registering() ? 'register' : 'login'}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         username: document.getElementById('username').value,
-        password: document.getElementById('password').value
+        password: document.getElementById('password').value,
+        slug: RESELLER ? RESELLER.slug : undefined
       }),
       signal: abort.signal
     });

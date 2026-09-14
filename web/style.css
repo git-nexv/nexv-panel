@@ -1215,6 +1215,9 @@ tbody tr:nth-child(n+6) { animation-delay: 110ms; }
   background: color-mix(in srgb, var(--danger) 14%, transparent);
 }
 
+/* a figure worth reading at a glance, inside a form grid */
+.value-lg { font-size: 20px; font-weight: 700; letter-spacing: -.3px; }
+
 /* the language key: two letters, the same size as the keys beside it */
 .lang-key {
   flex: 0 0 auto;

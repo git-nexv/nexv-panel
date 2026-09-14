@@ -7,6 +7,7 @@ const QRCode = require('qrcode');
 
 const db = require('./db');
 const auth = require('./auth');
+const resellers = require('./reseller');
 const xray = require('./xray');
 const links = require('./links');
 const system = require('./system');
@@ -215,11 +216,34 @@ function normalizeBasePath(value) {
   return `/${raw.replace(/^\/+|\/+$/g, '')}`;
 }
 
+/*
+ * Two kinds of front door.
+ *
+ * The leader's panel answers under its own secret path. Each reseller has a
+ * path of their own, unguessable in the same way and never the leader's - what
+ * comes through it is the same application, told by /api/me that it is a
+ * reseller and to draw three pages instead of seven.
+ */
 app.use((req, res, next) => {
   const base = normalizeBasePath(db.settings.webBasePath);
-  if (!base) return next();
-
   const [pathname, query] = req.url.split('?');
+
+  const first = pathname.split('/')[1] || '';
+  const reseller = first ? resellers.bySlug(first) : null;
+  if (reseller) {
+    if (reseller.enable === false) {
+      return res.status(403).type('text/plain').send('This panel has been suspended.');
+    }
+    req.resellerSlug = reseller.slug;
+    const prefix = `/${reseller.slug}`;
+    if (pathname === prefix) {
+      return res.redirect(302, `${prefix}/${query ? `?${query}` : ''}`);
+    }
+    req.url = req.url.slice(prefix.length);
+    return next();
+  }
+
+  if (!base) return next();
   if (pathname === base) {
     return res.redirect(302, `${base}/${query ? `?${query}` : ''}`);
   }
@@ -306,22 +330,47 @@ function renderPage(file, base) {
   return html;
 }
 
-function sendPage(res, file, base) {
+function sendPage(res, file, base, req) {
   res.setHeader('Cache-Control', 'no-store');
-  res.type('html').send(renderPage(file, base));
+  let html = renderPage(file, base);
+  /* the sign-in page of a panel whose owner has not made an account yet offers
+     to make one; every other door gets the ordinary form */
+  if (req && req.resellerSlug) {
+    const mine = resellers.bySlug(req.resellerSlug);
+    const needsAccount = mine && !mine.userId;
+    html = html.replace('</head>',
+      `<script>window.__NEXV_RESELLER__=${JSON.stringify({ slug: mine.slug, name: mine.name, register: !!needsAccount })};</script>\n</head>`);
+  }
+  res.type('html').send(html);
+}
+
+/** Whichever door this request came through. */
+function baseFor(req) {
+  return req.resellerSlug ? `/${req.resellerSlug}` : normalizeBasePath(db.settings.webBasePath);
 }
 
 app.get('/login', (req, res) => {
-  const base = normalizeBasePath(db.settings.webBasePath);
-  if (auth.currentUser(req)) return res.redirect(`${base}/`);
-  sendPage(res, 'login.html', base);
+  const base = baseFor(req);
+  const user = auth.currentUser(req);
+  /* somebody signed in as the leader who opens a reseller's address is not
+     signed in *there*, and the other way round: each door has its own panel */
+  if (user && !mismatched(req, user)) return res.redirect(`${base}/`);
+  sendPage(res, 'login.html', base, req);
 });
 
 app.get('/', (req, res) => {
-  const base = normalizeBasePath(db.settings.webBasePath);
-  if (!auth.currentUser(req)) return res.redirect(`${base}/login`);
-  sendPage(res, 'index.html', base);
+  const base = baseFor(req);
+  const user = auth.currentUser(req);
+  if (!user || mismatched(req, user)) return res.redirect(`${base}/login`);
+  sendPage(res, 'index.html', base, req);
 });
+
+/** Is this session for a different panel than the door it arrived at? */
+function mismatched(req, user) {
+  const mine = resellers.forUser(user);
+  if (req.resellerSlug) return !mine || mine.slug !== req.resellerSlug;
+  return !!mine;
+}
 
 // anything else under the base path is a genuine 404. Serving index.html here
 // would hand HTML to fetches that expect JSON.

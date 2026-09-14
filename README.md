@@ -160,6 +160,14 @@ corner still reads - `web/i18n.js` is one table and a line fixes one.
   not a mystery to support. "Send me a test order" sends that same message with
   made-up figures, which is the one way to find out the bot can reach you before
   a real sale depends on it.
+- **Admins** — panels you have sold. Each reseller signs in at an address of
+  their own, makes their own account the first time they open it, and sees
+  three pages: their dashboard, their clients, their bot. Nothing about the
+  server it runs on, and not which sites anybody visited — that stays with the
+  leader. They spend a balance you credit, priced per gigabyte, and cannot
+  create a client they cannot afford. Top them up with a code (tied to one
+  panel, or loose as a gift) or by hand, and every movement is on a ledger both
+  of you can read.
 - **Settings** — six tabs: general (domain, ports, secret path), config names,
   TLS files, backup and restore, the account, and the event log.
   - **Config names** is a template for what each config calls itself in the

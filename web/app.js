@@ -210,6 +210,7 @@ const ICONS = {
   down: '<path d="m12 17-6-6 1.4-1.4L12 14.2l4.6-4.6L18 11l-6 6Z"/>',
   search: '<path d="M10 3a7 7 0 1 1-4.2 12.6l-3.1 3.1-1.4-1.4 3.1-3.1A7 7 0 0 1 10 3Zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10Z"/>',
   activity: '<path d="M4 13h3l2.5 6 5-14 2.5 8h3v2h-4.5L13 9.5 9.5 20 6 15H4v-2Z"/>',
+  admins: '<path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm-7 8v-1c0-2.7 4.5-4 7-4s7 1.3 7 4v1H5Zm14.5-9.5 1.2 2.4 2.6.4-1.9 1.8.5 2.6-2.4-1.3-2.4 1.3.5-2.6-1.9-1.8 2.6-.4 1.2-2.4Z"/>',
   empty: '<path d="M4 6h16v12H4V6Zm2 2v8h12V8H6Z" opacity=".7"/>'
 };
 
@@ -286,6 +287,17 @@ function selectOf(options, value) {
 
 /* ------------------------------ page: shell ------------------------------ */
 
+/*
+ * Who is looking.
+ *
+ * A reseller's panel is the same application with most of it taken away: they
+ * get their own clients, their own bot and a balance, and nothing about the
+ * server it all runs on. The server enforces that - this only decides what is
+ * worth drawing.
+ */
+const RESELLER_PAGES = ['dashboard', 'clients', 'bot'];
+const isReseller = () => state.role === 'reseller';
+
 const PAGES = [
   { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
   { id: 'inbounds', label: 'Inbounds', icon: 'inbounds' },
@@ -293,18 +305,20 @@ const PAGES = [
   { id: 'outbounds', label: 'Outbounds', icon: 'outbounds' },
   { id: 'routing', label: 'Routing', icon: 'routing' },
   { id: 'bot', label: 'Bot', icon: 'bot' },
+  { id: 'admins', label: 'Admins', icon: 'admins' },
   // settings sits at the end of the bar, the way a settings key usually does
   { id: 'settings', label: 'Settings', icon: 'settings' }
 ];
 
 const state = {
   page: 'dashboard',
+  role: 'admin', me: null,
   inbounds: [], clients: [], outbounds: [], routing: [], settings: {},
   protocols: null, timer: null, version: null
 };
 
 function navigate(page) {
-  if (!PAGES.some((p) => p.id === page)) page = 'dashboard';
+  if (!visiblePages().some((p) => p.id === page)) page = 'dashboard';
   state.page = page;
   location.hash = page;
   document.getElementById('pageTitle').textContent = t((PAGES.find((p) => p.id === page) || {}).label || '');
@@ -324,7 +338,8 @@ function render() {
     outbounds: renderOutbounds,
     routing: renderRouting,
     settings: renderSettings,
-    bot: renderBot
+    bot: renderBot,
+    admins: renderAdmins
   }[state.page] || renderDashboard;
 
   // shown until the painter settles, so a slow page is never a blank screen
@@ -372,7 +387,93 @@ function statCard(label, withBar) {
   };
 }
 
+/**
+ * A reseller's dashboard: their money, their people, their bot.
+ *
+ * Nothing about the machine. They are buying capacity on somebody else's
+ * server and how hard its disk is working is not theirs to see.
+ */
+async function renderResellerDashboard(view) {
+  const grid = el('div', { class: 'grid stats' });
+  const wallet = el('div', { class: 'card', style: 'margin-top:16px' });
+  view.append(grid, wallet);
+
+  const stats = {
+    balance: statCard('Balance'),
+    clients: statCard('My clients'),
+    sold: statCard('Sold'),
+    bot: statCard('Bot')
+  };
+  grid.append(...Object.values(stats).map((c) => c.node));
+
+  const paint = async () => {
+    const [status, me] = await Promise.all([api.get('/status'), api.get('/me')]);
+    const r = me.reseller || {};
+    stats.balance.set(`${(status.balance || 0).toLocaleString()}`, `at ${(status.pricePerGB || 0).toLocaleString()} per GB — about ${Math.floor((status.balance || 0) / (status.pricePerGB || 1))} GB left`);
+    stats.clients.set(String(status.counts.clients), `${status.counts.active} active`);
+    stats.sold.set(`${status.soldGB || 0} GB`, `${bytes((status.traffic.up || 0) + (status.traffic.down || 0))} used`);
+    stats.bot.set(status.bot.configured ? 'Set up' : 'Not set up', 'Your own bot settings');
+    state.me = me;
+    return r;
+  };
+  const r = await paint();
+
+  /* the code box: this is how a reseller turns money into balance */
+  const codeInput = el('input', { placeholder: 'ABCD-EFGH-JKLM', class: 'mono', style: 'text-transform:uppercase' });
+  const note = el('div', { class: 'hint', style: 'margin-top:8px' });
+  const redeem = el('button', {
+    class: 'btn primary', text: 'Add to my balance',
+    onclick: async () => {
+      redeem.disabled = true;
+      try {
+        const result = await api.post('/wallet/redeem', { code: codeInput.value });
+        note.className = 'hint ok-text';
+        note.textContent = `Added ${result.amount.toLocaleString()} — your balance is now ${result.balance.toLocaleString()}.`;
+        codeInput.value = '';
+        await paint();
+      } catch (err) {
+        note.className = 'hint bad-text';
+        note.textContent = err.message;
+      }
+      redeem.disabled = false;
+    }
+  });
+
+  wallet.append(
+    el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+      el('strong', { text: 'Activation code' }),
+      el('span', { class: 'chip brand', text: `${(r.pricePerGB || 0).toLocaleString()} / GB` })
+    ]),
+    el('div', { class: 'muted', style: 'margin-bottom:10px', text: 'Paid for a top-up? Type the code you were given here.' }),
+    el('div', { class: 'input-row' }, [codeInput, redeem]),
+    note
+  );
+
+  /* and what has gone in and out of the balance, so it is never a mystery */
+  const ledger = (r.ledger || []);
+  if (ledger.length) {
+    const wrap = el('div', { class: 'table-wrap', style: 'margin-top:16px' });
+    const table = el('table');
+    table.innerHTML = '<thead><tr><th>When</th><th>Change</th><th>Why</th></tr></thead>';
+    const tbody = el('tbody');
+    for (const line of ledger) {
+      tbody.append(el('tr', {}, [
+        el('td', { class: 'muted mono', text: fmtDate(line.at) }),
+        el('td', {}, [el('strong', {
+          class: line.amount >= 0 ? 'ok-text' : 'bad-text',
+          text: `${line.amount >= 0 ? '+' : ''}${line.amount.toLocaleString()}`
+        })]),
+        el('td', { class: 'muted', text: line.reason })
+      ]));
+    }
+    table.append(tbody);
+    mountTable(wrap, table);
+    view.append(el('div', { class: 'section-title', text: 'Balance history' }), wrap);
+  }
+}
+
 async function renderDashboard(view) {
+  if (isReseller()) return renderResellerDashboard(view);
   const grid = el('div', { class: 'grid stats' });
   const info = el('div', { class: 'grid two', style: 'margin-top:16px' });
   view.append(grid, info);
@@ -1484,7 +1585,7 @@ async function renderClients(view) {
   view.append(el('div', { class: 'between', style: 'margin-bottom:16px' }, [
     el('div', { class: 'muted', text: 'Clients of each inbound, with their quota and expiry.' }),
     el('div', { class: 'row' }, [
-      popupMenu([
+      isReseller() ? null : popupMenu([
         { label: 'Delete expired clients', danger: true, onClick: () => purgeClients('expired') },
         { label: 'Delete clients out of quota', danger: true, onClick: () => purgeClients('depleted') },
         { label: 'Delete expired and out of quota', danger: true, onClick: () => purgeClients('finished') },
@@ -1512,12 +1613,20 @@ async function renderClients(view) {
   view.append(wrap);
 
   await loadProtocols();
-  const [inbounds, clients] = await Promise.all([api.get('/inbounds'), api.get('/clients')]);
+  /* a reseller may not read the inbound list - they are on one the leader
+     chose and never pick it, so the page does not ask for what it cannot have */
+  const [inbounds, clients] = await Promise.all([
+    isReseller() ? Promise.resolve([]) : api.get('/inbounds'),
+    api.get('/clients')
+  ]);
   state.inbounds = inbounds;
   state.clients = clients;
 
-  if (!inbounds.length) return emptyState(wrap, 'Create an inbound first, then add clients to it.');
-  if (!clients.length) return emptyState(wrap, 'No clients yet.');
+  if (!isReseller() && !inbounds.length) return emptyState(wrap, 'Create an inbound first, then add clients to it.');
+  if (!clients.length) {
+    tools.hidden = true;
+    return emptyState(wrap, isReseller() ? 'No clients yet. Make your first one.' : 'No clients yet.');
+  }
 
   /* the summary box, and the same boxes double as filters */
   let picked = CLIENT_STATES.some((s) => s.id === state.clientFilter) ? state.clientFilter : 'all';
@@ -1584,7 +1693,9 @@ async function renderClients(view) {
              one link worth giving anybody */
           onclick: () => copy(c.subLink || c.link)
         }),
-        el('button', {
+        /* addresses yes, sites no: which apps somebody opened is the leader's
+           to see, not the reseller's */
+        isReseller() ? null : el('button', {
           class: 'btn icon ghost', title: 'Where its traffic goes',
           html: icon('activity'), onclick: () => showClientActivity(c)
         }),
@@ -1687,7 +1798,7 @@ function liveCell(client) {
  * a page of adverts is two hundred carrying nothing.
  */
 function showClientActivity(client, startOn) {
-  const { wrap, panels } = tabbed(['Sites', 'Addresses']);
+  const { wrap, panels } = tabbed(isReseller() ? ['Addresses'] : ['Sites', 'Addresses']);
   for (const panel of Object.values(panels)) panel.className = 'tab-panel';
 
   /* ---- Addresses ---- */
@@ -1727,8 +1838,10 @@ function showClientActivity(client, startOn) {
 
   /* ---- Sites ---- */
   const sites = el('div');
-  sites.innerHTML = '<div class="empty"><div class="skeleton" style="height:120px"></div></div>';
-  panels.Sites.append(sites);
+  if (panels.Sites) {
+    sites.innerHTML = '<div class="empty"><div class="skeleton" style="height:120px"></div></div>';
+    panels.Sites.append(sites);
+  }
 
   modal({
     title: `What ${client.email} is doing`,
@@ -1736,9 +1849,9 @@ function showClientActivity(client, startOn) {
     width: 660,
     actions: false
   });
-  if (startOn === 'Addresses') wrap.querySelector('.tab:nth-child(2)').click();
+  if (startOn === 'Addresses' && panels.Sites) wrap.querySelector('.tab:nth-child(2)').click();
 
-  drawSites(client, sites);
+  if (panels.Sites) drawSites(client, sites);
 }
 
 /** Fill the Sites tab once the server answers. */
@@ -1907,27 +2020,55 @@ function clientForm(existing) {
   for (const inb of state.inbounds) {
     inboundSel.append(el('option', { value: inb.id, selected: v.inboundId === inb.id }, [`${inb.remark} · ${inb.protocol}:${inb.port}`]));
   }
-  formField(form, 'Inbound', inboundSel);
+  /* a reseller has one inbound, chosen for them by the leader; the field would
+     be a list of one they cannot change, so it is simply not there */
+  if (!isReseller()) formField(form, 'Inbound', inboundSel);
 
   const uuidRow = generatedField(v.uuid || '', 'uuid', { placeholder: 'generated when you save' });
-  formField(form, 'UUID', uuidRow, { full: true });
-  const uuid = uuidRow.input;
   const passwordRow = generatedField(v.password || '', 'password', { placeholder: 'generated when you save' });
-  formField(form, 'Password / key', passwordRow,
-    { full: true, hint: 'Used by Trojan, Shadowsocks, SOCKS and HTTP inbounds' });
+  /* keys are made for them - a reseller has no reason to see or set one */
+  if (!isReseller()) {
+    formField(form, 'UUID', uuidRow, { full: true });
+    formField(form, 'Password / key', passwordRow,
+      { full: true, hint: 'Used by Trojan, Shadowsocks, SOCKS and HTTP inbounds' });
+  }
+  const uuid = uuidRow.input;
   const password = passwordRow.input;
+
+  /* what this will cost, worked out as the quota is typed */
+  const priceNote = el('div', { class: 'hint' });
 
   /* a new client arrives with its key and password already made: pressing
      Generate twice for every account is a chore, and the fields were never
      going to be filled in by hand anyway */
-  if (!existing) {
+  if (!existing && !isReseller()) {
     api.get('/generate/uuid').then((r) => { if (!uuid.value) uuid.value = r.value; }).catch(() => {});
     api.get('/generate/password').then((r) => { if (!password.value) password.value = r.value; }).catch(() => {});
   }
 
   const totalGB = formField(form, 'Quota (GB)', el('input', { type: 'number', min: '0', value: v.totalGB || 0 }), {
-    hint: 'How much traffic this client may use in total. 0 means unlimited.'
+    hint: isReseller()
+      ? 'What this client may use in total. It is what you are charged for.'
+      : 'How much traffic this client may use in total. 0 means unlimited.'
   });
+
+  if (isReseller()) {
+    const rate = ((state.me && state.me.reseller) || {}).pricePerGB || 0;
+    const balance = ((state.me && state.me.reseller) || {}).balance || 0;
+    const was = Number(v.totalGB) || 0;
+    const price = () => {
+      const gb = Number(totalGB.value) || 0;
+      const chargeable = existing ? Math.max(0, gb - was) : gb;
+      const cost = chargeable * rate;
+      priceNote.className = cost > balance ? 'hint bad-text' : 'hint';
+      priceNote.textContent = cost > balance
+        ? `That costs ${cost.toLocaleString()} and your balance is ${balance.toLocaleString()}.`
+        : `Costs ${cost.toLocaleString()} of your ${balance.toLocaleString()}.`;
+    };
+    totalGB.addEventListener('input', price);
+    price();
+    totalGB.closest('.field').append(priceNote);
+  }
 
   const days = el('input', {
     type: 'number', min: '0',
@@ -1964,16 +2105,32 @@ function clientForm(existing) {
     hint: 'Addresses seen at once in a five-minute window. Over it, the client is cut off until the extras go quiet. 0 means no limit.'
   });
   const flowSel = selectOf([{ value: '', label: 'No flow' }, { value: 'xtls-rprx-vision', label: 'xtls-rprx-vision' }], v.flow || '');
-  formField(form, 'Flow (VLESS over TCP only)', flowSel);
-  const wgPublicKey = formField(form, 'WireGuard peer public key', el('input', { value: v.wgPublicKey || '' }), { full: true });
-  const wgAllowedIPs = formField(form, 'WireGuard allowed IPs', el('input', { value: (v.wgAllowedIPs || []).join(',') , placeholder: '10.0.0.2/32' }), { full: true });
-  const comment = formField(form, 'Note', el('input', { value: v.comment || '' }), { full: true });
+  const wgPublicKey = el('input', { value: v.wgPublicKey || '' });
+  const wgAllowedIPs = el('input', { value: (v.wgAllowedIPs || []).join(','), placeholder: '10.0.0.2/32' });
+  const comment = el('input', { value: v.comment || '' });
 
-  // only show the WireGuard peer fields when the selected inbound needs them
+  /*
+   * A reseller sells a name, an amount and a length of time. Flow and the
+   * WireGuard fields belong to how the leader set the inbound up, and putting
+   * them in front of somebody who did not choose the inbound is asking them to
+   * break their own clients.
+   */
+  if (!isReseller()) {
+    formField(form, 'Flow (VLESS over TCP only)', flowSel);
+    formField(form, 'WireGuard peer public key', wgPublicKey, { full: true });
+    formField(form, 'WireGuard allowed IPs', wgAllowedIPs, { full: true });
+  }
+  formField(form, 'Note', comment, { full: true });
+
+  // only show the WireGuard peer fields when the selected inbound needs them,
+  // and not at all on a panel where they were never put on the form
   const syncProtocol = () => {
     const inb = state.inbounds.find((i) => i.id === inboundSel.value);
     const isWg = inb && inb.protocol === 'wireguard';
-    for (const control of [wgPublicKey, wgAllowedIPs]) control.closest('.field').classList.toggle('hidden', !isWg);
+    for (const control of [wgPublicKey, wgAllowedIPs]) {
+      const field = control.closest('.field');
+      if (field) field.classList.toggle('hidden', !isWg);
+    }
   };
   inboundSel.addEventListener('change', syncProtocol);
   syncProtocol();
@@ -2888,6 +3045,335 @@ async function renderSettings(view) {
   await renderLogs(panels.Logs);
 }
 
+/* ------------------------------ page: admins ----------------------------- */
+/**
+ * The panels the leader has sold.
+ *
+ * Each row is somebody selling on this server: what they have left to spend,
+ * what they have sold, when they last signed in, and the address they sign in
+ * at. Everything the leader would otherwise have to ask them for.
+ */
+async function renderAdmins(view) {
+  view.append(el('div', { class: 'between', style: 'margin-bottom:16px' }, [
+    el('div', { class: 'muted', text: 'Panels you have sold. Each one signs in at its own address and spends a balance you credit.' }),
+    el('div', { class: 'row' }, [
+      el('button', { class: 'btn', html: `${icon('qr')} Gift code`, onclick: () => codeDialog(null) }),
+      el('button', { class: 'btn primary', html: `${icon('plus')} New panel`, onclick: () => adminForm(null) })
+    ])
+  ]));
+
+  const wrap = el('div', { class: 'table-wrap' });
+  wrap.innerHTML = '<div class="empty"><div class="skeleton" style="height:120px"></div></div>';
+  view.append(wrap);
+
+  const data = await api.get('/admins');
+  state.admins = data;
+
+  if (!data.admins.length) {
+    emptyState(wrap, 'No reseller panels yet. Create one and hand over its address.');
+  } else {
+    const table = el('table');
+    table.innerHTML = `<thead><tr>
+      <th>Panel</th><th>Balance</th><th>Clients</th><th>Sold</th><th>Last seen</th><th>Status</th><th></th>
+    </tr></thead>`;
+    const tbody = el('tbody');
+
+    for (const admin of data.admins) {
+      const gbLeft = admin.pricePerGB ? Math.floor(admin.balance / admin.pricePerGB) : 0;
+      tbody.append(el('tr', {}, [
+        el('td', {}, [
+          el('strong', { text: admin.name }),
+          el('div', { class: 'faint', style: 'font-size:11px', text: admin.registered ? 'account made' : 'has not signed in yet' })
+        ]),
+        el('td', {}, [
+          el('div', { class: 'num', text: admin.balance.toLocaleString() }),
+          el('div', { class: 'faint', style: 'font-size:11px', text: `about ${gbLeft} GB` })
+        ]),
+        el('td', { class: 'num', text: `${admin.clients}` }),
+        el('td', {}, [
+          el('div', { class: 'num', text: `${admin.soldGB} GB` }),
+          el('div', { class: 'faint', style: 'font-size:11px', text: bytes(admin.usedBytes) })
+        ]),
+        el('td', { class: 'muted', text: admin.lastLoginAt ? fmtDate(admin.lastLoginAt) : '—' }),
+        el('td', {}, [el('span', {
+          class: `chip ${admin.enable ? 'ok' : ''}`,
+          html: `<i></i>${admin.enable ? 'Open' : 'Suspended'}`
+        })]),
+        el('td', {}, [el('div', { class: 'row-actions' }, [
+          el('button', {
+            class: 'btn icon ghost', title: 'Copy their sign-in address', html: icon('copy'),
+            onclick: () => copy(`${location.origin}/${admin.slug}/`)
+          }),
+          el('button', { class: 'btn icon ghost', title: 'Open', html: icon('activity'), onclick: () => adminDetail(admin.id) }),
+          el('button', { class: 'btn icon ghost', title: 'Edit', html: icon('edit'), onclick: () => adminForm(admin) }),
+          el('button', {
+            class: 'btn icon ghost', title: 'Suspend / re-open', html: icon('power'),
+            onclick: async () => {
+              try {
+                await api.put(`/admins/${admin.id}`, { enable: !admin.enable });
+                toast(admin.enable ? 'Suspended' : 'Re-opened');
+                render();
+              } catch (err) { toast(err.message, 'err'); }
+            }
+          }),
+          el('button', {
+            class: 'btn icon danger', title: 'Delete', html: icon('trash'),
+            onclick: () => confirmDialog(`Delete the panel "${admin.name}"? Their sign-in stops working. The clients they sold are kept.`, async () => {
+              try {
+                await api.del(`/admins/${admin.id}`);
+                toast('Panel deleted');
+                render();
+              } catch (err) { toast(err.message, 'err'); }
+            })
+          })
+        ])])
+      ]));
+    }
+    table.append(tbody);
+    mountTable(wrap, table);
+  }
+
+  /* the codes, spent and unspent */
+  const codes = data.codes || [];
+  if (codes.length) {
+    const cwrap = el('div', { class: 'table-wrap' });
+    const ctable = el('table');
+    ctable.innerHTML = '<thead><tr><th>Code</th><th>Worth</th><th>For</th><th>Used</th><th></th></tr></thead>';
+    const cbody = el('tbody');
+    for (const code of codes.slice(0, 60)) {
+      const owner = data.admins.find((a) => a.id === code.resellerId);
+      cbody.append(el('tr', {}, [
+        el('td', {}, [el('strong', { class: 'mono', style: 'font-size:12px', text: code.code })]),
+        el('td', { class: 'num', text: code.amount.toLocaleString() }),
+        el('td', { class: 'muted', text: owner ? owner.name : 'anyone (gift)' }),
+        el('td', { class: 'muted', text: code.usedAt ? fmtDate(code.usedAt) : 'not yet' }),
+        el('td', {}, [el('div', { class: 'row-actions' }, [
+          el('button', { class: 'btn icon ghost', title: 'Copy', html: icon('copy'), onclick: () => copy(code.code) }),
+          code.usedAt ? null : el('button', {
+            class: 'btn icon danger', title: 'Delete', html: icon('trash'),
+            onclick: async () => {
+              try { await api.del(`/admins/codes/${code.id}`); render(); } catch (err) { toast(err.message, 'err'); }
+            }
+          })
+        ])])
+      ]));
+    }
+    ctable.append(cbody);
+    mountTable(cwrap, ctable);
+    view.append(el('div', { class: 'section-title', text: 'Codes' }), cwrap);
+  }
+}
+
+/** Make one, or change its name, price and inbound. */
+function adminForm(existing) {
+  const v = existing || {};
+  const data = state.admins || { inbounds: [], defaultPricePerGB: 3000 };
+  const form = el('div', { class: 'form-grid' });
+
+  const name = formField(form, 'Panel name', el('input', { value: v.name || '', placeholder: 'reseller-1' }));
+  const inbound = selectOf(
+    [{ value: '', label: 'Pick one' }].concat(data.inbounds.map((i) => ({ value: i.id, label: i.label }))),
+    v.inboundId || ''
+  );
+  formField(form, 'Their inbound', inbound, {
+    hint: 'Every client they make goes on this inbound. They never see the choice.'
+  });
+  const price = formField(form, 'Price per GB', el('input', {
+    type: 'number', min: '0', value: v.pricePerGB || data.defaultPricePerGB
+  }), { hint: 'What a gigabyte costs them, in your currency.' });
+  const balance = existing ? null : formField(form, 'Opening balance', el('input', { type: 'number', min: '0', value: 0 }));
+  const note = formField(form, 'Note', el('input', { value: v.note || '', placeholder: 'who this is' }), { full: true });
+
+  modal({
+    title: existing ? `Edit ${v.name}` : 'New reseller panel',
+    subtitle: existing ? '' : 'A panel gets an address of its own. Hand that over; whoever opens it first makes the account.',
+    body: form,
+    width: 620,
+    actions: [{
+      label: existing ? 'Save changes' : 'Create the panel',
+      kind: 'primary',
+      onClick: async (close) => {
+        const payload = {
+          name: name.value.trim(),
+          inboundId: inbound.value,
+          pricePerGB: Number(price.value),
+          note: note.value
+        };
+        if (balance) payload.balance = Number(balance.value);
+        try {
+          const saved = existing
+            ? await api.put(`/admins/${existing.id}`, payload)
+            : await api.post('/admins', payload);
+          close();
+          render();
+          if (!existing) showAdminAddress(saved);
+          else toast('Saved');
+        } catch (err) { toast(err.message, 'err'); }
+      }
+    }]
+  });
+}
+
+/** The one thing a new panel is worth nothing without. */
+function showAdminAddress(admin) {
+  const url = `${location.origin}/${admin.slug}/`;
+  modal({
+    title: `${admin.name} is ready`,
+    subtitle: 'Send them this address. Whoever opens it first chooses the username and password.',
+    body: el('div', {}, [
+      el('div', { class: 'link-box', text: url }),
+      el('div', { class: 'hint', style: 'margin-top:10px', text: 'It is the only way in, and it is the only secret protecting it — send it to the right person.' })
+    ]),
+    width: 560,
+    actions: [{ label: 'Copy the address', kind: 'primary', onClick: () => copy(url) }]
+  });
+}
+
+/** Everything about one of them, and the keys to move their money. */
+async function adminDetail(id) {
+  const data = await api.get(`/admins/${id}`);
+  const a = data.admin;
+  const { wrap, panels } = tabbed(['Overview', 'Their clients', 'Balance']);
+  for (const panel of Object.values(panels)) panel.className = 'tab-panel';
+
+  const url = `${location.origin}${data.loginPath}`;
+  panels.Overview.append(el('div', { class: 'form-grid' }, [
+    el('div', { class: 'field full' }, [
+      el('label', { text: 'Sign-in address' }),
+      el('div', { class: 'link-box', text: url }),
+      el('div', { class: 'row', style: 'margin-top:8px' }, [
+        el('button', { class: 'btn', html: `${icon('copy')} Copy`, onclick: () => copy(url) })
+      ])
+    ]),
+    el('div', { class: 'field' }, [el('label', { text: 'Balance' }), el('div', { class: 'value-lg', text: a.balance.toLocaleString() })]),
+    el('div', { class: 'field' }, [el('label', { text: 'Spent so far' }), el('div', { class: 'value-lg', text: (a.spent || 0).toLocaleString() })]),
+    el('div', { class: 'field' }, [el('label', { text: 'Clients' }), el('div', { class: 'value-lg', text: `${a.clients}` })]),
+    el('div', { class: 'field' }, [el('label', { text: 'Sold' }), el('div', { class: 'value-lg', text: `${a.soldGB} GB` })]),
+    el('div', { class: 'field' }, [el('label', { text: 'Price per GB' }), el('div', { class: 'value-lg', text: a.pricePerGB.toLocaleString() })]),
+    el('div', { class: 'field' }, [el('label', { text: 'Last signed in' }), el('div', { class: 'muted', text: a.lastLoginAt ? fmtDate(a.lastLoginAt) : 'never' })]),
+    el('div', { class: 'field' }, [el('label', { text: 'Their bot' }), el('div', { class: 'muted', text: a.hasBot ? 'set up' : 'not set up' })])
+  ]));
+
+  /* their clients, read-only: the leader can see them on the Clients page */
+  if (data.clients.length) {
+    const cwrap = el('div', { class: 'table-wrap' });
+    const table = el('table');
+    table.innerHTML = '<thead><tr><th>Client</th><th>Quota</th><th>Used</th><th>Expires</th><th>Status</th></tr></thead>';
+    const tbody = el('tbody');
+    for (const c of data.clients) {
+      tbody.append(el('tr', {}, [
+        el('td', {}, [el('strong', { text: c.email })]),
+        el('td', { class: 'muted num', text: c.totalGB ? `${c.totalGB} GB` : 'Unlimited' }),
+        el('td', { class: 'num', text: bytes(c.up + c.down) }),
+        el('td', { class: 'muted', text: c.expiryTime ? fmtDate(c.expiryTime) : (c.startAfterFirstUse ? `${c.expiryDays}d on first use` : 'Never') }),
+        el('td', {}, [el('span', { class: `chip ${c.enable ? 'ok' : ''}`, html: `<i></i>${c.enable ? 'Active' : 'Disabled'}` })])
+      ]));
+    }
+    table.append(tbody);
+    mountTable(cwrap, table);
+    panels['Their clients'].append(cwrap);
+  } else {
+    panels['Their clients'].append(el('div', { class: 'hint', text: 'They have not sold anything yet.' }));
+  }
+
+  /* money: a code to give them, or a hand adjustment */
+  const amount = el('input', { type: 'number', placeholder: '1000000' });
+  const reason = el('input', { placeholder: 'why' });
+  panels.Balance.append(
+    el('div', { class: 'form-grid' }, [
+      el('div', { class: 'field' }, [el('label', { text: 'Amount' }), amount,
+        el('div', { class: 'hint', text: 'A positive number adds, a negative one takes back.' })]),
+      el('div', { class: 'field' }, [el('label', { text: 'Note' }), reason])
+    ]),
+    el('div', { class: 'row', style: 'margin-top:4px' }, [
+      el('button', {
+        class: 'btn primary', text: 'Adjust the balance',
+        onclick: async (event) => {
+          try {
+            const result = await api.post(`/admins/${id}/balance`, { amount: Number(amount.value), reason: reason.value });
+            toast(`Balance is now ${result.balance.toLocaleString()}`);
+            event.target.closest('.modal-backdrop').remove();
+            render();
+          } catch (err) { toast(err.message, 'err'); }
+        }
+      }),
+      el('button', { class: 'btn', text: 'Make a code for them', onclick: () => codeDialog(a) })
+    ]),
+    data.ledger.length
+      ? el('div', { class: 'section-title', text: 'History' })
+      : null
+  );
+
+  if (data.ledger.length) {
+    const lwrap = el('div', { class: 'table-wrap' });
+    const ltable = el('table');
+    ltable.innerHTML = '<thead><tr><th>When</th><th>Change</th><th>Why</th></tr></thead>';
+    const lbody = el('tbody');
+    for (const line of data.ledger) {
+      lbody.append(el('tr', {}, [
+        el('td', { class: 'muted mono', text: fmtDate(line.at) }),
+        el('td', {}, [el('strong', {
+          class: line.amount >= 0 ? 'ok-text' : 'bad-text',
+          text: `${line.amount >= 0 ? '+' : ''}${line.amount.toLocaleString()}`
+        })]),
+        el('td', { class: 'muted', text: line.reason })
+      ]));
+    }
+    ltable.append(lbody);
+    mountTable(lwrap, ltable);
+    panels.Balance.append(lwrap);
+  }
+
+  modal({ title: a.name, body: wrap, width: 760, actions: false });
+}
+
+/** A code worth money: for one panel, or for anybody. */
+function codeDialog(admin) {
+  const amount = el('input', { type: 'number', placeholder: '1000000' });
+  const note = el('input', { placeholder: 'what this is for' });
+  const out = el('div', { class: 'hint', style: 'margin-top:12px' });
+
+  modal({
+    title: admin ? `A code for ${admin.name}` : 'A gift code',
+    subtitle: admin
+      ? 'Only this panel can use it, and only once.'
+      : 'Anybody with the code can use it, once. Good for handing out a trial.',
+    body: el('div', {}, [
+      el('div', { class: 'form-grid' }, [
+        el('div', { class: 'field' }, [el('label', { text: 'Worth' }), amount]),
+        el('div', { class: 'field' }, [el('label', { text: 'Note' }), note])
+      ]),
+      out
+    ]),
+    width: 560,
+    actions: [{
+      label: 'Make the code',
+      kind: 'primary',
+      onClick: async () => {
+        try {
+          const code = await api.post('/admins/codes', {
+            amount: Number(amount.value),
+            resellerId: admin ? admin.id : '',
+            note: note.value
+          });
+          out.className = 'hint';
+          out.innerHTML = '';
+          out.append(
+            el('div', { class: 'link-box', text: code.code }),
+            el('div', { class: 'row', style: 'margin-top:8px' }, [
+              el('button', { class: 'btn', html: `${icon('copy')} Copy the code`, onclick: () => copy(code.code) })
+            ])
+          );
+          hydrateIcons(out);
+        } catch (err) {
+          out.className = 'hint bad-text';
+          out.textContent = err.message;
+        }
+      }
+    }]
+  });
+}
+
 /* -------------------------------- page: bot ------------------------------ */
 
 const BOT_ACTIONS = [
@@ -3001,7 +3487,59 @@ function botScreenCard(screen, ctx) {
   return card;
 }
 
+/**
+ * A reseller's bot, kept in a file of its own.
+ *
+ * Not beside the leader's: the leader's bot is the one selling on this server
+ * every day, and nothing a reseller types should be able to disturb it. One
+ * file per panel also means a broken one is one broken file.
+ */
+async function renderResellerBot(view) {
+  const data = await api.get('/reseller/bot');
+
+  const token = el('input', { type: 'password', placeholder: data.hasToken ? 'a token is saved' : '123456:ABC-DEF…' });
+  const brand = el('input', { value: data.brand || '' });
+  const currency = el('input', { value: data.currency || 'تومان' });
+  const adminId = el('input', { value: data.adminId || '', placeholder: '123456789' });
+
+  const form = el('div', { class: 'form-grid' });
+  formField(form, 'Bot token from @BotFather', token, {
+    full: true,
+    hint: data.hasToken ? 'A token is saved. Type a new one to replace it.' : 'Talk to @BotFather, send /newbot, and paste the token here.'
+  });
+  formField(form, 'Your Telegram id', adminId, { hint: 'Where your own orders arrive.' });
+  formField(form, 'Brand name', brand);
+  formField(form, 'Currency', currency);
+
+  view.append(el('div', { class: 'card' }, [
+    el('div', { class: 'between', style: 'margin-bottom:14px' }, [
+      el('strong', { text: 'Your bot' }),
+      el('span', { class: `chip ${data.live ? 'ok' : 'warn'}`, html: `<i></i>${data.live ? 'Running' : 'Saved, not running yet'}` })
+    ]),
+    form,
+    el('div', { class: 'row', style: 'margin-top:8px' }, [
+      el('button', {
+        class: 'btn primary', text: 'Save',
+        onclick: async () => {
+          try {
+            await api.put('/reseller/bot', {
+              token: token.value.trim() || undefined,
+              brand: brand.value, currency: currency.value, adminId: adminId.value.trim()
+            });
+            toast('Saved');
+            token.value = '';
+          } catch (err) { toast(err.message, 'err'); }
+        }
+      })
+    ]),
+    /* said plainly rather than left to be discovered: settings that are stored
+       but not yet running are a promise the panel has not kept */
+    el('div', { class: 'hint', style: 'margin-top:12px', text: 'These are kept in your own file on the server, separate from anyone else\u2019s. Your bot starts serving once the panel owner switches reseller bots on — ask them if it has not.' })
+  ]));
+}
+
 async function renderBot(view) {
+  if (isReseller()) return renderResellerBot(view);
   const data = await api.get('/bot');
   const inbounds = await api.get('/inbounds');
   const draft = {
@@ -3649,6 +4187,13 @@ async function watchUpdate(target, say, sameVersion) {
  * every six hours; a server that cannot reach GitHub simply never shows it.
  */
 async function checkForUpdate(force) {
+  /* updating the server is the leader's business; a reseller is a tenant on it
+     and the key would only ever show them a dash */
+  if (isReseller()) {
+    const chip = document.getElementById('updateChip');
+    if (chip) chip.remove();
+    return null;
+  }
   let info;
   try { info = await api.get(`/version${force ? '?force=1' : ''}`); } catch (_) { return null; }
   state.version = info;
@@ -3679,6 +4224,11 @@ async function checkForUpdate(force) {
 /** The four pages that earn a permanent spot; the rest live under More. */
 const DOCK_PAGES = ['dashboard', 'inbounds', 'clients', 'settings'];
 
+/** The pages this session may actually open. */
+function visiblePages() {
+  return isReseller() ? PAGES.filter((p) => RESELLER_PAGES.includes(p.id)) : PAGES;
+}
+
 const dock = { bar: null, more: null, moreItem: null, moreOpen: false };
 
 /** Wide enough to show every page at once? Then More is not needed. */
@@ -3691,8 +4241,13 @@ function buildDock() {
 
   // on a wide screen every page fits in the bar, so nothing is hidden away
   const wide = WIDE();
-  const entries = wide ? PAGES : DOCK_PAGES.map((id) => PAGES.find((p) => p.id === id)).filter(Boolean);
-  const rest = wide ? [] : PAGES.filter((p) => !DOCK_PAGES.includes(p.id));
+  const pages = visiblePages();
+  /* a reseller has three pages, so they all fit in the bar at any width and
+     there is nothing left for a More sheet to hold but the way out */
+  const entries = (wide || isReseller())
+    ? pages
+    : DOCK_PAGES.map((id) => pages.find((p) => p.id === id)).filter(Boolean);
+  const rest = pages.filter((p) => !entries.includes(p));
 
   for (const page of entries) {
     bar.append(el('button', {
@@ -3714,10 +4269,7 @@ function buildDock() {
     {
       icon: 'logout',
       label: 'Sign out',
-      run: async () => {
-        try { await api.post('/logout'); } catch (_) { /* sign out locally anyway */ }
-        location.href = `${BASE}login`;
-      }
+      run: () => signOut()
     }
   ];
   for (const entry of rows) {
@@ -3796,7 +4348,7 @@ function syncDock(animate = true) {
   dock.barLens.select(state.page, animate);
   dock.moreLens.select(state.page, animate);
   if (dock.wide) return;
-  const inBar = DOCK_PAGES.includes(state.page);
+  const inBar = isReseller() || DOCK_PAGES.includes(state.page);
   dock.moreItem.classList.toggle('active', dock.moreOpen || !inBar);
 }
 
@@ -4174,17 +4726,35 @@ function languageKey() {
   });
 }
 
-function boot() {
+/**
+ * Leaving, on purpose.
+ *
+ * Signing out of a panel you are working in is a small disaster to do by
+ * accident - the More sheet is a drag away from it - so it asks first, on both
+ * the leader's panel and a reseller's.
+ */
+function signOut() {
+  confirmDialog('Sign out of this panel?', async () => {
+    try { await api.post('/logout'); } catch (_) { /* sign out locally anyway */ }
+    location.href = `${BASE}login`;
+  });
+}
+
+async function boot() {
   /* language before anything is drawn, so nothing is drawn twice */
   if (window.NEXV_I18N) window.NEXV_I18N.setLang(window.NEXV_I18N.stored() || document.documentElement.dataset.lang || 'en');
+
+  /* and the role before that, because it decides what pages exist at all */
+  try {
+    const me = await api.get('/me');
+    state.role = me.role || 'admin';
+    state.me = me;
+  } catch (_) { /* the shell still draws; the API will refuse what it must */ }
   themeSwitch(document.getElementById('themeToggle'));
   languageKey();
   trackTopbar();
 
-  document.getElementById('logoutBtn').addEventListener('click', async () => {
-    try { await api.post('/logout'); } catch (_) { /* sign out locally anyway */ }
-    location.href = `${BASE}login`;
-  });
+  document.getElementById('logoutBtn').addEventListener('click', signOut);
 
   window.addEventListener('hashchange', () => {
     const page = location.hash.slice(1);
@@ -4202,7 +4772,7 @@ function boot() {
 }
 
 try {
-  boot();
+  boot().catch((err) => bootFailure(err.message));
 } catch (err) {
   // the navigation bar and icons are drawn by boot(); without this the page
   // would sit there as an empty shell with no hint of what happened
