@@ -146,10 +146,29 @@ function logLine(reseller, amount, reason) {
   if (reseller.ledger.length > 200) reseller.ledger.length = 200;
 }
 
-/** Take the cost of a client, or say why it cannot be taken. */
+/**
+ * Take the cost of a client, or say why it cannot be taken.
+ *
+ * A quota of zero means unlimited, and unlimited cannot be priced - so on a
+ * reseller's account it is not a cheap client, it is not a client at all. The
+ * refusal lives here rather than only in the route that happens to call it:
+ * this is the one place a reseller's balance is spent, so anything that sells
+ * on their behalf - the form today, their own bot later - is covered by it
+ * without having to remember.
+ */
 function charge(reseller, totalGB, label) {
-  const cost = costOf(totalGB, reseller);
-  if (cost <= 0) return { ok: true, cost: 0 };
+  const gb = Number(totalGB) || 0;
+  if (gb <= 0) {
+    return { ok: false, cost: 0, error: 'set a quota - an unlimited client cannot be sold from this panel' };
+  }
+  const cost = costOf(gb, reseller);
+  if (cost <= 0) {
+    /* Unreachable as things stand - priceFor() never returns zero, because a
+       cleared setting falls back to DEFAULT_PRICE_PER_GB. It stays as a
+       backstop at the one place money is taken: selling capacity for nothing
+       is the failure that leaves no trace of itself. */
+    return { ok: false, cost: 0, error: 'no price is set per gigabyte, so nothing can be sold yet' };
+  }
   if ((reseller.balance || 0) < cost) {
     return {
       ok: false,

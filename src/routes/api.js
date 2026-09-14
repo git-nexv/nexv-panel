@@ -1162,7 +1162,7 @@ router.post('/clients', async (req, res) => {
   let charged = null;
   if (req.reseller) {
     const gb = Number(body.totalGB) || 0;
-    if (gb <= 0) return bad(res, 'set a quota - an unlimited client cannot be priced');
+    if (gb <= 0) return bad(res, 'set a quota - an unlimited client cannot be sold from this panel');
     body.inboundId = req.reseller.inboundId;
     body.resellerId = req.reseller.id;
     const bill = resellers.charge(req.reseller, gb, `client ${body.email || ''}`.trim());
@@ -1203,7 +1203,7 @@ router.put('/clients/:id', async (req, res) => {
   if (req.reseller) {
     const wasGB = Number(before.totalGB) || 0;
     const nowGB = Number(req.body.totalGB ?? wasGB) || 0;
-    if (nowGB <= 0) return bad(res, 'set a quota - an unlimited client cannot be priced');
+    if (nowGB <= 0) return bad(res, 'set a quota - an unlimited client cannot be sold from this panel');
     if (nowGB > wasGB) {
       const bill = resellers.charge(req.reseller, nowGB - wasGB, `${before.email}: quota raised`);
       if (!bill.ok) return bad(res, bill.error);

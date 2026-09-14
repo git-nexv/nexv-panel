@@ -416,8 +416,14 @@ const FA = {
   'What a gigabyte costs a reseller. Change it here and every panel follows, except any you have given a price of its own.':
     'هر گیگ برای نماینده چقدر آب می‌خورد. اینجا عوضش کنید و همه پنل‌ها دنبالش می‌آیند، جز آن‌هایی که قیمت مخصوص خودشان را داده‌اید.',
   'Price saved': 'قیمت ذخیره شد',
-  'What this client may use in total. It is what you are charged for.':
-    'این کلاینت در مجموع چقدر می‌تواند مصرف کند. همین است که از شما حساب می‌شود.',
+  'What this client may use in total. It is what you are charged for, and it cannot be unlimited.':
+    'این کلاینت در مجموع چقدر می‌تواند مصرف کند. همین است که از شما حساب می‌شود، و نمی‌تواند نامحدود باشد.',
+  'Set a quota — this panel cannot sell an unlimited client':
+    'حجم را مشخص کنید — این پنل نمی‌تواند کلاینت نامحدود بفروشد',
+  'set a quota - an unlimited client cannot be sold from this panel':
+    'حجم را مشخص کنید — از این پنل نمی‌شود کلاینت نامحدود فروخت',
+  'no price is set per gigabyte, so nothing can be sold yet':
+    'قیمتی برای هر گیگ تعیین نشده، پس فعلاً چیزی فروخته نمی‌شود',
   'Leave it empty and they pay the panel price, so changing that one number changes them too. Fill it in to give this panel a price of its own.':
     'خالی بگذارید تا قیمت پنل را بپردازند، پس با عوض کردن همان یک عدد این هم عوض می‌شود. پرش کنید تا این پنل قیمت مخصوص خودش را داشته باشد.',
   'the panel price': 'قیمت پنل',

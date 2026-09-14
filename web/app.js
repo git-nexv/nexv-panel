@@ -2086,9 +2086,16 @@ function clientForm(existing) {
     api.get('/generate/password').then((r) => { if (!password.value) password.value = r.value; }).catch(() => {});
   }
 
-  const totalGB = formField(form, 'Quota (GB)', el('input', { type: 'number', min: '0', value: v.totalGB || 0 }), {
+  /* the leader may sell an unlimited client; a reseller may not, because
+     unlimited cannot be priced and their balance is what is being spent -
+     so on their panel the field does not offer zero in the first place */
+  const totalGB = formField(form, 'Quota (GB)', el('input', {
+    type: 'number',
+    min: isReseller() ? '1' : '0',
+    value: v.totalGB || (isReseller() ? 10 : 0)
+  }), {
     hint: isReseller()
-      ? 'What this client may use in total. It is what you are charged for.'
+      ? 'What this client may use in total. It is what you are charged for, and it cannot be unlimited.'
       : 'How much traffic this client may use in total. 0 means unlimited.'
   });
 
@@ -2187,6 +2194,10 @@ function clientForm(existing) {
       kind: 'primary',
       onClick: async (close) => {
         const dayCount = Number(days.value);
+        // said here as well as by the server, so it is a sentence and not a round trip
+        if (isReseller() && !(Number(totalGB.value) > 0)) {
+          return toast('Set a quota — this panel cannot sell an unlimited client', 'err');
+        }
         /* waiting for first use means no expiry is written yet - the days are
            kept to one side and become a date when traffic first moves */
         const waiting = startOnUse.checked && !v.startedAt;
