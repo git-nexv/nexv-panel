@@ -520,8 +520,11 @@ router.get('/version', async (req, res) => {
  * started - the browser watches /health for the new version.
  */
 router.post('/update', async (req, res) => {
+  /* not force: the number is kept warm by a timer and the dialog has just read
+     it, so forcing here only adds a curl - up to the full timeout on a filtered
+     server - between pressing Update and anything happening */
   let info;
-  try { info = await version.check(true); } catch (_) { info = { current: version.current, latest: null }; }
+  try { info = await version.check(false); } catch (_) { info = { current: version.current, latest: null }; }
   if (!info.updateAvailable && req.body?.force !== true) return bad(res, 'the panel is already up to date');
 
   const ready = update.available();

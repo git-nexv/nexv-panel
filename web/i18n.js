@@ -382,6 +382,35 @@ const FA = {
   'or type tags, comma separated': 'یا تگ‌ها را با کاما بنویسید',
   'Overview': 'نمای کلی',
 
+  /* ---------------------------- updating ------------------------------ */
+  'Starting the update…': 'شروع به‌روزرسانی…',
+  'just now': 'همین حالا',
+  'a minute ago': 'یک دقیقه پیش',
+  'a moment ago': 'لحظاتی پیش',
+  'an hour ago': 'یک ساعت پیش',
+  'Fetching the new version. The panel restarts on its own — keep this page open.':
+    'در حال گرفتن نسخه تازه. پنل خودش ری‌استارت می‌شود — این صفحه را باز نگه دارید.',
+  'Your inbounds, clients and settings are left alone.':
+    'اینباندها، کلاینت‌ها و تنظیمات شما دست‌نخورده می‌مانند.',
+  'Nothing to install — this is the newest version.':
+    'چیزی برای نصب نیست — همین تازه‌ترین نسخه است.',
+  'Checking…': 'در حال بررسی…',
+  'Copy command': 'کپی دستور',
+  'Update from the server’s terminal.': 'از ترمینال سرور به‌روزرسانی کنید.',
+  'The server could not reach the repository.': 'سرور نتوانست به مخزن برسد.',
+  'The update is taking longer than expected. Check the server with: nexv logs 50':
+    'به‌روزرسانی بیشتر از حد انتظار طول کشیده. سرور را با این دستور ببینید: nexv logs 50',
+  'the panel is already up to date': 'پنل همین حالا به‌روز است',
+  'the panel is not running as root - update with: nexv update':
+    'پنل با کاربر root اجرا نمی‌شود — با این دستور به‌روزرسانی کنید: nexv update',
+  'updating from the panel only works on the server itself':
+    'به‌روزرسانی از داخل پنل فقط روی خود سرور کار می‌کند',
+  'Dependencies unchanged - skipping npm install.':
+    'وابستگی‌ها تغییری نکرده‌اند — نصب npm رد شد.',
+  'Dependencies changed - installing...': 'وابستگی‌ها تغییر کرده‌اند — در حال نصب…',
+  'Fetching the latest version...': 'در حال گرفتن تازه‌ترین نسخه…',
+  'Restarting the panel...': 'در حال ری‌استارت پنل…',
+
   /* ------------------------------- bot -------------------------------- */
   'Bot token from @BotFather': 'توکن ربات از ‎@BotFather',
   'Talk to @BotFather, send /newbot, and paste the token here.':
@@ -770,6 +799,18 @@ const PATTERNS = [
     (m) => `در پنج دقیقه گذشته دیده شد: ${m[1]}. محدودیت آی‌پی روی این کلاینت تنظیم نشده.`],
   [/^Seen in the last five minutes: (\d+)\. (.+)$/, (m) => `در پنج دقیقه گذشته دیده شد: ${m[1]}. ${m[2]}`],
   [/^refund - client not created$/, () => 'بازگشت وجه — کلاینت ساخته نشد'],
+  [/^Looked (.+)\. The panel keeps looking on its own\.$/,
+    (m) => `${m[1]} بررسی شد. پنل خودش دنبالش می‌گردد.`],
+  [/^(\d+) minutes ago$/, (m) => `${m[1]} دقیقه پیش`],
+  [/^(\d+) hours ago$/, (m) => `${m[1]} ساعت پیش`],
+  [/^(.+) is missing - update with: nexv update$/, (m) => `${m[1]} وجود ندارد — با این دستور به‌روزرسانی کنید: nexv update`],
+  [/^You are on (.+)$/, (m) => `شما روی ${m[1]} هستید`],
+  [/^This panel is running (.+)\.$/, (m) => `این پنل ${m[1]} را اجرا می‌کند.`],
+  [/^Updated to (.+)\. Reloading…$/, (m) => `به ${m[1]} به‌روز شد. در حال بارگذاری مجدد…`],
+  [/^Version (.+) is available\. Press Update to install it\.$/,
+    (m) => `نسخه ${m[1]} موجود است. برای نصب، به‌روزرسانی را بزنید.`],
+  [/^Still the newest: (.+)$/, (m) => `هنوز تازه‌ترین است: ${m[1]}`],
+  [/^Could not start: (.+)$/, (m) => `نتوانست شروع شود: ${m[1]}`],
   [/^Hostname: (.+)$/, (m) => `نام میزبان: ${m[1]}`],
   [/^Panel domain: (.+)$/, (m) => `دامنه پنل: ${m[1]}`],
   [/^Load average: (.+)$/, (m) => `بار متوسط: ${m[1]}`],

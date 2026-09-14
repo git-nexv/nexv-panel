@@ -105,13 +105,55 @@ act_service() {
 act_logs()      { journalctl -u "$SERVICE" -n "${1:-100}" -f --no-pager; }
 act_xray_logs() { journalctl -u xray -n "${1:-100}" -f --no-pager; }
 
+# A checksum of what is actually installed, which is not the same as a
+# checksum of the lockfile: every release bumps the panel's own version and
+# that number appears in the lockfile too. Hashing the file as it sits would
+# therefore differ on every single update and the skip below would never once
+# fire. So the panel's own version is taken out first and the dependencies -
+# and only those - are what is compared.
+lock_sum() {
+  local file="$INSTALL_DIR/package-lock.json"
+  [[ -f $file ]] || file="$INSTALL_DIR/package.json"
+  [[ -f $file ]] || { echo none; return; }
+  LOCK_FILE="$file" node -e '
+    const fs = require("fs");
+    const crypto = require("crypto");
+    try {
+      const lock = JSON.parse(fs.readFileSync(process.env.LOCK_FILE, "utf8"));
+      delete lock.version;
+      if (lock.packages && lock.packages[""]) delete lock.packages[""].version;
+      if (lock.dependencies) delete lock.dependencies.version;
+      process.stdout.write(crypto.createHash("sha256").update(JSON.stringify(lock)).digest("hex"));
+    } catch (_) {
+      // unreadable or not JSON: say so distinctly, which installs rather than skips
+      process.stdout.write("unknown-" + Date.now());
+    }
+  ' 2>/dev/null || echo "unknown-$RANDOM"
+}
+
 act_update() {
   need_root
+  local before after
+
   echo "Fetching the latest version..."
+  before="$(lock_sum)"
   git -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH" -q || { err "Could not reach the repository"; return 1; }
   git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH" -q
-  ( cd "$INSTALL_DIR" && npm install --omit=dev --no-audit --no-fund --loglevel=error ) || { err "npm install failed"; return 1; }
+  after="$(lock_sum)"
+
+  # npm install is nearly all of the time an update takes, and nearly every
+  # update changes no dependency at all. Run it when the lockfile moved - or
+  # when there is nothing installed yet - and skip it otherwise.
+  if [[ $before != "$after" || ! -d $INSTALL_DIR/node_modules ]]; then
+    echo "Dependencies changed - installing..."
+    ( cd "$INSTALL_DIR" && npm install --omit=dev --no-audit --no-fund --prefer-offline --no-progress --loglevel=error ) \
+      || { err "npm install failed"; return 1; }
+  else
+    echo "Dependencies unchanged - skipping npm install."
+  fi
+
   install -m 755 "$INSTALL_DIR/scripts/nexv" /usr/local/bin/nexv
+  echo "Restarting the panel..."
   systemctl restart "$SERVICE"
   ok "Panel updated"
   # a fresh install generates a secret web path; never let the admin lose it

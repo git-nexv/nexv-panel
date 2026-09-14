@@ -430,6 +430,10 @@ async function bootstrap() {
   // and from here on xray gets itself picked up when it falls over
   try { require('./watchdog').start(); } catch (err) { console.error('[watchdog] could not start:', err.message); }
 
+  /* keep the "is there a newer panel" answer warm, so the header key lights up
+     on its own rather than only when somebody clicks it */
+  try { require('./version').watch(); } catch (err) { console.error('[version] could not start:', err.message); }
+
   // the access log is what tells the panel who is connected and from where
   try {
     await xray.ensureAccessLog();

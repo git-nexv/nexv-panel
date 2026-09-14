@@ -54,11 +54,31 @@ function start({ from, to }) {
   try { fs.writeFileSync(LOG_FILE, '', { mode: 0o600 }); } catch (_) { /* keep going */ }
   writeState({ startedAt: Date.now(), from, to, state: 'running' });
 
+  /*
+   * systemd-run's own complaints go into the same log the dialog is already
+   * reading. A box where the binary exists but the bus does not - a container,
+   * mostly - would otherwise accept the button, do nothing, and leave somebody
+   * watching an empty box until the five-minute deadline.
+   */
+  let handle = 'ignore';
+  try { handle = fs.openSync(LOG_FILE, 'a', 0o600); } catch (_) { /* ignore is fine */ }
+
   // the unit is transient and --collect clears it away when it is done
   const child = spawn('systemd-run', [
     '--unit', UNIT, '--collect', '--quiet',
     '/bin/sh', '-c', `exec ${CLI} update >>${LOG_FILE} 2>&1`
-  ], { detached: true, stdio: 'ignore' });
+  ], { detached: true, stdio: ['ignore', handle, handle] });
+
+  child.on('exit', (code) => {
+    if (code) {
+      try {
+        fs.appendFileSync(LOG_FILE,
+          `\nCould not hand the update to systemd (exit ${code}). Run it on the server: nexv update\n`);
+      } catch (_) { /* the message was the last thing we could do */ }
+      writeState({ startedAt: Date.now(), from, to, state: 'failed' });
+    }
+    if (handle !== 'ignore') { try { fs.closeSync(handle); } catch (_) { /* already gone */ } }
+  });
   child.unref();
   return { from, to };
 }

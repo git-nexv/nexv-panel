@@ -4350,10 +4350,10 @@ function updateDialog(info) {
   const note = el('p', { class: 'muted' });
   const progress = el('div', { class: 'link-box', hidden: true, style: 'margin-top:12px; max-height:150px' });
   const body = el('div', {}, [note, progress]);
-  const say = (text) => { progress.hidden = false; progress.textContent = text; };
+  const say = (text) => { progress.hidden = false; progress.textContent = t(text); };
 
   if (!info.canUpdate) {
-    note.textContent = info.updateBlockedBy || 'Update from the server\u2019s terminal.';
+    note.textContent = t(info.updateBlockedBy || 'Update from the server\u2019s terminal.');
     body.append(
       el('div', { class: 'link-box', style: 'margin-top:10px', text: 'nexv update' }),
       el('div', { class: 'row', style: 'margin-top:12px' }, [
@@ -4368,9 +4368,9 @@ function updateDialog(info) {
     });
   }
 
-  note.textContent = fresh
+  note.textContent = t(fresh
     ? 'Nothing to install \u2014 this is the newest version.'
-    : 'Your inbounds, clients and settings are left alone.';
+    : 'Your inbounds, clients and settings are left alone.');
 
   const run = async () => {
     primary.disabled = true;
@@ -4381,7 +4381,7 @@ function updateDialog(info) {
       primary.disabled = false;
       return say(`Could not start: ${err.message}`);
     }
-    say('Downloading and installing. The panel restarts on its own \u2014 keep this page open.');
+    say('Fetching the new version. The panel restarts on its own \u2014 keep this page open.');
     watchUpdate(info.latest, say, false);
   };
 
@@ -4401,7 +4401,7 @@ function updateDialog(info) {
       if (next && next.updateAvailable) {
         info = next;
         primary.disabled = false;
-        note.textContent = 'Your inbounds, clients and settings are left alone.';
+        note.textContent = t('Your inbounds, clients and settings are left alone.');
         say(`Version ${next.latest} is available. Press Update to install it.`);
       } else {
         say(next ? `Still the newest: ${next.current}` : 'The server could not reach the repository.');
@@ -4412,7 +4412,7 @@ function updateDialog(info) {
 
   return modal({
     title: fresh ? `You are on ${info.current}` : `Version ${info.latest} is available`,
-    subtitle: fresh ? 'The panel checks for itself every six hours.' : `This panel is running ${info.current}.`,
+    subtitle: fresh ? `Looked ${sinceCheck(info.checkedAt)}. The panel keeps looking on its own.` : `This panel is running ${info.current}.`,
     body,
     width: 460
   });
@@ -4422,8 +4422,12 @@ function updateDialog(info) {
 async function watchUpdate(target, say, sameVersion) {
   const deadline = Date.now() + 5 * 60 * 1000;
   let wentDown = false;
+  let wait = 800;
   while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 3000));
+    // look quickly at first, so the first line of the updater's output appears
+    // while the person is still watching, then settle into a calm poll
+    await new Promise((r) => setTimeout(r, wait));
+    wait = Math.min(3000, wait + 400);
     let health = null;
     // the panel is restarting for part of this, so a failed probe is expected
     try { health = await api.get('/health'); } catch (_) { wentDown = true; }
@@ -4441,6 +4445,19 @@ async function watchUpdate(target, say, sameVersion) {
   say('The update is taking longer than expected. Check the server with: nexv logs 50');
 }
 
+
+/** How long ago the server last reached the repository, in words. */
+function sinceCheck(at) {
+  // translated here, not by the sentence it lands in: t() sees the whole
+  // sentence and would leave this piece in whatever language it arrived as
+  if (!at) return t('a moment ago');
+  const mins = Math.floor((Date.now() - at) / 60000);
+  if (mins < 1) return t('just now');
+  if (mins === 1) return t('a minute ago');
+  if (mins < 60) return t(`${mins} minutes ago`);
+  const hours = Math.floor(mins / 60);
+  return t(hours === 1 ? 'an hour ago' : `${hours} hours ago`);
+}
 
 /**
  * Announce a newer panel in the header. Checked once per session and then
@@ -5078,7 +5095,11 @@ async function boot() {
   buildDock();
   navigate(location.hash.slice(1) || 'dashboard');
   checkForUpdate();
-  setInterval(() => checkForUpdate(), 6 * 60 * 60 * 1000);
+  /* Asking is cheap - the server answers from a number it keeps warm itself,
+     without touching the network - so ask often enough that a release shows up
+     while you are looking at the panel rather than the next time you sign in. */
+  setInterval(() => { if (!document.hidden) checkForUpdate(); }, 5 * 60 * 1000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) checkForUpdate(); });
   // the bar has just been laid out; park the capsule without a flight
   requestAnimationFrame(() => syncDock(false));
 }
