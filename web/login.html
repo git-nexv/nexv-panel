@@ -6,6 +6,19 @@
 <title>Sign in | NexV Panel</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%236c8cff'/><text x='50' y='71' font-size='62' font-family='sans-serif' font-weight='bold' fill='white' text-anchor='middle'>N</text></svg>">
 <link rel="stylesheet" href="style.css">
+<script>
+/* Before the first paint, not after: the look is a preference this browser
+   already holds, and reading it from a script at the foot of the page means a
+   flash of somebody else's panel on every single load. */
+(function () {
+  var html = document.documentElement;
+  var get = function (key, fallback) {
+    try { return localStorage.getItem(key) || fallback; } catch (_) { return fallback; }
+  };
+  html.dataset.theme = get('nexv-theme', 'dark');
+  html.dataset.skin = get('nexv-skin', 'glass');
+})();
+</script>
 </head>
 <body dir="ltr">
 <!-- the only background there is: a still dot field, and one light that
@@ -88,9 +101,8 @@ const MOON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor
 for (const holder of document.querySelectorAll('[data-icon]')) {
   holder.innerHTML = holder.dataset.icon === 'sun' ? SUN : MOON;
 }
-let theme = 'dark';
-try { theme = localStorage.getItem('nexv-theme') || 'dark'; } catch (_) { /* default */ }
-applyTheme(theme);
+/* the head script already put the theme on <html>; this only catches the icon up */
+applyTheme(document.documentElement.dataset.theme || 'dark');
 document.getElementById('themeToggle').addEventListener('click', () => {
   applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
 });
@@ -117,20 +129,46 @@ function paintRegister() {
   document.getElementById('password').setAttribute('autocomplete', 'new-password');
 }
 document.getElementById('langToggle').addEventListener('click', () => setTimeout(paintRegister, 0));
-paintRegister();
+/*
+ * These three are looked up before anything that touches them.
+ *
+ * paintRegister() used to run one line above the `const submitBtn` it reads,
+ * which is a temporal-dead-zone ReferenceError - and only on a reseller panel
+ * waiting to be claimed, because that is the only case where the function does
+ * not return early. When it threw, the rest of this script never ran, the
+ * submit listener was never attached, and the browser fell back to submitting
+ * the form itself: the page reloaded, said nothing, and looked for all the
+ * world like the password had been wrong in some way nobody would explain.
+ */
 const form = document.getElementById('loginForm');
 const errorBox = document.getElementById('error');
 const submitBtn = document.getElementById('submitBtn');
 
+/*
+ * And a native submit is now impossible whatever else goes wrong in here. The
+ * listener above is what should stop it; this is what stops it when the
+ * listener is not there to.
+ */
+form.setAttribute('onsubmit', 'return false');
+
+paintRegister();
+
 function fail(message) {
-  errorBox.textContent = message;
+  errorBox.textContent = I18N.t(message);
   errorBox.classList.remove('hidden');
+  // a wrong password is worth noticing; the box moves once so it is not missed
+  errorBox.classList.remove('shake');
+  void errorBox.offsetWidth;
+  errorBox.classList.add('shake');
+  const pw = document.getElementById('password');
+  if (pw) { pw.value = ''; pw.focus(); }
   submitBtn.disabled = false;
   submitBtn.textContent = I18N.t(registering() ? REGISTER_TEXT.go : 'Sign in');
 }
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
+  event.stopPropagation();
   errorBox.classList.add('hidden');
   submitBtn.disabled = true;
   submitBtn.textContent = I18N.t('Signing in…');

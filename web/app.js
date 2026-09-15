@@ -306,7 +306,7 @@ function selectOf(options, value) {
  * server it all runs on. The server enforces that - this only decides what is
  * worth drawing.
  */
-const RESELLER_PAGES = ['dashboard', 'clients', 'bot'];
+const RESELLER_PAGES = ['dashboard', 'clients', 'bot', 'settings'];
 const isReseller = () => state.role === 'reseller';
 
 const PAGES = [
@@ -635,17 +635,30 @@ function mountTable(wrap, table) {
   /* a table's header is written as one lump of markup rather than through el(),
      so this is where its column names are translated - once for the header
      itself, and again as the label each cell carries on a phone */
+  const slugs = [];
   const heads = [...table.querySelectorAll('thead th')].map((th) => {
-    const name = t(th.textContent.trim());
-    if (name !== th.textContent.trim()) th.textContent = name;
+    const source = th.textContent.trim();
+    /*
+     * The column's English name, punched down to a slug, is what the stylesheet
+     * addresses a column by - `Used` and `مصرف‌شده` are the same column and must
+     * line up the same way, so the slug is taken before the label is translated.
+     */
+    slugs.push(source.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
+    th.dataset.col = slugs[slugs.length - 1];
+    const name = t(source);
+    if (name !== source) th.textContent = name;
     return name;
   });
   for (const tr of table.querySelectorAll('tbody tr')) {
     [...tr.children].forEach((td, i) => {
+      if (slugs[i]) td.dataset.col = slugs[i];
       if (!heads[i]) td.classList.add('cell-actions');
       else {
         td.setAttribute('data-label', heads[i]);
-        if (heads[i] === 'Status') td.classList.add('cell-status');
+        /* by slug, not by label: in Persian the header reads وضعیت and the
+           comparison against 'Status' never matched, so the chip dropped out of
+           the card's heading and cost a whole row of its own */
+        if (slugs[i] === 'status') td.classList.add('cell-status');
       }
     });
     // the row's own name heads its card; a table without one (the log) gets no heading
@@ -2047,21 +2060,27 @@ async function renderClients(view) {
 
     const row = el('tr', {}, [
       el('td', {}, [
-        el('strong', { text: c.email }),
-        el('div', { class: 'faint mono', style: 'font-size:11px', text: c.protocol })
+        el('div', { class: 'cell-stack lead' }, [
+          el('strong', { text: c.email }),
+          el('div', { class: 'faint mono sub', text: c.protocol })
+        ])
       ]),
       el('td', { class: 'muted', text: c.inboundRemark }),
       el('td', {}, [liveCell(c)]),
       el('td', {}, [
-        el('div', { class: 'num', text: bytes(used) }),
-        quota ? el('div', { class: `bar ${percent > 90 ? 'danger' : percent > 70 ? 'warn' : ''}`, style: 'width:110px', html: `<i style="width:${Math.min(100, percent)}%"></i>` }) : null
+        el('div', { class: 'cell-stack' }, [
+          el('div', { class: 'num', text: bytes(used) }),
+          quota ? el('div', { class: `bar ${percent > 90 ? 'danger' : percent > 70 ? 'warn' : ''}`, html: `<i style="width:${Math.min(100, percent)}%"></i>` }) : null
+        ])
       ]),
       el('td', { class: 'muted num', text: c.totalGB ? `${c.totalGB} GB` : 'Unlimited' }),
       el('td', { class: 'muted' }, [
-        el('div', { text: waitingToStart(c) ? 'Not started' : fmtDate(c.expiryTime) }),
-        waitingToStart(c)
-          ? el('div', { class: 'faint', style: 'font-size:11px', text: `${c.expiryDays} days on first use` })
-          : (left !== null ? el('div', { class: 'faint', style: 'font-size:11px', text: left > 0 ? `${left} days left` : 'past due' }) : null)
+        el('div', { class: 'cell-stack' }, [
+          el('div', { text: waitingToStart(c) ? 'Not started' : fmtDate(c.expiryTime) }),
+          waitingToStart(c)
+            ? el('div', { class: 'faint sub', text: `${c.expiryDays} days on first use` })
+            : (left !== null ? el('div', { class: 'faint sub', text: left > 0 ? `${left} days left` : 'past due' }) : null)
+        ])
       ]),
       el('td', {}, [statusChip]),
       el('td', {}, [el('div', { class: 'row-actions' }, [
@@ -3150,9 +3169,19 @@ async function routingForm(existing, tags, inbounds) {
  * now, the way the Bot page is laid out, so nothing has to be scrolled past to
  * reach something else.
  */
-const SETTINGS_TABS = ['General', 'Access', 'Limits', 'Config names', 'TLS', 'Backup', 'Account', 'Logs'];
+const SETTINGS_TABS = ['General', 'Access', 'Limits', 'Config names', 'TLS', 'Theme', 'Backup', 'Account', 'Logs'];
 
 async function renderSettings(view) {
+  /* a reseller has no panel settings to speak of - the leader holds all of
+     them - but the look is their own browser's business, so that much of this
+     page is theirs */
+  if (isReseller()) {
+    view.append(el('div', { class: 'between', style: 'margin-bottom:16px' }, [
+      el('div', { class: 'muted', text: 'How the panel looks on this device.' })
+    ]));
+    view.append(el('div', { class: 'card' }, [skinPicker()]));
+    return;
+  }
   const s = await api.get('/settings');
   state.settings = s;
 
@@ -3401,6 +3430,7 @@ async function renderSettings(view) {
   panels.Access.append(el('div', { class: 'card' }, [access, saveRow()]));
   panels.Limits.append(el('div', { class: 'card' }, [limits, saveRow()]));
   panels.TLS.append(el('div', { class: 'card' }, [tls, saveRow()]));
+  panels.Theme.append(el('div', { class: 'card' }, [skinPicker()]));
   naming.append(saveRow());
 
   /* ---- Backup ---- */
@@ -4808,7 +4838,7 @@ async function renderAccount(view) {
  * Offer the update in place. The server hands the job to systemd and restarts
  * itself, so the browser watches /health until the new version answers.
  */
-function updateDialog(info, resuming) {
+function updateDialog(info, resuming, opts = {}) {
   if (!info) return;
   // the dialog re-checks as it opens, so a stale chip is never acted on
   const fresh = !info.updateAvailable;
@@ -4873,31 +4903,35 @@ function updateDialog(info, resuming) {
   });
   primary.disabled = fresh;
 
-  const recheck = el('button', {
-    class: 'btn', text: 'Check again',
-    onclick: async () => {
-      recheck.disabled = true;
-      say('Checking\u2026');
-      const next = await checkForUpdate(true);
-      recheck.disabled = false;
-      if (next && next.updateAvailable) {
-        info = next;
-        primary.disabled = false;
-        note.textContent = t('Your inbounds, clients and settings are left alone.');
-        say(`Version ${next.latest} is available. Press Update to install it.`);
-      } else {
-        say(next ? `Still the newest: ${next.current}` : 'The server could not reach the repository.');
-      }
+  /* one path for both the button and the check this dialog runs as it opens */
+  const refreshNow = async (quiet) => {
+    recheck.disabled = true;
+    if (!quiet) say('Checking\u2026');
+    const next = await checkForUpdate(true);
+    recheck.disabled = false;
+    if (next && next.updateAvailable) {
+      info = next;
+      primary.disabled = false;
+      note.textContent = t('Your inbounds, clients and settings are left alone.');
+      say(`Version ${next.latest} is available. Press Update to install it.`);
+    } else if (!quiet) {
+      say(next ? `Still the newest: ${next.current}` : 'The server could not reach the repository.');
     }
-  });
+  };
+
+  const recheck = el('button', { class: 'btn', text: 'Check again', onclick: () => refreshNow(false) });
   body.insertBefore(el('div', { class: 'row', style: 'margin-top:14px' }, [primary, recheck]), progress);
 
-  return modal({
+  const dialog = modal({
     title: fresh ? `You are on ${info.current}` : `Version ${info.latest} is available`,
     subtitle: fresh ? `Looked ${sinceCheck(info.checkedAt)}. The panel keeps looking on its own.` : `This panel is running ${info.current}.`,
     body,
     width: 460
   });
+  /* the dialog is up; now go and ask. Quietly - if there is nothing new there
+     is nothing to say, and the box should not flicker at somebody reading it */
+  if (opts.recheck) refreshNow(true);
+  return dialog;
 }
 
 /** Poll until the restarted panel reports the new version, then reload. */
@@ -4919,7 +4953,7 @@ async function watchUpdate(target, say, sameVersion) {
     // look quickly at first, so the first line of the updater's output appears
     // while the person is still watching, then settle into a calm poll
     await new Promise((r) => setTimeout(r, wait));
-    wait = Math.min(3000, wait + 400);
+    wait = Math.min(1500, wait + 250);
     let health = null;
     // the panel is restarting for part of this, so a failed probe is expected
     try { health = await api.get('/health'); } catch (_) { wentDown = true; }
@@ -4929,7 +4963,8 @@ async function watchUpdate(target, say, sameVersion) {
     if (restarted) {
       say(`Updated to ${health.version}. Reloading\u2026`);
       api.post('/update/seen', {}).catch(() => { /* the reload will ask again */ });
-      return setTimeout(() => location.reload(), 1200);
+      // long enough to read, not long enough to sit through
+      return setTimeout(() => location.reload(), 500);
     }
     let progress = null;
     try { progress = await api.get('/update/log'); } catch (_) { /* still down */ }
@@ -5021,8 +5056,18 @@ async function checkForUpdate(force) {
     // where you go to update the panel, not just where a notice appears
     chip = el('button', {
       id: 'updateChip', class: 'update-chip', type: 'button',
-      // ask again as it opens, so what the dialog offers is never stale
-      onclick: async () => updateDialog(await checkForUpdate(true) || state.version)
+      /*
+       * Open on what is already known, and ask GitHub behind the dialog.
+       *
+       * This used to await a forced check first. A forced check goes out to
+       * the network, and from a server behind a filter that is the full six
+       * seconds of curl's patience - six seconds in which pressing the key
+       * did nothing visible at all, which is most of what "the update is very
+       * slow" meant. The answer is at most ten minutes old anyway, the dialog
+       * re-checks itself the moment it is up, and its own button re-checks on
+       * demand. There was never anything to wait for.
+       */
+      onclick: () => updateDialog(state.version, null, { recheck: true })
     });
     bar.insertBefore(chip, document.getElementById('xrayChip'));
   }
@@ -5225,6 +5270,25 @@ function liquidLens(container, selector, axis, onPick) {
 
   const measure = () => items().map((item) => ({ item, start: start(item), size: size(item) }));
 
+  /*
+   * The lowest and highest item CENTRE on the axis. These cannot be read off
+   * the ends of the list: in Persian the bar lays out right to left, so the
+   * first item in the DOM is the one drawn furthest right and the naive
+   * `list[0]` reading of the minimum comes out ABOVE the maximum - which made
+   * every clamp collapse onto one point and the capsule sit still under a
+   * moving finger. Geometry decides, not document order.
+   */
+  const extent = (list) => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const entry of list) {
+      const mid = entry.start + entry.size / 2;
+      if (mid < lo) lo = mid;
+      if (mid > hi) hi = mid;
+    }
+    return { lo, hi };
+  };
+
   const nearest = (pos) => {
     const list = held || measure();
     let best = 0;
@@ -5236,15 +5300,19 @@ function liquidLens(container, selector, axis, onPick) {
     return best;
   };
 
-  // the finger's coordinate, expressed in the same origin as offsetLeft/Top
-  const toLocal = (event) => {
+  /*
+   * The distance between the viewport and the origin offsetLeft/offsetTop are
+   * measured from. Taken once on press - it cannot move while a finger is
+   * down, and reading a rect on every pointermove is another forced layout.
+   */
+  let localOrigin = 0;
+  const readOrigin = () => {
     const first = items()[0];
     if (!first) return 0;
     const box = first.getBoundingClientRect();
-    return vertical
-      ? event.clientY - box.top + first.offsetTop
-      : event.clientX - box.left + first.offsetLeft;
+    return vertical ? box.top - first.offsetTop : box.left - first.offsetLeft;
   };
+  const toLocal = (event) => (vertical ? event.clientY : event.clientX) - localOrigin;
 
   function select(pageId, animate = true) {
     const list = items();
@@ -5267,7 +5335,9 @@ function liquidLens(container, selector, axis, onPick) {
     thumb.style.setProperty('--sx', (vertical ? 1 - stretch * 0.55 : 1 + stretch).toFixed(3));
     thumb.style.setProperty('--sy', (vertical ? 1 + stretch : 1 - stretch * 0.55).toFixed(3));
     put(cur);
-    const under = nearest(cur + lensSize / 2);
+    // the capsule trails on purpose, the highlight must not: it has to name the
+    // item a release would land on, which is the one under the finger
+    const under = nearest(target + lensSize / 2);
     (held || measure()).forEach((entry, i) => entry.item.classList.toggle('under', i === under));
     if (pressing) raf = requestAnimationFrame(frame);
   }
@@ -5293,6 +5363,7 @@ function liquidLens(container, selector, axis, onPick) {
     try { container.setPointerCapture(event.pointerId); } catch (_) { /* older browsers */ }
 
     // the lens is wider than the item it sits on, the way iOS draws it
+    localOrigin = readOrigin();
     lensSize = size(item) * (vertical ? 1.12 : 1.32);
     const lensStart = centre(item) - lensSize / 2;
     startPos = vertical ? event.clientY : event.clientX;
@@ -5321,13 +5392,10 @@ function liquidLens(container, selector, axis, onPick) {
       raf = requestAnimationFrame(frame);
     }
     if (dragging) {
-      const list = held || measure();
       // clamp the lens CENTRE, not its edge: it is wider than an item, so
       // clamping the edge stops it short of the last one
-      const min = list[0].start + list[0].size / 2;
-      const last2 = list[list.length - 1];
-      const max = last2.start + last2.size / 2;
-      target = Math.max(min, Math.min(max, toLocal(event))) - lensSize / 2;
+      const { lo, hi } = extent(held || measure());
+      target = Math.max(lo, Math.min(hi, toLocal(event))) - lensSize / 2;
       event.preventDefault();
     }
   });
@@ -5344,7 +5412,13 @@ function liquidLens(container, selector, axis, onPick) {
     held = null;
     let idx;
     if (dragging) {
-      idx = nearest(cur + lensSize / 2);
+      /*
+       * `target` is the finger, `cur` is the capsule a few frames behind it. A
+       * quick drag ends while the capsule is still in transit, so landing on
+       * `cur` picks whatever it happened to be passing - one item short of
+       * where the finger actually was.
+       */
+      idx = nearest(target + lensSize / 2);
     } else {
       const under = event && document.elementFromPoint(event.clientX, event.clientY);
       idx = list.indexOf((under && under.closest(selector)) || null);
@@ -5408,6 +5482,75 @@ function liquidLens(container, selector, axis, onPick) {
 }
 
 /* --------------------------------- boot ---------------------------------- *//* --------------------------------- boot ---------------------------------- */
+
+/*
+ * The looks on offer. A skin changes the ground and the accent; light and dark
+ * stay a separate switch, because somebody who wants the warm one wants it in
+ * daylight too. The palettes live in style.css - this list is only the order
+ * the picker shows them in and what each one is called.
+ */
+const SKINS = [
+  { id: 'glass', name: 'Liquid glass', note: 'Layered glass over one drifting light.' },
+  { id: 'flat', name: 'Simple', note: 'Solid panels, drawn borders, a background that holds still.' },
+  { id: 'midnight', name: 'Midnight', note: 'Indigo ground with a violet accent.' },
+  { id: 'aurora', name: 'Aurora', note: 'Deep teal ground with a mint accent.' },
+  { id: 'sunset', name: 'Sunset', note: 'Warm clay ground with an amber accent.' },
+  { id: 'mono', name: 'Mono', note: 'No colour at all, and the hairlines turned up.' }
+];
+
+function applySkin(skin) {
+  const id = SKINS.some((s) => s.id === skin) ? skin : 'glass';
+  document.documentElement.dataset.skin = id;
+  store.set('nexv-skin', id);
+  return id;
+}
+
+/**
+ * The grid of looks. Each card carries the skin it offers as `data-skin`, so
+ * the swatch inside it is drawn with that skin's own variables - there is no
+ * second copy of a palette anywhere to fall out of step with the first.
+ */
+function skinPicker() {
+  const current = document.documentElement.dataset.skin || 'glass';
+  const grid = el('div', { class: 'skin-grid' });
+  const cards = [];
+  for (const skin of SKINS) {
+    const card = el('button', {
+      type: 'button',
+      class: `skin-card ${skin.id === current ? 'on' : ''}`,
+      'data-skin': skin.id,
+      'aria-pressed': skin.id === current ? 'true' : 'false',
+      onclick: () => {
+        applySkin(skin.id);
+        for (const other of cards) {
+          const on = other.dataset.skin === skin.id;
+          other.classList.toggle('on', on);
+          other.setAttribute('aria-pressed', on ? 'true' : 'false');
+        }
+        toast('Look changed');
+      }
+    }, [
+      el('span', { class: 'skin-preview' }, [
+        el('span', { class: 'sp-dots' }),
+        el('span', { class: 'sp-glow' }),
+        el('span', { class: 'sp-pane sp-a' }),
+        el('span', { class: 'sp-pane sp-b' }),
+        el('span', { class: 'sp-pane sp-c' }),
+        el('span', { class: 'sp-pill' })
+      ]),
+      el('span', { class: 'skin-meta' }, [
+        el('span', { class: 'skin-name', text: skin.name }),
+        el('span', { class: 'skin-note', text: skin.note })
+      ])
+    ]);
+    cards.push(card);
+    grid.append(card);
+  }
+  return el('div', {}, [
+    el('div', { class: 'hint', style: 'margin-bottom:12px', text: 'The look is kept in this browser, so each person signing in can have their own. Light and dark stay on the switch up top.' }),
+    grid
+  ]);
+}
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
@@ -5635,6 +5778,7 @@ async function boot() {
     if (page && page !== state.page) navigate(page);
   });
 
+  applySkin(store.get('nexv-skin') || 'glass');
   applyTheme(store.get('nexv-theme') || 'dark');
   hydrateIcons();
   buildDock();

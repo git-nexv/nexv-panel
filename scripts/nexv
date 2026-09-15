@@ -144,9 +144,14 @@ act_update() {
   # limit git waits forever, the panel waits on git, and the person watching is
   # told nothing at all. Give up after ten minutes, or sooner if the transfer
   # drops under 1 KB/s for a minute, and say which of the two it was.
+  # --progress rather than -q: this is the step that takes the time, and the
+  # panel shows this output live. Without it the dialog sat on one unchanging
+  # line for however long the transfer took, which reads as a hang however
+  # fast it is actually going. git writes the counter to stderr, which the
+  # caller already folds into the same log.
   timeout 600 git -C "$INSTALL_DIR" \
     -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 \
-    fetch --depth 1 origin "$BRANCH" -q
+    fetch --depth 1 --progress origin "$BRANCH"
   rc=$?
   if [[ $rc -ne 0 ]]; then
     if [[ $rc -eq 124 ]]; then

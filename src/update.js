@@ -114,7 +114,19 @@ function state(lines = 40) {
   try { info = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch (_) { /* never updated */ }
   let log = '';
   try {
-    log = fs.readFileSync(LOG_FILE, 'utf8').split('\n').slice(-lines).join('\n').trim();
+    log = fs.readFileSync(LOG_FILE, 'utf8')
+      /*
+       * git draws its progress counter by rewinding the line with \r and
+       * writing over itself. On a terminal that is one line counting up; in a
+       * file it is every value it ever showed, joined end to end. Only the last
+       * thing written to a line was ever meant to be read.
+       */
+      .split('\n')
+      .map((line) => {
+        const i = line.lastIndexOf('\r');
+        return i < 0 ? line : line.slice(i + 1);
+      })
+      .slice(-lines).join('\n').trim();
   } catch (_) { /* no log yet */ }
 
   const out = { ...(info || {}), log };

@@ -6,6 +6,19 @@
 <title>NexV Panel</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%236c8cff'/><text x='50' y='71' font-size='62' font-family='sans-serif' font-weight='bold' fill='white' text-anchor='middle'>N</text></svg>">
 <link rel="stylesheet" href="style.css">
+<script>
+/* Before the first paint, not after: the look is a preference this browser
+   already holds, and reading it from a script at the foot of the page means a
+   flash of somebody else's panel on every single load. */
+(function () {
+  var html = document.documentElement;
+  var get = function (key, fallback) {
+    try { return localStorage.getItem(key) || fallback; } catch (_) { return fallback; }
+  };
+  html.dataset.theme = get('nexv-theme', 'dark');
+  html.dataset.skin = get('nexv-skin', 'glass');
+})();
+</script>
 </head>
 <body dir="ltr">
 <!-- the only background there is: a still dot field, and one light that
