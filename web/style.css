@@ -1926,3 +1926,52 @@ td .row-actions { display: inline-flex; width: auto; }
   width: 6px; height: 6px; border-radius: 99px; background: var(--brand);
   margin-inline-start: 7px;
 }
+
+/* ========================================================================
+   7. ONE ADDRESS, AND WHAT IT IS DOING
+   ------------------------------------------------------------------------
+   The address list used to be an IP and the words "last seen". A row now
+   answers the two questions actually being asked of it - how long has this
+   address been on, and what is it talking to - so it is laid out as two
+   columns: who on one side, how long on the other.
+   ======================================================================== */
+.ip-row {
+  align-items: flex-start; gap: 14px;
+  cursor: default;
+}
+.ip-main { flex: 1 1 auto; min-width: 0; }
+.ip-main strong { font-size: 13px; }
+
+.ip-hosts {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  margin-top: 5px; font-size: 11.5px; min-width: 0;
+}
+/* a hostname is long and must not push the timing column off the row */
+.ip-hosts .chip {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: inline-block; line-height: 1.6;
+  direction: ltr; unicode-bidi: isolate;
+}
+.ip-more { cursor: help; font-size: 11px; white-space: nowrap; }
+
+.ip-time {
+  flex: 0 0 auto; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+}
+.ip-label { font-size: 10px; letter-spacing: .03em; text-transform: uppercase; }
+/* the figure is the point of the row, and it must not jump about as it counts */
+/* No forced direction here, and no `.num` on the element either: the span is
+   "3m 7s" in English but "۵ دقیقه ۴۶ ثانیه" in Persian - words, not a figure -
+   and holding it left-to-right threw the Persian one into the wrong order. It
+   reads in whichever direction the page is already reading. */
+.ip-span {
+  font-size: 15px; font-weight: 700; letter-spacing: -.01em;
+  font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1;
+}
+.ip-sub { font-size: 10.5px; line-height: 1.4; white-space: nowrap; }
+
+@media (max-width: 560px) {
+  .ip-row { flex-direction: column; gap: 8px; }
+  .ip-time { align-items: flex-start; text-align: start; width: 100%; }
+  .ip-sub { white-space: normal; }
+}

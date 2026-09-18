@@ -47,6 +47,36 @@ const state = { offset: 0, size: 0, reads: 0, lines: 0, error: '', dirty: false 
  */
 const LINE = /from\s+(?:\w+:)?(\[[0-9a-fA-F:]+\]|[0-9a-fA-F.:]+):\d+\s+accepted\s+(?:(\w+):)?([^\s]+?)(?::(\d+))?\s+\[.*?email:\s*(.+?)\s*$/;
 
+/*
+ * The time Xray itself put on the line: `2026/01/02 15:04:05`, in the server's
+ * own local time, sometimes with a fraction after the seconds.
+ *
+ * Reading it matters more than it looks. Every line used to be stamped with
+ * the moment the panel happened to read the file, which is wrong in two ways
+ * that both show up the moment anyone asks how long an address has been
+ * connected: a whole batch of lines gets one identical timestamp, so the
+ * answer is always zero; and on the first read after a restart the last four
+ * megabytes of log are replayed and every address in them looks like it
+ * connected just now, however old it really is.
+ */
+const STAMP = /^(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?/;
+
+function stampOf(line, fallback) {
+  const m = STAMP.exec(line);
+  if (!m) return fallback;
+  const fraction = m[7] ? Number(`0.${m[7]}`) * 1000 : 0;
+  const at = new Date(
+    Number(m[1]), Number(m[2]) - 1, Number(m[3]),
+    Number(m[4]), Number(m[5]), Number(m[6]), Math.round(fraction)
+  ).getTime();
+  if (!Number.isFinite(at)) return fallback;
+  /* a clock that disagrees with the log - a container on UTC reading a log
+     written in local time - must not produce addresses connected in the
+     future, or ones that look hours stale and get pruned on sight */
+  if (at > fallback + 60 * 1000 || at < fallback - 24 * 60 * 60 * 1000) return fallback;
+  return at;
+}
+
 function entryFor(tag) {
   let entry = seen.get(tag);
   if (!entry) {
@@ -57,12 +87,48 @@ function entryFor(tag) {
   return entry;
 }
 
+/* how many destinations are worth remembering for a single address */
+const HOSTS_PER_IP = 12;
+
 function note(tag, ip, host, at) {
   const entry = entryFor(tag);
-  entry.lastSeen = at;
-  entry.ips.set(ip, at);
+  if (at > entry.lastSeen) entry.lastSeen = at;
+
+  /*
+   * An address is a record now, not a timestamp: when it first showed up, when
+   * it was last heard from, how many connections it has opened, and where they
+   * went. "First" is what makes a duration possible at all.
+   */
+  let seat = entry.ips.get(ip);
+  if (!seat || typeof seat !== 'object') {
+    // a number is what an older build of this stored; it becomes the first sighting
+    const was = typeof seat === 'number' ? seat : at;
+    seat = { first: Math.min(was, at), at: Math.max(was, at), hits: 0, hosts: new Map() };
+    entry.ips.set(ip, seat);
+  }
+  if (at < seat.first) seat.first = at;
+  if (at > seat.at) seat.at = at;
+  seat.hits++;
 
   if (!host) return;
+
+  const dest = seat.hosts.get(host);
+  if (dest) {
+    dest.hits++;
+    if (at > dest.at) dest.at = at;
+  } else {
+    seat.hosts.set(host, { hits: 1, at });
+    /* one address browsing the web touches hundreds of names; keep the ones it
+       is using now, drop the one it has not touched for longest */
+    if (seat.hosts.size > HOSTS_PER_IP) {
+      let oldest = null;
+      for (const [name, value] of seat.hosts) {
+        if (!oldest || value.at < oldest[1]) oldest = [name, value.at];
+      }
+      if (oldest) seat.hosts.delete(oldest[0]);
+    }
+  }
+
   const site = entry.sites.get(host);
   if (site) {
     site.hits++;
@@ -84,7 +150,8 @@ function note(tag, ip, host, at) {
 
 function prune(now) {
   for (const [tag, entry] of seen) {
-    for (const [ip, at] of entry.ips) {
+    for (const [ip, seat] of entry.ips) {
+      const at = typeof seat === 'number' ? seat : seat.at;
       if (now - at > IP_TTL) entry.ips.delete(ip);
     }
     for (const [host, site] of entry.sites) {
@@ -163,7 +230,7 @@ function read() {
     if (!m) continue;
     state.lines++;
     // m: 1 source address, 2 network, 3 destination, 4 port, 5 client tag
-    note(m[5], m[1].replace(/^\[|\]$/g, ''), (m[3] || '').toLowerCase(), now);
+    note(m[5], m[1].replace(/^\[|\]$/g, ''), (m[3] || '').toLowerCase(), stampOf(line, now));
   }
   prune(now);
 }
@@ -177,8 +244,15 @@ function forTag(tag) {
     online: now - entry.lastSeen < ONLINE_TTL,
     lastSeen: entry.lastSeen,
     ips: [...entry.ips.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .map(([ip, at]) => ({ ip, at }))
+      .map(([ip, seat]) => {
+        // a plain number is the old shape: last seen, and nothing else known
+        if (typeof seat === 'number') return { ip, at: seat, first: seat, hits: 0, hosts: [] };
+        const hosts = [...seat.hosts.entries()]
+          .map(([host, d]) => ({ host, hits: d.hits, at: d.at }))
+          .sort((a, b) => b.at - a.at || b.hits - a.hits);
+        return { ip, at: seat.at, first: seat.first, hits: seat.hits, hosts };
+      })
+      .sort((a, b) => b.at - a.at)
   };
 }
 

@@ -111,6 +111,26 @@ function bytes(n) {
   return `${n.toFixed(n >= 100 ? 0 : 1)} ${units[i]}`;
 }
 
+/**
+ * A span to the second, which is what "how long has this address been on"
+ * wants. `duration()` above rounds to the nearest useful unit and drops the
+ * seconds entirely - right for an uptime, useless for something that has been
+ * connected for forty seconds.
+ */
+function exactSpan(ms) {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const d = Math.floor(total / 86400);
+  const h = Math.floor((total % 86400) / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  const parts = [];
+  if (d) parts.push(`${d}d`);
+  if (d || h) parts.push(`${h}h`);
+  parts.push(`${m}m`);
+  parts.push(`${sec}s`);
+  return parts.join(' ');
+}
+
 function duration(seconds) {
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
@@ -134,6 +154,15 @@ function fmtDate(ts) {
   try {
     return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(ts));
   } catch (_) { return new Date(ts).toLocaleString(); }
+}
+
+/** Just the clock, to the second - "since 10:31:04", not a whole date. */
+function fmtTime(ts) {
+  if (!ts) return t('Never');
+  const locale = (window.NEXV_I18N && window.NEXV_I18N.lang() === 'fa') ? 'fa-IR' : 'en-GB';
+  try {
+    return new Intl.DateTimeFormat(locale, { timeStyle: 'medium' }).format(new Date(ts));
+  } catch (_) { return new Date(ts).toLocaleTimeString(); }
 }
 
 function daysLeft(ts) {
@@ -2205,11 +2234,66 @@ function showClientActivity(client, startOn) {
   /* ---- Addresses ---- */
   const limit = Number(client.limitIp || 0);
   const list = el('div', { class: 'attach-list' });
+  /*
+   * Each address counts up while the dialog is open. The span is worked out
+   * from the timestamps rather than stored as a number, so it stays right
+   * however long the box is left sitting there, and the ticker only redraws
+   * the one line that changes.
+   */
+  /* redrawn once a second while the dialog is up, and stopped when it closes */
+  const tickers = [];
   for (const entry of (client.ips || [])) {
-    list.append(el('div', { class: 'attach-row' }, [
-      el('div', {}, [
+    const first = entry.first || entry.at || 0;
+    /* not `.num`: that class holds a figure left-to-right so a size never reads
+       backwards, and this is not a figure - in Persian it is "۵ دقیقه ۲۷ ثانیه",
+       words and all, which the same rule then reversed */
+    const span = el('span', { class: 'ip-span' });
+    const under = el('div', { class: 'faint ip-sub' });
+    const hosts = entry.hosts || [];
+
+    const paint = () => {
+      const quiet = Date.now() - (entry.at || 0);
+      /* the log is only read every ten seconds, so the newest line for an
+         address can legitimately be that old before anything is wrong */
+      const live = quiet < 20000;
+      /*
+       * While it is in use the span runs to now, which is what somebody
+       * watching expects to see climbing. Once it has gone quiet it stops at
+       * the last line Xray wrote for it: counting on would be claiming a
+       * connection that is not there any more.
+       */
+      span.textContent = t(exactSpan((live ? Date.now() : (entry.at || 0)) - first));
+      under.textContent = [
+        entry.hits ? t(entry.hits === 1 ? 'one connection' : `${entry.hits.toLocaleString()} connections`) : '',
+        live ? t('in use now') : t(`nothing for ${exactSpan(quiet)}`),
+        t(`since ${fmtTime(first)}`)
+      ].filter(Boolean).join(' · ');
+    };
+    paint();
+    tickers.push(paint);
+
+    list.append(el('div', { class: 'attach-row ip-row' }, [
+      el('div', { class: 'ip-main' }, [
         el('strong', { class: 'mono', text: entry.ip }),
-        el('div', { class: 'faint', style: 'font-size:11px', text: `last seen ${fmtDate(entry.at)}` })
+        /* where this address actually went. The newest name first, because
+           that is what it is doing right now rather than what it did most */
+        hosts.length
+          ? el('div', { class: 'ip-hosts' }, [
+            el('span', { class: 'chip', text: hosts[0].host }),
+            hosts.length > 1
+              ? el('span', {
+                class: 'faint ip-more',
+                title: hosts.slice(1).map((h) => `${h.host} (${h.hits})`).join('\n'),
+                text: `+${hosts.length - 1} more`
+              })
+              : null
+          ])
+          : el('div', { class: 'faint ip-hosts', text: 'No name recorded — sniffing is off on this inbound.' })
+      ]),
+      el('div', { class: 'ip-time' }, [
+        el('div', { class: 'faint ip-label', text: 'connected for' }),
+        span,
+        under
       ])
     ]));
   }
@@ -2244,12 +2328,19 @@ function showClientActivity(client, startOn) {
     panels.Sites.append(sites);
   }
 
-  modal({
+  const dialog = modal({
     title: `What ${client.email} is doing`,
     body: wrap,
     width: 660,
     actions: false
   });
+  if (tickers.length) {
+    const tick = setInterval(() => {
+      // the dialog has been closed; there is nothing left to draw on
+      if (!dialog.box.isConnected) return clearInterval(tick);
+      for (const paint of tickers) paint();
+    }, 1000);
+  }
   if (startOn === 'Addresses' && panels.Sites) wrap.querySelector('.tab:nth-child(2)').click();
 
   if (panels.Sites) drawSites(client, sites);
@@ -2395,21 +2486,72 @@ function onOffSwitch(on, apply, title) {
   return node;
 }
 
+/**
+ * The share dialog: one code, and a switch over it saying what the code is.
+ *
+ * Both links deserve a QR and the box only ever drew one of them. Which one
+ * you want depends on the app in front of you - some take a config, some take
+ * a subscription, and the subscription is the one worth giving anybody who
+ * will still be a customer next month, because it survives the config being
+ * changed. So both are fetched, the switch picks between them, and the code,
+ * the text under it and the copy button all follow the switch together.
+ */
 async function showClientLink(client) {
-  const [qr, sub] = await Promise.all([
+  const [config, subQr, sub] = await Promise.all([
     api.get(`/clients/${client.id}/qrcode`),
+    api.get(`/clients/${client.id}/qrcode?sub=1`),
     api.get(`/clients/${client.id}/sub-url`)
   ]);
+
+  const views = {
+    sub: {
+      dataUrl: subQr.dataUrl,
+      text: sub.url,
+      copy: 'Copy subscription link',
+      note: 'Updates by itself when you change the config, and carries the quota and expiry back to the app.'
+    },
+    config: {
+      dataUrl: config.dataUrl,
+      text: config.content,
+      copy: 'Copy config link',
+      note: 'One config, exactly as it is now. An app given this will not follow later changes.'
+    }
+  };
+
+  const image = el('img', { alt: 'QR code' });
+  const text = el('div', { class: 'link-box' });
+  const note = el('div', { class: 'hint', style: 'text-align:center' });
+  const copyBtn = el('button', { class: 'btn primary' });
+  let current = 'sub';
+
+  const show = (which) => {
+    current = which;
+    const view = views[which];
+    image.src = view.dataUrl;
+    text.textContent = view.text;
+    note.textContent = t(view.note);
+    copyBtn.innerHTML = `${icon('copy')}<span>${t(view.copy)}</span>`;
+  };
+
   const body = el('div', { class: 'qr-box' }, [
-    el('img', { src: qr.dataUrl, alt: 'QR code' }),
-    el('div', { class: 'link-box', text: qr.content }),
-    el('div', { class: 'row' }, [
-      el('button', { class: 'btn', html: `${icon('copy')} Copy config link`, onclick: () => copy(qr.content) }),
-      el('button', { class: 'btn', html: `${icon('copy')} Copy subscription`, onclick: () => copy(sub.url) })
-    ]),
-    el('div', { class: 'link-box', text: sub.url })
+    segmented([
+      { value: 'sub', label: 'Subscription' },
+      { value: 'config', label: 'Config link' }
+    ], current, show),
+    image,
+    note,
+    text,
+    el('div', { class: 'row' }, [copyBtn])
   ]);
-  modal({ title: `Config for ${client.email}`, subtitle: 'Scan the code or copy a link into your client app.', body, width: 440 });
+  copyBtn.addEventListener('click', () => copy(views[current].text));
+  show(current);
+
+  modal({
+    title: `Config for ${client.email}`,
+    subtitle: 'Scan the code or copy the link into your client app.',
+    body,
+    width: 440
+  });
 }
 
 function clientForm(existing) {

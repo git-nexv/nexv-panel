@@ -864,6 +864,26 @@ const FA = {
     'ظاهر پنل در همین مرورگر ذخیره می‌شود، پس هر کسی که وارد می‌شود می‌تواند ظاهر خودش را داشته باشد. روشن و تاریک هم روی کلید بالا می‌ماند.',
   'How the panel looks on this device.': 'ظاهر پنل روی این دستگاه.',
   'Look changed': 'ظاهر عوض شد',
+
+  /* the share dialog: one code, and a switch saying which link it is */
+  'Subscription': 'اشتراک',
+  'Config link': 'لینک کانفیگ',
+  'Copy subscription link': 'کپی لینک اشتراک',
+  'Copy config link': 'کپی لینک کانفیگ',
+  'Scan the code or copy the link into your client app.': 'کد را اسکن کنید یا لینک را در برنامه‌تان کپی کنید.',
+  'Updates by itself when you change the config, and carries the quota and expiry back to the app.':
+    'وقتی کانفیگ را عوض کنید خودش به‌روز می‌شود و حجم و تاریخ انقضا را هم به برنامه می‌رساند.',
+  'One config, exactly as it is now. An app given this will not follow later changes.':
+    'فقط همین یک کانفیگ، دقیقاً به همین شکل. برنامه‌ای که این را بگیرد تغییرات بعدی را دنبال نمی‌کند.',
+
+  /* one address, and what it is doing */
+  'connected for': 'مدت اتصال',
+  'in use now': 'همین الان فعال',
+  'one connection': 'یک اتصال',
+  'Addresses are read from Xray’s access log and forgotten after five minutes of silence.':
+    'آی‌پی‌ها از لاگ دسترسی Xray خوانده می‌شوند و بعد از پنج دقیقه سکوت فراموش می‌شوند.',
+  'No name recorded — sniffing is off on this inbound.':
+    'دامنه‌ای ثبت نشده — sniffing روی این اینباند خاموش است.',
   'Panel domain': 'دامنه پنل',
   'Secret web path': 'مسیر مخفی پنل',
   'Panel port': 'پورت پنل',
@@ -912,6 +932,15 @@ const FA = {
  * Sentences built around a value. Each entry is a regular expression over the
  * English, and a function that puts the captured pieces back in Persian order.
  */
+/** "1d 2h 3m 4s" with the units in Persian; the numbers are left alone. */
+function faSpan(span) {
+  return String(span)
+    .replace(/(\d+)d/g, '$1 روز')
+    .replace(/(\d+)h/g, '$1 ساعت')
+    .replace(/(\d+)m/g, '$1 دقیقه')
+    .replace(/(\d+)s/g, '$1 ثانیه');
+}
+
 const PATTERNS = [
   [/^(\d+) cores?$/, (m) => `${m[1]} هسته`],
   [/^of (\d+) total$/, (m) => `از ${m[1]}`],
@@ -927,6 +956,16 @@ const PATTERNS = [
   [/^pick a username of at least three characters$/, () => 'نام کاربری‌ای با حداقل سه کاراکتر انتخاب کنید'],
   [/^pick a password of at least eight characters$/, () => 'گذرواژه‌ای با حداقل هشت کاراکتر انتخاب کنید'],
   [/^(.+) of (.+)$/, (m) => `${m[1]} از ${m[2]}`],
+  /* an address row: how many connections, how long it has been quiet, and when
+     it first appeared. The spans arrive already built ("4m 12s"), so only the
+     units inside them are swapped. */
+  [/^([\d,\u066b\u06f0-\u06f9]+) connections$/, (m) => `${m[1]} اتصال`],
+  [/^nothing for (.+)$/, (m) => `${faSpan(m[1])} بی‌حرکت`],
+  /* a bare span on its own, which is how the big figure on an address row is
+     drawn - it is not a sentence, so nothing else would ever reach it */
+  [/^(?:\d+d )?(?:\d+h )?\d+m \d+s$/, (m) => faSpan(m[0])],
+  [/^since (.+)$/, (m) => `از ساعت ${m[1]}`],
+  [/^\+(\d+) more$/, (m) => `${m[1]} مورد دیگر`],
   [/^(\d+) days? left$/, (m) => `${m[1]} روز مانده`],
   [/^Delete client "(.+)"\?$/, (m) => `کلاینت «${m[1]}» حذف شود؟`],
   [/^Delete inbound "(.+)"\?$/, (m) => `اینباند «${m[1]}» حذف شود؟`],

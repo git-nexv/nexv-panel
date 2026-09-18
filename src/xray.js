@@ -683,7 +683,10 @@ function isOverIpLimit(c) {
      office address is one address to the server and thirty people to whoever
      is paying, and without this a limit of two is unusable behind any NAT */
   const netfilter = require('./netfilter');
-  const seen = online.forTag(clientTag(c)).ips.filter((ip) => !netfilter.ipLimitExempt(ip));
+  /* the list holds a record per address, not a bare string; passing the whole
+     record to the allowlist stringified it to "[object Object]", which matches
+     no rule anybody could write, so the allowlist never once exempted anything */
+  const seen = online.forTag(clientTag(c)).ips.filter((entry) => !netfilter.ipLimitExempt(entry.ip));
   return seen.length > limit;
 }
 
