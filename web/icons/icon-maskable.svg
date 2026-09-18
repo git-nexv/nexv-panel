@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="NexV">
+  <title>NexV</title>
+  <defs>
+    <!-- graphite, never black: black leaves nothing for the glass to catch -->
+    <linearGradient id="ground" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#26282f"/>
+      <stop offset="0.55" stop-color="#1b1c21"/>
+      <stop offset="1" stop-color="#131419"/>
+    </linearGradient>
+
+    <!-- the one light that drifts across the panel's own background, held still -->
+    <radialGradient id="glow" cx="0.28" cy="0.2" r="0.78">
+      <stop offset="0" stop-color="#dfe3ec" stop-opacity="0.30"/>
+      <stop offset="0.45" stop-color="#dfe3ec" stop-opacity="0.09"/>
+      <stop offset="1" stop-color="#dfe3ec" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- a second, cooler light low on the right, so the ground is not lit flat -->
+    <radialGradient id="glow2" cx="0.82" cy="0.88" r="0.6">
+      <stop offset="0" stop-color="#aeb4c2" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#aeb4c2" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- the stems: glass, lit from the top left -->
+    <linearGradient id="stem" x1="0.1" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.62"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.4"/>
+    </linearGradient>
+
+    <!-- the diagonal: the one solid, bright element, so the letter has a spine -->
+    <linearGradient id="blade" x1="0.05" y1="0" x2="0.95" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.45" stop-color="#e2e6ee"/>
+      <stop offset="1" stop-color="#9aa0ac"/>
+    </linearGradient>
+
+    <!-- the highlight along the top of a pane, which is what sells it as glass -->
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+
+    <pattern id="dots" width="26" height="26" patternUnits="userSpaceOnUse">
+      <circle cx="13" cy="13" r="1.5" fill="#ffffff" opacity="0.07"/>
+    </pattern>
+
+    <clipPath id="clip"><rect width="512" height="512"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#clip)">
+    <rect fill="url(#ground)" width="512" height="512"/>
+    <rect width="512" height="512" fill="url(#dots)"/>
+    <rect width="512" height="512" fill="url(#glow)"/>
+    <rect width="512" height="512" fill="url(#glow2)"/>
+    <rect width="512" height="256" fill="url(#sheen)"/>
+
+    <!-- the letter, sitting on the ground rather than cut out of it -->
+    <g>
+      <path d="M166.4 162.2H204.2V349.8H166.4Z" fill="url(#stem)"/>
+      <path d="M307.8 162.2H345.6V349.8H307.8Z" fill="url(#stem)"/>
+      <path d="M166.4 162.2H204.2V349.8H166.4Z" fill="none" stroke="#ffffff" stroke-opacity="0.38" stroke-width="1.40"/>
+      <path d="M307.8 162.2H345.6V349.8H307.8Z" fill="none" stroke="#ffffff" stroke-opacity="0.38" stroke-width="1.40"/>
+      <path d="M208.4 167.37L303.6 284.65V344.63L208.4 227.35Z" fill="url(#blade)"/>
+    </g>
+  </g>
+
+</svg>

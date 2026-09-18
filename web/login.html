@@ -4,7 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Sign in | NexV Panel</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%236c8cff'/><text x='50' y='71' font-size='62' font-family='sans-serif' font-weight='bold' fill='white' text-anchor='middle'>N</text></svg>">
+<!-- The app's own mark, at the sizes each platform actually asks for. The
+     paths are relative so they resolve under the panel's secret base path and
+     under a reseller's slug without either being written down here. -->
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="icon" href="icons/icon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="icons/icon-16.png" sizes="16x16" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="mask-icon" href="icons/icon-mono.svg" color="#d7dae2">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#191a1f">
+<meta name="application-name" content="NexV Panel">
+<meta name="apple-mobile-web-app-title" content="NexV">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="stylesheet" href="style.css">
 <script>
 /* Before the first paint, not after: the look is a preference this browser
@@ -17,6 +31,24 @@
   };
   html.dataset.theme = get('nexv-theme', 'dark');
   html.dataset.skin = get('nexv-skin', 'glass');
+
+  /*
+   * Installed on a phone, the browser paints the bar above the page with
+   * theme-color. A fixed value means somebody running the light Sunset skin
+   * gets a graphite strip over a cream panel, so it is read back off the
+   * stylesheet once the ground is known and kept in step with it.
+   */
+  var paintBar = function () {
+    try {
+      var ground = getComputedStyle(html).getPropertyValue('--bg').trim();
+      if (!ground) return;
+      var tag = document.querySelector('meta[name="theme-color"]');
+      if (tag) tag.setAttribute('content', ground);
+    } catch (_) { /* the page is fine without it */ }
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', paintBar);
+  else paintBar();
+  window.__NEXV_PAINT_BAR__ = paintBar;
 })();
 </script>
 </head>

@@ -5644,7 +5644,16 @@ function applySkin(skin) {
   const id = SKINS.some((s) => s.id === skin) ? skin : 'glass';
   document.documentElement.dataset.skin = id;
   store.set('nexv-skin', id);
+  paintStatusBar();
   return id;
+}
+
+/** Keep the installed app's status bar the colour of the ground underneath it. */
+function paintStatusBar() {
+  if (typeof window.__NEXV_PAINT_BAR__ === 'function') {
+    // a frame late, so the new skin's variables are the ones read
+    requestAnimationFrame(window.__NEXV_PAINT_BAR__);
+  }
 }
 
 /**
@@ -5697,6 +5706,7 @@ function skinPicker() {
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   store.set('nexv-theme', theme);
+  paintStatusBar();
   const face = document.querySelector('#themeToggle .ts-face');
   if (face) face.innerHTML = icon(theme === 'light' ? 'sun' : 'theme', 14);
   const toggle = document.getElementById('themeToggle');
