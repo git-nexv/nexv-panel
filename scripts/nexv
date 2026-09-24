@@ -537,9 +537,25 @@ act_geo() {
   local dir="/usr/local/share/xray"
   mkdir -p "$dir"
   local base="https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download"
-  curl -fsSL "$base/geoip.dat" -o "$dir/geoip.dat.new" && mv "$dir/geoip.dat.new" "$dir/geoip.dat" \
-    && curl -fsSL "$base/geosite.dat" -o "$dir/geosite.dat.new" && mv "$dir/geosite.dat.new" "$dir/geosite.dat" \
-    || { err "Could not download the geo files"; rm -f "$dir"/*.new; return 1; }
+  local dat rc=0
+  # These are tens of megabytes from GitHub, and a bare curl on a filtered link
+  # waits on a stalled transfer indefinitely - the same way installing Xray
+  # used to. Both files land in .new first, so a half-download never replaces a
+  # working one, and a route that has gone quiet is abandoned rather than sat on.
+  for dat in geoip.dat geosite.dat; do
+    echo "Downloading $dat..."
+    curl --fail --location --show-error --silent \
+         --connect-timeout 15 --max-time 300 \
+         --speed-limit 2048 --speed-time 45 \
+         --retry 2 --retry-delay 3 --retry-connrefused \
+         "$base/$dat" -o "$dir/$dat.new" || rc=$?
+    if [[ $rc -ne 0 ]]; then
+      err "Could not download $dat (curl exited $rc) - the connection to GitHub is too slow or blocked."
+      rm -f "$dir"/*.new
+      return 1
+    fi
+  done
+  for dat in geoip.dat geosite.dat; do mv "$dir/$dat.new" "$dir/$dat"; done
   systemctl restart xray
   ok "geoip.dat and geosite.dat updated"
 }

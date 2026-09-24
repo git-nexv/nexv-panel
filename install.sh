@@ -35,6 +35,28 @@ ART
 # must never stop on a question it cannot ask.
 if [[ "${NEXV_NONINTERACTIVE:-0}" == "1" || ! -t 0 ]]; then INTERACTIVE=0; else INTERACTIVE=1; fi
 
+# ---------------------------------------------------------------------------
+# Nothing downloads without a deadline
+#
+# Every hang this installer has ever produced has been the same shape: a route
+# that accepts the connection and then goes quiet. curl waits on that forever
+# unless it is told not to, so this is the only way anything is fetched here.
+#
+#   $1  how long the whole transfer may take, in seconds
+#
+# The low-speed floor matters as much as the ceiling: a transfer that has
+# crawled under 2 KB/s for three quarters of a minute is a transfer that has
+# died, and waiting out the full deadline on it helps nobody.
+# ---------------------------------------------------------------------------
+curl_get() {
+  local max="$1"; shift
+  curl --fail --location --show-error --silent \
+       --connect-timeout 15 --max-time "$max" \
+       --speed-limit 2048 --speed-time 45 \
+       --retry 2 --retry-delay 3 --retry-connrefused \
+       "$@"
+}
+
 detect_os() {
   [[ -f /etc/os-release ]] || fail "Could not identify the Linux distribution"
   . /etc/os-release
@@ -103,7 +125,7 @@ apt_do() {
 # is the surest way not to trip over its lock.
 missing_tools() {
   local want=() c
-  for c in curl git tar openssl; do
+  for c in curl git tar openssl unzip; do
     command -v "$c" >/dev/null 2>&1 || want+=("$c")
   done
   # the CA bundle answers to no command of its own
@@ -189,24 +211,256 @@ install_node() {
   warn "Could not fetch the official build; falling back to the package manager"
   if [[ $PKG == apt ]]; then
     wait_for_apt
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1 || true
+    curl_get 120 https://deb.nodesource.com/setup_20.x 2>/dev/null | bash - >/dev/null 2>&1 || true
     apt_do install -y -qq nodejs >/dev/null
   else
-    curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - >/dev/null 2>&1 || true
+    curl_get 120 https://rpm.nodesource.com/setup_20.x 2>/dev/null | bash - >/dev/null 2>&1 || true
     $PKG install -y -q nodejs >/dev/null
   fi
   command -v node >/dev/null || fail "Node.js could not be installed. Install Node 18 or newer and run this again."
   ok "Node.js $(node -v) installed"
 }
 
+# ---------------------------------------------------------------------------
+# Installing Xray-core
+#
+# This step used to be one line: fetch the official XTLS installer with a bare
+# `curl -fsSL` and pipe it into bash, with every byte of output sent to
+# /dev/null. On a good link that works. On a filtered or throttled one it does
+# not fail - it waits. A blocked route does not refuse the connection, it
+# accepts it and then says nothing, and curl without a deadline will sit on
+# that for as long as anybody lets it. With the output discarded there was
+# nothing on screen either, so half an hour of hanging and half a second of
+# working looked exactly the same.
+#
+# So the archive is fetched here instead, where the deadlines can be set: the
+# release zip carries the binary AND both geo files, which is everything the
+# official script installs, and it is checked against the SHA-256 the project
+# publishes beside it before anything is written to /usr/local.
+# ---------------------------------------------------------------------------
+
+XRAY_RELEASE="https://github.com/XTLS/Xray-core/releases/latest/download"
+
+xray_asset() {
+  case "$(uname -m)" in
+    x86_64 | amd64)    echo "Xray-linux-64" ;;
+    aarch64 | arm64)   echo "Xray-linux-arm64-v8a" ;;
+    armv7l | armv7)    echo "Xray-linux-arm32-v7a" ;;
+    i686 | i386)       echo "Xray-linux-32" ;;
+    s390x)             echo "Xray-linux-s390x" ;;
+    *)                 return 1 ;;
+  esac
+}
+
+# Public GitHub front-ends, tried in order after github.com itself. They only
+# ever serve the archive; see below for why the checksum never comes from one.
+xray_sources() {
+  echo "$XRAY_RELEASE"
+  echo "https://ghproxy.net/$XRAY_RELEASE"
+  echo "https://gh-proxy.com/$XRAY_RELEASE"
+}
+
+# unzip is on nearly every image, and Node is guaranteed by this point because
+# install_node runs first and gives up loudly if it cannot. Either will do.
+unpack_zip() {
+  local zip="$1" dest="$2"
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -o -q "$zip" -d "$dest"
+    return $?
+  fi
+  ZIP="$zip" DEST="$dest" node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const zlib = require("zlib");
+    const buf = fs.readFileSync(process.env.ZIP);
+    // the end-of-central-directory record, found by scanning back from the end
+    let eocd = -1;
+    for (let i = buf.length - 22; i >= 0; i--) {
+      if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error("not a zip file");
+    const count = buf.readUInt16LE(eocd + 10);
+    let off = buf.readUInt32LE(eocd + 16);
+    for (let n = 0; n < count; n++) {
+      const method = buf.readUInt16LE(off + 10);
+      const csize = buf.readUInt32LE(off + 20);
+      const nameLen = buf.readUInt16LE(off + 28);
+      const extraLen = buf.readUInt16LE(off + 30);
+      const commentLen = buf.readUInt16LE(off + 32);
+      const local = buf.readUInt32LE(off + 42);
+      const name = buf.toString("utf8", off + 46, off + 46 + nameLen);
+      // the local header repeats the name and extra field at its own lengths
+      const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+      const raw = buf.subarray(start, start + csize);
+      if (!name.endsWith("/")) {
+        const out = path.join(process.env.DEST, name);
+        fs.mkdirSync(path.dirname(out), { recursive: true });
+        fs.writeFileSync(out, method === 0 ? raw : zlib.inflateRawSync(raw));
+      }
+      off += 46 + nameLen + extraLen + commentLen;
+    }
+  '
+}
+
+# The unit the official installer writes, so a panel cannot tell which of the
+# two put Xray there. The panel reads this User back out of systemd and makes
+# the config and any certificate readable to it.
+write_xray_unit() {
+  cat >/etc/systemd/system/xray.service <<'UNIT'
+[Unit]
+Description=Xray Service
+Documentation=https://github.com/xtls
+After=network.target nss-lookup.target
+
+[Service]
+User=nobody
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ExecStart=/usr/local/bin/xray run -config /usr/local/etc/xray/config.json
+Restart=on-failure
+RestartPreventExitStatus=23
+LimitNPROC=10000
+LimitNOFILE=1000000
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  # the official installer enables it, so this must too, or Xray would come
+  # back from a reboot switched off and every client would be down until
+  # somebody noticed. Not started: there is no config yet, and the panel
+  # starts it the moment it writes one.
+  systemctl enable xray >/dev/null 2>&1 || warn "  could not enable the xray service at boot"
+}
+
+install_xray_release() {
+  local asset tmp want got src shown
+  asset="$(xray_asset)" || { warn "No Xray build is published for $(uname -m)"; return 1; }
+
+  tmp="$(mktemp -d)"
+
+  # ---- the checksum first, and never from the same place as the archive ----
+  #
+  # This binary is about to be run as a service, so it is not installed on a
+  # mirror's word alone. The digest is three hundred bytes and github.com will
+  # usually serve it even when the release CDN is throttled to nothing, which
+  # is the common shape of this: the small request goes through, the twenty
+  # megabyte one does not.
+  #
+  # If github.com is blocked outright the digest may come from a mirror, but
+  # then the archive is taken from a DIFFERENT one, so two unrelated parties
+  # would have to be lying in the same direction for a bad binary to land.
+  local from=""
+  info "  reading the published checksum..."
+  for src in $(xray_sources); do
+    shown="${src#*://}"; shown="${shown%%/*}"
+    if curl_get 30 --retry 1 -o "$tmp/dgst" "$src/$asset.zip.dgst"; then
+      want="$(awk -F'= *' '/^SHA2-256/ { print $2; exit }' "$tmp/dgst" | tr -d '[:space:]')"
+      if [[ ${#want} -eq 64 ]]; then from="$src"; break; fi
+    fi
+    warn "  no checksum from $shown"
+  done
+
+  if [[ -z $from ]]; then
+    warn "  the published checksum could not be read from anywhere"
+    rm -rf "$tmp"
+    return 1
+  fi
+  if [[ $from != "$XRAY_RELEASE" ]]; then
+    warn "  the checksum came from a mirror; the archive will be taken from a different one"
+  fi
+
+  # ---- the archive, from whichever source answers ----
+  got=""
+  for src in $(xray_sources); do
+    # never both from the same party
+    if [[ $from != "$XRAY_RELEASE" && $src == "$from" ]]; then continue; fi
+    shown="${src#*://}"; shown="${shown%%/*}"
+    info "  downloading $asset.zip from $shown..."
+    local meter=()
+    if [[ -t 2 ]]; then meter=(--no-silent --progress-bar); fi
+    if ! curl_get 420 ${meter[@]+"${meter[@]}"} -o "$tmp/xray.zip" "$src/$asset.zip"; then
+      warn "  $shown did not send it"
+      continue
+    fi
+    got="$(sha256sum "$tmp/xray.zip" | cut -d' ' -f1)"
+    if [[ $got == "$want" ]]; then break; fi
+    warn "  that copy does not match the published checksum - ignoring it"
+    got=""
+  done
+
+  if [[ -z $got ]]; then
+    warn "  no source produced an archive matching the checksum"
+    rm -rf "$tmp"
+    return 1
+  fi
+  ok "  archive verified against the published SHA-256"
+
+  # ---- writing it out ----
+  if ! unpack_zip "$tmp/xray.zip" "$tmp/out"; then
+    warn "  the archive could not be unpacked"
+    rm -rf "$tmp"
+    return 1
+  fi
+  [[ -f $tmp/out/xray ]] || { warn "  no xray binary inside the archive"; rm -rf "$tmp"; return 1; }
+
+  mkdir -p /usr/local/bin /usr/local/etc/xray /usr/local/share/xray
+  # written beside it and renamed over: replacing a binary in place fails with
+  # "Text file busy" if anything is still running it, and a rename does not
+  install -m 755 "$tmp/out/xray" /usr/local/bin/xray.new
+  mv -f /usr/local/bin/xray.new /usr/local/bin/xray
+  # the geo files ride along in the same archive the binary came from, so they
+  # are always the pair that release was built against
+  local dat
+  for dat in geoip.dat geosite.dat; do
+    if [[ -f $tmp/out/$dat ]]; then install -m 644 "$tmp/out/$dat" "/usr/local/share/xray/$dat"; fi
+  done
+  rm -rf "$tmp"
+
+  write_xray_unit
+  hash -r 2>/dev/null || true
+  [[ -x /usr/local/bin/xray ]]
+}
+
 install_xray() {
-  if command -v xray >/dev/null; then
+  # not just "a file called xray exists": an install interrupted part-way -
+  # which is exactly how somebody arrives here after killing a hung one -
+  # leaves a truncated binary behind, and that must not count as done
+  if command -v xray >/dev/null && xray version >/dev/null 2>&1; then
     ok "Xray-core is already installed ($(xray version | head -1))"
     return
   fi
-  info "Installing Xray-core (official XTLS installer)..."
-  bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install >/dev/null 2>&1 \
-    || fail "Xray-core installation failed"
+  if command -v xray >/dev/null; then
+    warn "The installed xray binary does not run - replacing it"
+  fi
+
+  info "Installing Xray-core..."
+  if install_xray_release; then
+    ok "Xray-core installed ($(/usr/local/bin/xray version | head -1))"
+    return
+  fi
+
+  # The official installer as the fallback, but on a leash this time: if it has
+  # not finished in ten minutes it is not going to, and saying so beats leaving
+  # somebody watching a line that will never change.
+  warn "Falling back to the official XTLS installer..."
+  local script
+  script="$(mktemp)"
+  if ! curl_get 60 -o "$script" "https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh"; then
+    rm -f "$script"
+    fail "Could not reach GitHub to install Xray-core. Check the server's connection, or install Xray yourself and run this again."
+  fi
+  local rc=0
+  timeout 600 bash "$script" install || rc=$?
+  rm -f "$script"
+  if [[ $rc -eq 124 ]]; then
+    fail "The official Xray installer did not finish within ten minutes - the connection to GitHub is too slow or blocked."
+  elif [[ $rc -ne 0 ]]; then
+    fail "Xray-core installation failed (the official installer exited $rc)"
+  fi
+  hash -r 2>/dev/null || true
+  command -v xray >/dev/null || fail "Xray-core installation finished but no xray binary was produced"
   ok "Xray-core installed ($(xray version | head -1))"
 }
 
@@ -222,16 +476,30 @@ migrate_legacy_dir() {
 
 fetch_panel() {
   info "Downloading the panel..."
+  # the same leash the updater wears: git will otherwise sit on a stalled
+  # transfer indefinitely, which is the hang this installer is named for
+  local git_guards=(-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60)
+  local rc
   if [[ -d $INSTALL_DIR/.git ]]; then
     git -C "$INSTALL_DIR" remote set-url origin "$REPO_URL"
-    git -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH" -q || fail "Could not fetch $BRANCH from the repository"
+    rc=0
+    timeout 600 git "${git_guards[@]}" -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH" -q || rc=$?
+    if [[ $rc -eq 124 ]]; then fail "The repository did not answer within ten minutes."; fi
+    if [[ $rc -ne 0 ]]; then fail "Could not fetch $BRANCH from the repository (git exited $rc)"; fi
     git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH" -q
   else
     rm -rf "$INSTALL_DIR"
-    git clone --depth 1 -b "$BRANCH" "$REPO_URL" "$INSTALL_DIR" -q || fail "Could not clone the repository"
+    rc=0
+    timeout 600 git "${git_guards[@]}" clone --depth 1 -b "$BRANCH" "$REPO_URL" "$INSTALL_DIR" -q || rc=$?
+    if [[ $rc -eq 124 ]]; then fail "The repository did not answer within ten minutes."; fi
+    if [[ $rc -ne 0 ]]; then fail "Could not clone the repository (git exited $rc)"; fi
   fi
-  ( cd "$INSTALL_DIR" && npm install --omit=dev --no-audit --no-fund --loglevel=error ) \
-    || fail "npm dependencies failed to install"
+  info "Installing dependencies..."
+  rc=0
+  ( cd "$INSTALL_DIR" && timeout 900 npm install --omit=dev --no-audit --no-fund \
+      --no-progress --fetch-timeout=120000 --fetch-retries=2 --loglevel=error ) || rc=$?
+  if [[ $rc -eq 124 ]]; then fail "npm gave up after fifteen minutes - the registry is not answering."; fi
+  if [[ $rc -ne 0 ]]; then fail "npm dependencies failed to install (npm exited $rc)"; fi
   mkdir -p "$DATA_DIR"
   chmod 750 /etc/nexv "$DATA_DIR"
   ok "Panel installed in $INSTALL_DIR"
