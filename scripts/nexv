@@ -869,11 +869,27 @@ act_xray_fix() {
     echo
     if grep -qi "permission denied" <<<"$test_out"; then
       warn "That is a file permission problem, not a broken config."
-      echo "  Xray runs as '$user' and cannot read the certificate."
-      echo
-      if confirm "  Fix the certificate permissions now?"; then
-        act_cert_fix
-        return $?
+      # which file, though. Blaming the certificate for every one of these sent
+      # people to fix something that was never wrong: the config itself used to
+      # be written 0600 and owned by root, which '"'"'$user'"'"' cannot open either.
+      if grep -qi "config.json" <<<"$test_out"; then
+        echo "  Xray runs as '$user' and cannot read its own config."
+        local gid
+        gid="$(id -g "$user" 2>/dev/null)"
+        if [[ -n $gid ]]; then
+          chmod 755 "$(dirname "$cfg")" 2>/dev/null
+          chown "0:$gid" "$cfg" 2>/dev/null && chmod 640 "$cfg" 2>/dev/null
+          ok "  Config handed over to $user"
+          systemctl restart xray 2>/dev/null
+          if systemctl is-active --quiet xray; then ok "Xray is running"; return 0; fi
+        fi
+      else
+        echo "  Xray runs as '$user' and cannot read the certificate."
+        echo
+        if confirm "  Fix the certificate permissions now?"; then
+          act_cert_fix
+          return $?
+        fi
       fi
       echo "  The panel repairs this on its own within a minute."
     else

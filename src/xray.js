@@ -784,11 +784,41 @@ function buildConfig() {
     routing: { domainStrategy: d.settings.domainStrategy || 'AsIs', rules }
   };
 }
+/**
+ * Write the config where Xray can actually read it.
+ *
+ * It was written 0600 and owned by root while the service runs as `nobody`,
+ * which cannot open it. Every single apply therefore came back
+ * "open /usr/local/etc/xray/config.json: permission denied", was taken for a
+ * broken config, and rolled back - so nothing could be saved and Xray could
+ * never start. The certificate beside it has been handed over correctly for
+ * ages; the config itself never was.
+ *
+ * Root keeps ownership so the service cannot rewrite what it is told to run,
+ * and the service user's own group is what opens it - the same arrangement
+ * certs.js already uses for the private key.
+ */
 function writeConfig() {
   const cfg = buildConfig();
-  fs.mkdirSync(path.dirname(XRAY_CONFIG), { recursive: true });
+  const dir = path.dirname(XRAY_CONFIG);
+  fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(XRAY_CONFIG, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  handOverConfig();
   return cfg;
+}
+
+/** Let the user xray runs as read the config, and nobody else. */
+function handOverConfig() {
+  if (!fs.existsSync(XRAY_CONFIG)) return;
+  const owner = serviceOwner();
+  if (!owner.user || owner.user === 'root') return;      // nothing to hand over
+  if (owner.gid === null || owner.gid === undefined) return;
+  try {
+    // the directory has to be walkable before the file inside it can be opened
+    fs.chmodSync(path.dirname(XRAY_CONFIG), 0o755);
+    fs.chmodSync(XRAY_CONFIG, 0o640);
+    fs.chownSync(XRAY_CONFIG, 0, owner.gid);
+  } catch (_) { /* not root, or no such group: the test below will say so */ }
 }
 
 /** The user systemd starts xray as - usually `nobody`, sometimes root. */
@@ -894,6 +924,7 @@ const GOOD_CONFIG = `${XRAY_CONFIG}.good`;
 function writeMinimalConfig() {
   const bare = { log: { loglevel: 'warning' }, inbounds: [], outbounds: [{ protocol: 'freedom', tag: 'direct' }] };
   fs.writeFileSync(XRAY_CONFIG, JSON.stringify(bare, null, 2), { mode: 0o600 });
+  handOverConfig();
 }
 
 function keepGood() {
@@ -905,11 +936,13 @@ function rollBack(previous) {
   if (fs.existsSync(GOOD_CONFIG)) {
     try {
       fs.copyFileSync(GOOD_CONFIG, XRAY_CONFIG);
+      handOverConfig();
       return true;
     } catch (_) { /* fall through to the in-memory copy */ }
   }
   if (previous !== null) {
     fs.writeFileSync(XRAY_CONFIG, previous, { mode: 0o600 });
+    handOverConfig();
     return true;
   }
   return false;
@@ -1240,7 +1273,7 @@ async function generateReality() {
 
 module.exports = {
   xrayVersion,
-  XRAY_BIN, XRAY_CONFIG, XRAY_SERVICE, API_PORT,
+  XRAY_BIN, XRAY_CONFIG, XRAY_SERVICE, API_PORT, handOverConfig,
   buildConfig, writeConfig, testConfig, apply, serviceStatus, repairCerts, messageOf, isOverIpLimit,
   outboundConfig, outboundStream,
   INBOUND_PROTOCOLS, OUTBOUND_PROTOCOLS, CLIENT_PROTOCOLS, LINK_PROTOCOLS,

@@ -443,6 +443,14 @@ async function bootstrap() {
      on its own rather than only when somebody clicks it */
   try { require('./version').watch(); } catch (err) { console.error('[version] could not start:', err.message); }
 
+  /*
+   * A config written before this panel knew to hand it over is still sitting
+   * there 0600 and owned by root, which the service user cannot open - so it
+   * is repaired on the way up rather than waiting for the next change to be
+   * saved. On an install that was already correct this does nothing.
+   */
+  try { xray.handOverConfig(); } catch (err) { console.error('[xray] config permissions:', err.message); }
+
   // the access log is what tells the panel who is connected and from where
   try {
     await xray.ensureAccessLog();
