@@ -607,6 +607,39 @@ function toList(value, existingValue, fallback) {
  *
  * Returns the complaint, or '' when it is ready.
  */
+/*
+ * What REALITY will actually accept, established by asking Xray rather than by
+ * reading the documentation:
+ *
+ *   private key  43 characters of base64url - one X25519 scalar
+ *   short ID     hex, an EVEN number of digits, at most 16; empty is allowed
+ *
+ * Neither was checked beyond "is it blank". That mattered more than it looks:
+ * Xray does not refuse the one inbound it cannot parse, it refuses to start at
+ * all, and it exits 23 doing so - which the service file lists under
+ * RestartPreventExitStatus, so systemd deliberately does not bring it back.
+ * One mistyped character in either field therefore took the whole server down
+ * and kept it down, which is what "Xray keeps disabling itself" was.
+ */
+const REALITY_KEY = /^[A-Za-z0-9_-]{43}$/;
+const REALITY_SHORT_ID = /^[0-9a-fA-F]*$/;
+
+function realityProblem(reality) {
+  const r = reality || {};
+  if (!r.privateKey) return 'REALITY needs a key pair - use Generate next to the private key';
+  if (!REALITY_KEY.test(String(r.privateKey).trim())) {
+    return 'that REALITY private key is not a valid key - press Generate to make a new pair';
+  }
+  for (const id of r.shortIds || []) {
+    const short = String(id).trim();
+    if (!short) continue;                        // an empty short ID is allowed
+    if (!REALITY_SHORT_ID.test(short) || short.length > 16 || short.length % 2 !== 0) {
+      return `"${short}" is not a usable REALITY short ID - it must be an even number of hex digits (0-9, a-f), up to 16`;
+    }
+  }
+  return '';
+}
+
 function inboundMissing(inb) {
   if (inb.protocol === 'shadowsocks' && !inb.password) {
     return 'a Shadowsocks password is required - use Generate to make one';
@@ -614,9 +647,7 @@ function inboundMissing(inb) {
   if (inb.protocol === 'wireguard' && !inb.wgPrivateKey) {
     return 'WireGuard needs a private key - use Generate to make one';
   }
-  if (inb.security === 'reality' && !(inb.reality && inb.reality.privateKey)) {
-    return 'REALITY needs a key pair - use Generate next to the private key';
-  }
+  if (inb.security === 'reality') return realityProblem(inb.reality);
   return '';
 }
 

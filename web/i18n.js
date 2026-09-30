@@ -865,6 +865,20 @@ const FA = {
   'How the panel looks on this device.': 'ظاهر پنل روی این دستگاه.',
   'Look changed': 'ظاهر عوض شد',
 
+  /* why Xray is down, said where somebody will read it */
+  'Xray is down': 'Xray خاموش است',
+  'Xray is not running. The server says:': 'Xray در حال اجرا نیست. سرور می‌گوید:',
+  'Xray is not running, and the journal does not say why. Try starting it and watch what happens.':
+    'Xray در حال اجرا نیست و لاگ سیستم دلیلش را نمی‌گوید. یک بار روشنش کنید و ببینید چه می‌شود.',
+  'A config Xray refuses makes it stop and stay stopped on purpose, so it is usually a port already in use, a key it will not parse, or a certificate it cannot read.':
+    'کانفیگی که Xray قبول نکند باعث می‌شود عمداً خاموش بماند؛ پس معمولاً یا پورت اشغال است، یا کلیدی که نمی‌تواند بخواند، یا گواهی‌ای که دسترسی ندارد.',
+  'Try to start it': 'تلاش برای روشن کردن',
+  'Xray started': 'Xray روشن شد',
+  'REALITY needs a key pair - use Generate next to the private key':
+    'REALITY به یک جفت کلید نیاز دارد — کنار کلید خصوصی دکمه‌ی ساختن را بزنید',
+  'that REALITY private key is not a valid key - press Generate to make a new pair':
+    'این کلید خصوصی REALITY معتبر نیست — دکمه‌ی ساختن را بزنید تا جفت کلید تازه ساخته شود',
+
   /* the share dialog: one code, and a switch saying which link it is */
   'Subscription': 'اشتراک',
   'Config link': 'لینک کانفیگ',
@@ -955,6 +969,8 @@ const PATTERNS = [
     (m) => `کلاینت «${m[1]}» حذف شود؟ حجمش تمام شده، پس چیزی برنمی‌گردد.`],
   [/^pick a username of at least three characters$/, () => 'نام کاربری‌ای با حداقل سه کاراکتر انتخاب کنید'],
   [/^pick a password of at least eight characters$/, () => 'گذرواژه‌ای با حداقل هشت کاراکتر انتخاب کنید'],
+  [/^"(.+)" is not a usable REALITY short ID - it must be an even number of hex digits \(0-9, a-f\), up to 16$/,
+    (m) => `«${m[1]}» شناسه‌ی کوتاه معتبری برای REALITY نیست — باید تعداد زوجی رقم هگز (0-9 و a-f) و حداکثر ۱۶ کاراکتر باشد`],
   [/^(.+) of (.+)$/, (m) => `${m[1]} از ${m[2]}`],
   /* an address row: how many connections, how long it has been quiet, and when
      it first appeared. The spans arrive already built ("4m 12s"), so only the

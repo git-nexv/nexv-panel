@@ -604,16 +604,58 @@ async function renderDashboard(view) {
   state.timer = setInterval(() => { if (!document.hidden) paint(); }, 8000);
 }
 
-/** The header chip, from a status payload the caller already has. */
+/**
+ * The header chip, from a status payload the caller already has.
+ *
+ * When it is down the chip becomes a button: "Xray down" on its own is the one
+ * thing the panel says about the most important process on the machine, and it
+ * never said why. The reason comes from the journal, so pressing it shows the
+ * line that actually explains it rather than sending somebody to a terminal.
+ */
 function paintXrayChip(xray) {
   const chip = document.getElementById('xrayChip');
   if (!chip) return;
-  const cls = `chip ${xray.running ? 'ok' : 'danger'}`;
+  const down = !xray.running;
+  const cls = `chip ${down ? 'danger' : 'ok'}${down && xray.reason ? ' chip-why' : ''}`;
   if (chip.className !== cls) chip.className = cls;
-  const html = tHtml(`<i></i><span>Xray ${xray.running ? 'up' : 'down'}</span>`);
+  const html = tHtml(`<i></i><span>Xray ${down ? 'down' : 'up'}</span>`);
   if (chip.innerHTML !== html) chip.innerHTML = html;
-  // keep just "Xray x.y.z"; the full build string is too long for the chip
-  chip.title = (xray.version || '').split('(')[0].trim() || t('Xray-core');
+  chip.title = down && xray.reason
+    ? xray.reason
+    : (xray.version || '').split('(')[0].trim() || t('Xray-core');
+
+  chip.onclick = down ? () => xrayDownDialog(xray) : null;
+  chip.style.cursor = down ? 'pointer' : '';
+}
+
+/** Why Xray is down, and the two things worth trying about it. */
+function xrayDownDialog(xray) {
+  const body = el('div', {}, [
+    el('p', { class: 'muted', text: xray.reason
+      ? 'Xray is not running. The server says:'
+      : 'Xray is not running, and the journal does not say why. Try starting it and watch what happens.' }),
+    xray.reason ? el('div', { class: 'link-box', style: 'margin-top:10px', text: xray.reason }) : null,
+    el('div', { class: 'hint', style: 'margin-top:12px', text:
+      'A config Xray refuses makes it stop and stay stopped on purpose, so it is usually a port already in use, a key it will not parse, or a certificate it cannot read.' })
+  ]);
+  modal({
+    title: 'Xray is down',
+    subtitle: xray.state ? `The service is ${xray.state}.` : '',
+    body,
+    width: 520,
+    actions: [{
+      label: 'Try to start it',
+      kind: 'primary',
+      onClick: async (close) => {
+        close();
+        try {
+          await api.post('/xray/start');
+          toast('Xray started');
+        } catch (err) { toast(err.message, 'err'); }
+        refreshXrayChip();
+      }
+    }]
+  });
 }
 
 /** Re-read the Xray state for the header, after an action changed it. */

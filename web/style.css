@@ -1975,3 +1975,7 @@ td .row-actions { display: inline-flex; width: auto; }
   .ip-time { align-items: flex-start; text-align: start; width: 100%; }
   .ip-sub { white-space: normal; }
 }
+
+/* the Xray chip, when it has something to tell you */
+.chip.chip-why { cursor: pointer; }
+.chip.chip-why:hover { border-color: var(--danger); }

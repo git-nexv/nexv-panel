@@ -876,6 +876,45 @@ async function repairCerts() {
   return { ok: result.ok, message: result.ok ? '' : messageOf(result) };
 }
 
+/*
+ * The last configuration Xray actually started on.
+ *
+ * Rolling back to "whatever was on disk a moment ago" is not the same thing:
+ * that copy may itself be one Xray refuses, left behind by an earlier failure,
+ * in which case the rollback restores the breakage. This is only ever written
+ * after the service has come up on it.
+ */
+const GOOD_CONFIG = `${XRAY_CONFIG}.good`;
+
+/*
+ * The least Xray will start on: no inbounds, one direct outbound. It serves
+ * nobody, which is the point - it is what goes down when the alternative is a
+ * service that cannot start at all and a panel with no way back.
+ */
+function writeMinimalConfig() {
+  const bare = { log: { loglevel: 'warning' }, inbounds: [], outbounds: [{ protocol: 'freedom', tag: 'direct' }] };
+  fs.writeFileSync(XRAY_CONFIG, JSON.stringify(bare, null, 2), { mode: 0o600 });
+}
+
+function keepGood() {
+  try { fs.copyFileSync(XRAY_CONFIG, GOOD_CONFIG); } catch (_) { /* best effort */ }
+}
+
+/** Put back something Xray will start on, and say which it was. */
+function rollBack(previous) {
+  if (fs.existsSync(GOOD_CONFIG)) {
+    try {
+      fs.copyFileSync(GOOD_CONFIG, XRAY_CONFIG);
+      return true;
+    } catch (_) { /* fall through to the in-memory copy */ }
+  }
+  if (previous !== null) {
+    fs.writeFileSync(XRAY_CONFIG, previous, { mode: 0o600 });
+    return true;
+  }
+  return false;
+}
+
 /** Write the config, verify it parses, and reload the service. Rolls back on a bad config. */
 async function apply() {
   let previous = null;
@@ -899,13 +938,23 @@ async function apply() {
   }
 
   if (!test.ok && fs.existsSync(XRAY_BIN)) {
-    if (previous !== null) fs.writeFileSync(XRAY_CONFIG, previous, { mode: 0o600 });
+    /*
+     * Leaving the refused config on disk used to be possible whenever there
+     * was nothing to put back - a first run, or a file somebody had removed -
+     * and Xray then failed every later start too, which looks exactly like a
+     * service that disables itself. Something it will start on always goes
+     * back, even if that means an empty one.
+     */
+    if (!rollBack(previous)) writeMinimalConfig();
     return { ok: false, error: test.message || test.stderr.trim() || 'invalid xray config' };
   }
   if (!hasSystemd()) return { ok: true, warning: 'systemd unavailable; xray was not restarted' };
 
   const restart = await run('systemctl', ['restart', XRAY_SERVICE], 30000);
-  if (restart.ok) return { ok: true };
+  if (restart.ok) {
+    keepGood();
+    return { ok: true };
+  }
 
   /*
    * `xray run -test` only parses the config; it cannot know that a port is
@@ -914,8 +963,7 @@ async function apply() {
    * failed too and xray looked permanently dead. Put the working config back
    * and bring the service up on it, then report the failure.
    */
-  if (previous !== null) {
-    fs.writeFileSync(XRAY_CONFIG, previous, { mode: 0o600 });
+  if (rollBack(previous)) {
     const recovered = await run('systemctl', ['restart', XRAY_SERVICE], 30000);
     const detail = await lastServiceError();
     return {
@@ -952,9 +1000,18 @@ async function serviceStatus() {
   const active = hasSystemd()
     ? await run('systemctl', ['is-active', XRAY_SERVICE], 5000)
     : { stdout: 'unmanaged' };
+  const state = active.stdout.trim() || 'unknown';
+  const running = state === 'active';
+  /*
+   * "Xray down" on its own is a dead end: it is the one thing the panel says
+   * about the most important process on the machine, and it never said why.
+   * The journal already holds the answer - a port in use, a key it will not
+   * parse, a certificate it cannot read - so the header carries it too.
+   */
   return {
-    running: active.stdout.trim() === 'active',
-    state: active.stdout.trim() || 'unknown',
+    running,
+    state,
+    reason: running ? '' : await lastServiceError(),
     version: await xrayVersion()
   };
 }
@@ -1052,6 +1109,21 @@ function rateFor(clientId) {
 const toldAbout = new Map();
 const TELL_AGAIN = 60 * 60 * 1000;
 
+/*
+ * How long a client stays cut off once the IP limit has caught it.
+ *
+ * Addresses fall out of the five-minute window one at a time, so a shared
+ * account crosses the limit, drops under it, and crosses it again - and every
+ * one of those flips used to rewrite the config and RESTART XRAY, which drops
+ * every other connection on the server. With enforcement running every thirty
+ * seconds that is a service that spends its life restarting. Once cut off, a
+ * client now stays cut off until it has been genuinely quiet for a while,
+ * which is also the behaviour the rule is supposed to have: being in six
+ * places at once should cost you something more than thirty seconds.
+ */
+const IP_COOLOFF_MS = Number(process.env.NEXV_IP_COOLOFF_MS || 5 * 60 * 1000);
+const cutOffAt = new Map();
+
 function noteOverIpLimit(c) {
   const last = toldAbout.get(c.id) || 0;
   if (Date.now() - last < TELL_AGAIN) return;
@@ -1070,9 +1142,14 @@ function noteOverIpLimit(c) {
 async function enforceLimits() {
   const d = db.data;
   let dirty = false;
+  const now = Date.now();
   for (const c of d.clients) {
     const overIps = isOverIpLimit(c);
-    const shouldDisable = isExpired(c) || isOverQuota(c) || overIps;
+    if (overIps) cutOffAt.set(c.id, now);
+    /* still inside the cooling period counts as still over the limit, so the
+       flip back does not happen thirty seconds later */
+    const cooling = !overIps && now - (cutOffAt.get(c.id) || 0) < IP_COOLOFF_MS;
+    const shouldDisable = isExpired(c) || isOverQuota(c) || overIps || cooling;
     if (shouldDisable && c.enable !== false && !c.autoDisabled) {
       c.autoDisabled = true;
       if (overIps) noteOverIpLimit(c);
@@ -1081,6 +1158,7 @@ async function enforceLimits() {
       /* it comes back on its own once the extra addresses go quiet - the point
          is to stop an account being in six places, not to end it */
       c.autoDisabled = false;
+      cutOffAt.delete(c.id);
       dirty = true;
     }
   }
