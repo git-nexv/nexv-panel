@@ -23,7 +23,18 @@ const PROVIDERS = {
   gemini: { label: 'Google Gemini', model: 'gemini-2.5-pro', needsUrl: false, host: 'generativelanguage.googleapis.com' }
 };
 
-const ACTIONS = ['screen', 'plans', 'configs', 'usage', 'support', 'url', 'text'];
+/*
+ * Every action a button may carry. sanitise() DELETES any button whose action
+ * is not in here, and sanitise() runs on every save from the Bot page - so a
+ * new action that is added to the bot but not to this list works until the
+ * first time anybody presses Save, and then silently disappears from the menu.
+ * That is exactly what happened to the trial button.
+ *
+ * `usage` is kept although nothing offers it any more: a bot that still has one
+ * would otherwise lose the button before the migration gets a chance to turn it
+ * into the trial.
+ */
+const ACTIONS = ['screen', 'plans', 'configs', 'trial', 'usage', 'support', 'url', 'text'];
 
 const SYSTEM = [
   'You design Telegram bots for a VPN panel called NexV. A bot is a list of screens.',
@@ -32,7 +43,7 @@ const SYSTEM = [
   '- screen: open another screen; value is that screen\'s key',
   '- plans: list the plans that are for sale, so the user can buy one',
   '- configs: send the user their own subscription links',
-  '- usage: show the user their traffic, quota and expiry',
+  '- trial: give the user a free test config (the panel decides its size and length)',
   '- support: the support screen',
   '- url: open a link; value is the URL',
   '- text: show a short message; value is that message',

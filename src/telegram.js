@@ -1404,6 +1404,9 @@ async function start() {
   const b = bot();
   if (!b.token) throw new Error('set the bot token first');
   if (runtime.running) return status();
+  /* also here, not only on a panel restart: somebody whose menu lost a button
+     should get it back by pressing Start, which is the obvious thing to try */
+  migrateUsageButton();
   runtime.me = await whoAmI(b.token);
   runtime.stopping = false;
   runtime.running = true;

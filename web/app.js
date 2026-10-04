@@ -4353,7 +4353,7 @@ const BOT_ACTIONS = [
   { value: 'screen', label: 'Open a screen' },
   { value: 'plans', label: 'Show the plans' },
   { value: 'configs', label: 'Send their configs' },
-  { value: 'usage', label: 'Show their usage' },
+  { value: 'trial', label: 'Give a test config' },
   { value: 'support', label: 'Support screen' },
   { value: 'url', label: 'Open a link' },
   { value: 'text', label: 'Show a message' }
