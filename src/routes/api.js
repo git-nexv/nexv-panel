@@ -225,7 +225,11 @@ function botView() {
     brand: b.brand || 'NexV',
     currency: b.currency || 'Toman',
     screens: b.screens || [],
-    plans: b.plans || [],
+    // the catalogue the panel edits; one-off custom purchases are not part of it
+    plans: (b.plans || []).filter((p) => !p.custom),
+    pricePerGB: Number(b.pricePerGB) || 0,
+    trial: b.trial || telegram.defaults().trial,
+    custom: b.custom || telegram.defaults().custom,
     orders: (b.orders || []).slice(0, 60),
     pay: b.pay || telegram.defaults().pay,
     payWays: telegram.payWays(),
@@ -256,7 +260,14 @@ router.put('/bot', async (req, res) => {
   if (body.currency !== undefined) b.currency = String(body.currency).slice(0, 16);
   if (Array.isArray(body.screens)) b.screens = botai.sanitise({ screens: body.screens });
   if (Array.isArray(body.plans)) {
-    b.plans = body.plans.map((p) => ({
+    /*
+     * A custom-volume purchase invents a plan for one buyer and live orders
+     * point at it by id, so it is not in the list the panel edits - and
+     * replacing the list wholesale would delete it out from under an order
+     * that has not been approved yet. Those are carried across untouched.
+     */
+    const oneOffs = (b.plans || []).filter((p) => p.custom);
+    b.plans = body.plans.filter((p) => !p.custom).map((p) => ({
       id: p.id || db.id(),
       name: String(p.name || 'Plan').slice(0, 40),
       gb: Number(p.gb) || 0,
@@ -264,7 +275,27 @@ router.put('/bot', async (req, res) => {
       price: String(p.price || '0').slice(0, 20),
       inboundId: p.inboundId || '',
       enable: p.enable !== false
-    }));
+    })).concat(oneOffs);
+  }
+
+  if (body.pricePerGB !== undefined) b.pricePerGB = Math.max(0, Number(body.pricePerGB) || 0);
+  if (body.trial && typeof body.trial === 'object') {
+    b.trial = {
+      enable: body.trial.enable !== false,
+      mb: Math.max(1, Number(body.trial.mb) || 100),
+      days: Math.max(1, Number(body.trial.days) || 1),
+      inboundId: body.trial.inboundId || '',
+      oncePerUser: body.trial.oncePerUser !== false
+    };
+  }
+  if (body.custom && typeof body.custom === 'object') {
+    b.custom = {
+      enable: !!body.custom.enable,
+      minGB: Math.max(1, Number(body.custom.minGB) || 1),
+      maxGB: Math.max(0, Number(body.custom.maxGB) || 0),
+      days: Math.max(1, Number(body.custom.days) || 30),
+      inboundId: body.custom.inboundId || ''
+    };
   }
   if (body.pay && typeof body.pay === 'object') {
     const pay = b.pay || telegram.defaults().pay;
@@ -1186,6 +1217,9 @@ function normalizeClient(body, existing, inbound) {
     expiryDays: Number(body.expiryDays ?? existing?.expiryDays ?? 0),
     /* set when a sale was reversed; turning the client back on clears it */
     blockedReason: body.blockedReason ?? existing?.blockedReason ?? '',
+    /* the free sample, marked so the bot can tell it has already given one -
+       this list is explicit, so a flag that is not named here is dropped */
+    isTrial: !!(body.isTrial ?? existing?.isTrial ?? false),
     limitIp: Number(body.limitIp ?? existing?.limitIp ?? 0),
     tgId: body.tgId ?? existing?.tgId ?? '',
     comment: transfer.clean(body.comment ?? existing?.comment),

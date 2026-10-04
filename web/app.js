@@ -122,6 +122,17 @@ const el = (tag, attrs = {}, children = []) => {
   return node;
 };
 
+/*
+ * A quota, written the way somebody would say it. Whole gigabytes stay
+ * gigabytes; a trial of a hundred megabytes is 0.09765625 of one, and printing
+ * that is how a perfectly good number becomes unreadable.
+ */
+function quotaText(gb) {
+  const n = Number(gb) || 0;
+  if (!n) return 'Unlimited';
+  return Number.isInteger(n) ? `${n} GB` : bytes(n * 1024 ** 3);
+}
+
 function bytes(n) {
   n = Number(n) || 0;
   // a per-second rate is rarely a whole number, and 833.3333333333334 B/s
@@ -2167,7 +2178,7 @@ async function renderClients(view) {
           quota ? el('div', { class: `bar ${percent > 90 ? 'danger' : percent > 70 ? 'warn' : ''}`, html: `<i style="width:${Math.min(100, percent)}%"></i>` }) : null
         ])
       ]),
-      el('td', { class: 'muted num', text: c.totalGB ? `${c.totalGB} GB` : 'Unlimited' }),
+      el('td', { class: 'muted num', text: quotaText(c.totalGB) }),
       el('td', { class: 'muted' }, [
         el('div', { class: 'cell-stack' }, [
           el('div', { text: waitingToStart(c) ? 'Not started' : fmtDate(c.expiryTime) }),
@@ -4140,7 +4151,7 @@ async function adminDetail(id) {
     for (const c of data.clients) {
       tbody.append(el('tr', {}, [
         el('td', {}, [el('strong', { text: c.email })]),
-        el('td', { class: 'muted num', text: c.totalGB ? `${c.totalGB} GB` : 'Unlimited' }),
+        el('td', { class: 'muted num', text: quotaText(c.totalGB) }),
         el('td', { class: 'num', text: bytes(c.up + c.down) }),
         el('td', { class: 'muted', text: c.expiryTime ? fmtDate(c.expiryTime) : (c.startAfterFirstUse ? `${c.expiryDays}d on first use` : 'Never') }),
         el('td', {}, [el('span', { class: `chip ${c.enable ? 'ok' : ''}`, html: `<i></i>${c.enable ? 'Active' : 'Disabled'}` })])
@@ -4511,7 +4522,10 @@ async function renderBot(view) {
     screens: JSON.parse(JSON.stringify(data.screens || [])),
     plans: JSON.parse(JSON.stringify(data.plans || [])),
     pay: JSON.parse(JSON.stringify(data.pay || { card: {}, crypto: { wallets: [] } })),
-    channel: JSON.parse(JSON.stringify(data.channel || { enable: false, id: '', link: '', text: '' }))
+    channel: JSON.parse(JSON.stringify(data.channel || { enable: false, id: '', link: '', text: '' })),
+    pricePerGB: Number(data.pricePerGB) || 0,
+    trial: JSON.parse(JSON.stringify(data.trial || { enable: true, mb: 100, days: 1, inboundId: '', oncePerUser: true })),
+    custom: JSON.parse(JSON.stringify(data.custom || { enable: false, minGB: 1, maxGB: 0, days: 30, inboundId: '' }))
   };
 
   const { wrap, panels } = tabbed(['Setup', 'Screens', 'Plans', 'Payment', 'Channel', 'Orders', 'AI']);
@@ -4521,7 +4535,8 @@ async function renderBot(view) {
   const save = async (extra) => {
     const payload = Object.assign({
       brand: draft.brand, currency: draft.currency, adminId: draft.adminId,
-      screens: draft.screens, plans: draft.plans, pay: draft.pay, channel: draft.channel
+      screens: draft.screens, plans: draft.plans, pay: draft.pay, channel: draft.channel,
+      pricePerGB: draft.pricePerGB, trial: draft.trial, custom: draft.custom
     }, extra || {});
     try {
       await api.put('/bot', payload);
@@ -4557,6 +4572,12 @@ async function renderBot(view) {
   });
   formField(setupGrid, 'Brand name', brand, { hint: 'Used wherever {brand} appears' });
   formField(setupGrid, 'Currency', currency);
+
+  const perGB = el('input', { type: 'number', min: '0', value: data.pricePerGB || 0 });
+  perGB.addEventListener('input', () => { draft.pricePerGB = Math.max(0, Number(perGB.value) || 0); });
+  formField(setupGrid, 'Price', perGB, {
+    hint: 'What one gigabyte costs. Custom-volume buying uses this, and stays off until it is set.'
+  });
 
   const startBtn = el('button', {
     class: 'btn primary', html: `${icon('power')} ${data.status.running ? 'Stop the bot' : 'Start the bot'}`,
@@ -4700,6 +4721,60 @@ async function renderBot(view) {
         }
       }),
       el('button', { class: 'btn primary', text: 'Save plans', onclick: () => save() })
+    ]));
+
+    /* ---- the free trial ---- */
+    const trial = draft.trial = draft.trial || { enable: true, mb: 100, days: 1, inboundId: '', oncePerUser: true };
+    const trialGrid = el('div', { class: 'form-grid' });
+    const bindTo = (obj, field, control, cast) => {
+      control.addEventListener('input', () => { obj[field] = cast ? cast(control.value) : control.value; });
+      return control;
+    };
+    const switchFor = (obj, field, label, onDefault) => {
+      const box = el('input', { type: 'checkbox' });
+      box.checked = onDefault ? obj[field] !== false : !!obj[field];
+      box.addEventListener('change', () => { obj[field] = box.checked; });
+      return el('label', { class: 'switch' }, [box, el('span', { class: 'track' }), el('span', { class: 'muted', text: label })]);
+    };
+
+    formField(trialGrid, 'Quota (MB)', bindTo(trial, 'mb', el('input', { type: 'number', min: '1', value: trial.mb ?? 100 }), Number));
+    formField(trialGrid, 'Days', bindTo(trial, 'days', el('input', { type: 'number', min: '1', value: trial.days ?? 1 }), Number));
+    const trialInb = selectOf(inbounds.map((i) => ({ value: i.id, label: `${i.remark} (${i.protocol}:${i.port})` })), trial.inboundId);
+    trialInb.addEventListener('change', () => { trial.inboundId = trialInb.value; });
+    formField(trialGrid, 'Made on inbound', trialInb, { full: true });
+    trialGrid.append(el('div', { class: 'field full' }, [switchFor(trial, 'oncePerUser', 'One per Telegram account', true)]));
+
+    plansBox.append(el('div', { class: 'card', style: 'margin-top:16px' }, [
+      el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+        el('strong', { text: '🎁 Test config' }), switchFor(trial, 'enable', 'Offer it', true)
+      ]),
+      trialGrid,
+      el('div', { class: 'hint', text: 'The bot asks the buyer for a name, then makes the config and sends the link. The clock starts on first use, not when they ask.' })
+    ]));
+
+    /* ---- buying by the gigabyte ---- */
+    const custom = draft.custom = draft.custom || { enable: false, minGB: 1, maxGB: 0, days: 30, inboundId: '' };
+    const customGrid = el('div', { class: 'form-grid' });
+    formField(customGrid, 'Minimum (GB)', bindTo(custom, 'minGB', el('input', { type: 'number', min: '1', value: custom.minGB ?? 1 }), Number), {
+      hint: 'The smallest amount somebody may buy'
+    });
+    formField(customGrid, 'Maximum (GB)', bindTo(custom, 'maxGB', el('input', { type: 'number', min: '0', value: custom.maxGB ?? 0 }), Number), {
+      hint: '0 means no ceiling'
+    });
+    formField(customGrid, 'Days', bindTo(custom, 'days', el('input', { type: 'number', min: '1', value: custom.days ?? 30 }), Number));
+    const customInb = selectOf(inbounds.map((i) => ({ value: i.id, label: `${i.remark} (${i.protocol}:${i.port})` })), custom.inboundId);
+    customInb.addEventListener('change', () => { custom.inboundId = customInb.value; });
+    formField(customGrid, 'Sold from inbound', customInb, { full: true });
+
+    plansBox.append(el('div', { class: 'card', style: 'margin-top:16px' }, [
+      el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+        el('strong', { text: '🎚 Custom volume' }), switchFor(custom, 'enable', 'Offer it')
+      ]),
+      customGrid,
+      el('div', { class: 'hint', text: `The buyer types how many gigabytes they want and pays that many times the price per GB, which is set on the Setup tab${data.pricePerGB ? '' : ' — it is 0 right now, so this stays hidden in the bot'}.` }),
+      el('div', { class: 'row', style: 'margin-top:12px' }, [
+        el('button', { class: 'btn primary', text: 'Save plans', onclick: () => save() })
+      ])
     ]));
     hydrateIcons(plansBox);
   };

@@ -865,6 +865,25 @@ const FA = {
   'How the panel looks on this device.': 'ظاهر پنل روی این دستگاه.',
   'Look changed': 'ظاهر عوض شد',
 
+  /* the bot: a free trial, and selling by the gigabyte */
+  'Price': 'قیمت هر گیگ',
+  'What one gigabyte costs. Custom-volume buying uses this, and stays off until it is set.':
+    'قیمت هر گیگابایت. خرید حجم دلخواه از همین استفاده می‌کند و تا وقتی صفر باشد نمایش داده نمی‌شود.',
+  '🎁 Test config': '🎁 کانفیگ تست',
+  '🎚 Custom volume': '🎚 حجم دلخواه',
+  'Offer it': 'ارائه بده',
+  'Quota (MB)': 'حجم (مگابایت)',
+  'Days': 'مدت (روز)',
+  'Made on inbound': 'ساخته شود روی اینباند',
+  'One per Telegram account': 'برای هر حساب تلگرام فقط یکی',
+  'The bot asks the buyer for a name, then makes the config and sends the link. The clock starts on first use, not when they ask.':
+    'ربات از کاربر یک اسم می‌پرسد، بعد کانفیگ را می‌سازد و لینک را می‌فرستد. شمارش روز از اولین استفاده شروع می‌شود، نه از لحظه‌ی درخواست.',
+  'Minimum (GB)': 'حداقل (گیگابایت)',
+  'Maximum (GB)': 'حداکثر (گیگابایت)',
+  'The smallest amount somebody may buy': 'کمترین مقداری که می‌شود خرید',
+  '0 means no ceiling': 'صفر یعنی بدون سقف',
+  'Sold from inbound': 'فروش از اینباند',
+
   /* why Xray is down, said where somebody will read it */
   'Xray is down': 'Xray خاموش است',
   'Xray is not running. The server says:': 'Xray در حال اجرا نیست. سرور می‌گوید:',

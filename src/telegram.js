@@ -84,6 +84,32 @@ function migrateStarter() {
   return true;
 }
 
+/*
+ * "My usage" was a screen of its own that repeated what the config list could
+ * have said in the same breath, so the usage figures moved into the config
+ * list and the button became the free trial. Any bot still carrying the old
+ * button is swapped over - the action always, the label only while it is still
+ * one of the two it shipped with, because an admin who renamed it meant it.
+ */
+const OLD_USAGE_LABELS = ['📊 مصرف من', '📊 My usage', 'مصرف من', 'My usage'];
+
+function migrateUsageButton() {
+  const b = bot();
+  let touched = false;
+  for (const screen of b.screens || []) {
+    for (const row of screen.buttons || []) {
+      for (const button of row) {
+        if (button.action !== 'usage') continue;
+        button.action = 'trial';
+        if (OLD_USAGE_LABELS.includes(button.label)) button.label = '🎁 کانفیگ تست';
+        touched = true;
+      }
+    }
+  }
+  if (touched) db.saveNow();
+  return touched;
+}
+
 function defaults() {
   return {
     enabled: false,
@@ -105,7 +131,17 @@ function defaults() {
       link: '',
       text: 'برای استفاده از ربات، ابتدا در کانال زیر عضو شوید 👇'
     },
-    ai: { provider: 'anthropic', apiKey: '', model: '', baseUrl: '' }
+    ai: { provider: 'anthropic', apiKey: '', model: '', baseUrl: '' },
+
+    /* what a gigabyte sells for, which is the whole of custom-volume pricing */
+    pricePerGB: 0,
+
+    /* the free sample. Small and short on purpose: it is there to prove the
+       server works from the buyer's own phone, not to be a plan. */
+    trial: { enable: true, mb: 100, days: 1, inboundId: '', oncePerUser: true },
+
+    /* buying by the gigabyte instead of from the fixed list */
+    custom: { enable: false, minGB: 1, maxGB: 0, days: 30, inboundId: '' }
   };
 }
 
@@ -118,7 +154,7 @@ function starterScreens() {
       text: 'سلام {name} 👋\n\nبه {brand} خوش آمدید. یکی از گزینه‌های زیر را انتخاب کنید.',
       buttons: [
         [{ label: '🛒 خرید اشتراک', action: 'plans' }],
-        [{ label: '🔑 کانفیگ‌های من', action: 'configs' }, { label: '📊 مصرف من', action: 'usage' }],
+        [{ label: '🔑 کانفیگ‌های من', action: 'configs' }, { label: '🎁 کانفیگ تست', action: 'trial' }],
         [{ label: '💬 پشتیبانی', action: 'support' }]
       ]
     },
@@ -315,13 +351,109 @@ async function showScreen(ctx, key) {
   return reply(ctx, fill(screen.text, ctx), keyboardFor(screen));
 }
 
+function customSettings() {
+  const c = bot().custom || {};
+  return {
+    enable: !!c.enable,
+    minGB: Math.max(1, Number(c.minGB) || 1),
+    maxGB: Math.max(0, Number(c.maxGB) || 0),      // 0 is no ceiling
+    days: Math.max(1, Number(c.days) || 30),
+    inboundId: c.inboundId || ''
+  };
+}
+
+function pricePerGB() { return Math.max(0, Number(bot().pricePerGB) || 0); }
+
+/** Custom volume is only on offer once there is a price to put on a gigabyte. */
+function customOn() {
+  const c = customSettings();
+  return c.enable && pricePerGB() > 0;
+}
+
 async function showPlans(ctx) {
   const b = bot();
-  const plans = b.plans.filter((p) => p.enable !== false);
-  if (!plans.length) return reply(ctx, 'فعلاً اشتراکی برای فروش تعریف نشده است.', backRow());
+  const plans = b.plans.filter((p) => p.enable !== false && !p.custom);
   const rows = plans.map((p) => ([{ text: planLine(p).replace(/<[^>]+>/g, ''), callback_data: `b:buy:${p.id}` }]));
+  if (customOn()) rows.push([{ text: '🎚 حجم دلخواه', callback_data: 'b:custom:' }]);
+  if (!rows.length) return reply(ctx, 'فعلاً اشتراکی برای فروش تعریف نشده است.', backRow());
   rows.push(backRow()[0]);
   return reply(ctx, '<b>اشتراک‌ها</b>\nیکی را انتخاب کنید:', rows);
+}
+
+/* --------------------------- buying by the gigabyte ---------------------- */
+
+async function startCustom(ctx) {
+  if (!customOn()) return reply(ctx, 'خرید حجم دلخواه فعلاً فعال نیست.', backRow());
+  const c = customSettings();
+  const per = pricePerGB();
+  expect(ctx.userId, 'customGB');
+  return reply(ctx, [
+    '<b>حجم دلخواه</b>',
+    `هر گیگابایت ${per.toLocaleString('en-US')} ${escapeHtml(bot().currency || '')}`,
+    `حداقل ${c.minGB} گیگ${c.maxGB ? ` و حداکثر ${c.maxGB} گیگ` : ''} · ${c.days} روز`,
+    '',
+    'چند گیگابایت می‌خواهید؟ فقط عدد بفرستید.'
+  ].join('\n'), backRow());
+}
+
+async function takeCustomGB(ctx, raw) {
+  const c = customSettings();
+  const per = pricePerGB();
+  const gb = Math.floor(Number(String(raw).replace(/[^\d.]/g, '')));
+  if (!Number.isFinite(gb) || gb <= 0) return send(ctx.chatId, 'یک عدد بفرستید، مثلاً 20');
+  if (gb < c.minGB) return send(ctx.chatId, `حداقل ${c.minGB} گیگابایت است.`);
+  if (c.maxGB && gb > c.maxGB) return send(ctx.chatId, `حداکثر ${c.maxGB} گیگابایت است.`);
+
+  forget(ctx.userId);
+  /*
+   * A custom purchase is an ordinary order with a plan made up on the spot, so
+   * everything downstream - the receipt, the admin's approve button, delivery -
+   * works on it without knowing it was not from the list.
+   */
+  const b = bot();
+  const plan = {
+    id: `custom-${db.id()}`,
+    name: `${gb} گیگابایت`,
+    gb,
+    days: c.days,
+    price: String(gb * per),
+    inboundId: c.inboundId || (db.data.inbounds.find((i) => i.enable !== false) || {}).id || '',
+    enable: true,
+    custom: true
+  };
+  if (!plan.inboundId) return send(ctx.chatId, 'اینباندی برای فروش تنظیم نشده است.');
+  /* kept with the plans so deliverOrder can find it later, and pruned so a
+     year of one-off purchases does not pile up in the settings file */
+  b.plans.push(plan);
+  const customs = b.plans.filter((p) => p.custom);
+  if (customs.length > 200) {
+    const drop = new Set(customs.slice(0, customs.length - 200).map((p) => p.id));
+    b.plans = b.plans.filter((p) => !drop.has(p.id));
+  }
+  db.saveNow();
+  return placeOrder(ctx, plan.id);
+}
+
+/*
+ * One screen, not two. What somebody wants to know about a config is its link
+ * AND how much of it is left - asking them to go back and open a second screen
+ * to learn the second half was never worth a tap.
+ */
+function usageLines(c) {
+  const used = (c.up || 0) + (c.down || 0);
+  const quota = (c.totalGB || 0) * 1024 ** 3;
+  const out = [`مصرف: ${bytes(used)}${quota ? ` از ${bytes(quota)}` : ' (نامحدود)'}`];
+  if (!c.expiryTime && c.startAfterFirstUse && c.expiryDays) {
+    // bought but never opened: the clock has not started yet
+    out.push(`${c.expiryDays} روز، از اولین استفاده`);
+  } else if (!c.expiryTime) {
+    out.push('بدون تاریخ انقضا');
+  } else {
+    const left = Math.ceil((c.expiryTime - Date.now()) / 86400000);
+    out.push(left > 0 ? `${left} روز باقی مانده` : 'منقضی شده');
+  }
+  if (c.enable === false || c.autoDisabled) out.push('⛔️ غیرفعال');
+  return out.join(' · ');
 }
 
 async function showConfigs(ctx) {
@@ -332,26 +464,144 @@ async function showConfigs(ctx) {
   const subUrl = require('./routes/api').subUrl;
   const lines = mine.map((c) => {
     const inb = db.data.inbounds.find((i) => i.id === c.inboundId);
-    return `<b>${escapeHtml(c.email)}</b>${inb ? ` · ${escapeHtml(inb.remark)}` : ''}\n<code>${escapeHtml(subUrl(c.subId))}</code>`;
+    return [
+      `<b>${escapeHtml(c.email)}</b>${inb ? ` · ${escapeHtml(inb.remark)}` : ''}`,
+      usageLines(c),
+      `<code>${escapeHtml(subUrl(c.subId))}</code>`
+    ].join('\n');
   });
   return reply(ctx, `<b>کانفیگ‌های شما</b>\n\n${lines.join('\n\n')}\n\nلینک را در برنامه‌تان به عنوان Subscription اضافه کنید.`, backRow());
 }
 
-async function showUsage(ctx) {
-  const mine = clientsOf(ctx.userId);
-  if (!mine.length) return reply(ctx, 'هنوز چیزی به حساب شما وصل نشده است.', backRow());
-  const lines = mine.map((c) => {
-    const used = (c.up || 0) + (c.down || 0);
-    const quota = (c.totalGB || 0) * 1024 ** 3;
-    const left = c.expiryTime ? Math.ceil((c.expiryTime - Date.now()) / 86400000) : null;
-    return [
-      `<b>${escapeHtml(c.email)}</b>`,
-      `مصرف: ${bytes(used)}${quota ? ` از ${bytes(quota)}` : ' (نامحدود)'}`,
-      left === null ? 'بدون تاریخ انقضا' : (left > 0 ? `${left} روز باقی مانده` : 'منقضی شده')
-    ].join('\n');
-  });
-  return reply(ctx, lines.join('\n\n'), backRow());
+/* ---------------------------- the free trial ----------------------------- */
+
+/*
+ * Whatever somebody is part-way through typing, and nothing more: a name for a
+ * trial, or a number of gigabytes. It lives in memory because it is worth
+ * seconds, not days, and it is swept so a conversation abandoned half-way does
+ * not sit here for the life of the process.
+ */
+const pending = new Map();
+const PENDING_TTL = 10 * 60 * 1000;
+
+function expect(userId, kind, data) {
+  pending.set(String(userId), { kind, data: data || {}, at: Date.now() });
 }
+
+function expected(userId) {
+  const entry = pending.get(String(userId));
+  if (!entry) return null;
+  if (Date.now() - entry.at > PENDING_TTL) { pending.delete(String(userId)); return null; }
+  return entry;
+}
+
+function forget(userId) { pending.delete(String(userId)); }
+
+function trialSettings() {
+  const t = bot().trial || {};
+  return {
+    enable: t.enable !== false,
+    mb: Math.max(1, Number(t.mb) || 100),
+    days: Math.max(1, Number(t.days) || 1),
+    inboundId: t.inboundId || '',
+    oncePerUser: t.oncePerUser !== false
+  };
+}
+
+/** The config this person was already given, if any. */
+function trialOf(userId) {
+  return db.data.clients.find((c) => String(c.tgId || '') === String(userId) && c.isTrial);
+}
+
+async function startTrial(ctx) {
+  const t = trialSettings();
+  if (!t.enable) return reply(ctx, 'کانفیگ تست فعلاً ارائه نمی‌شود.', backRow());
+
+  const inbound = db.data.inbounds.find((i) => i.id === t.inboundId)
+    || db.data.inbounds.find((i) => i.enable !== false);
+  if (!inbound) return reply(ctx, 'هنوز اینباندی برای کانفیگ تست تنظیم نشده است.', backRow());
+
+  if (t.oncePerUser) {
+    const had = trialOf(ctx.userId);
+    if (had) {
+      const subUrl = require('./routes/api').subUrl;
+      return reply(ctx, [
+        'شما قبلاً کانفیگ تست گرفته‌اید 🙂',
+        '',
+        `<b>${escapeHtml(had.email)}</b>`,
+        usageLines(had),
+        `<code>${escapeHtml(subUrl(had.subId))}</code>`
+      ].join('\n'), backRow());
+    }
+  }
+
+  expect(ctx.userId, 'trialName');
+  return reply(ctx, [
+    `<b>کانفیگ تست</b> · ${t.mb} مگابایت · ${t.days} روز`,
+    '',
+    'یک اسم برای کانفیگتان بفرستید (مثلاً اسم خودتان یا اسم گوشی‌تان).',
+    'فقط حروف انگلیسی، عدد و خط تیره.'
+  ].join('\n'), backRow());
+}
+
+/*
+ * The name goes into the client list and into the share link, so it has to be
+ * something Xray and every client app will carry: letters, digits, dot, dash
+ * and underscore. Anything else is dropped rather than rejected, because
+ * bouncing somebody back to retype their own name over a space is unkind.
+ */
+function cleanName(raw) {
+  return String(raw || '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/[^A-Za-z0-9._-]/g, '')
+    .replace(/^[-._]+|[-._]+$/g, '')
+    .slice(0, 24);
+}
+
+async function takeTrialName(ctx, raw) {
+  const t = trialSettings();
+  const wanted = cleanName(raw);
+  if (wanted.length < 2) {
+    return send(ctx.chatId, 'این اسم کار نمی‌کند. با حروف انگلیسی و عدد بفرستید، حداقل دو کاراکتر.');
+  }
+
+  const inbound = db.data.inbounds.find((i) => i.id === t.inboundId)
+    || db.data.inbounds.find((i) => i.enable !== false);
+  if (!inbound) { forget(ctx.userId); return send(ctx.chatId, 'اینباندی برای کانفیگ تست تنظیم نشده است.'); }
+
+  // a name already in use would be refused outright, so it is made unique here
+  let email = wanted;
+  let n = 2;
+  while (db.data.clients.some((c) => c.email === email)) email = `${wanted}-${n++}`;
+
+  forget(ctx.userId);
+  try {
+    const client = await require('./routes/api').createClient(inbound, {
+      email,
+      totalGB: t.mb / 1024,                 // the quota is held in gigabytes
+      startAfterFirstUse: true,
+      expiryDays: t.days,
+      expiryTime: 0,
+      tgId: String(ctx.userId),
+      isTrial: true,
+      comment: 'کانفیگ تست - ربات'
+    });
+    const url = require('./routes/api').subUrl(client.subId);
+    return send(ctx.chatId, [
+      '<b>کانفیگ تست شما آماده شد ✅</b>',
+      `${escapeHtml(email)} · ${t.mb} مگابایت · ${t.days} روز`,
+      '',
+      'لینک اشتراک:',
+      `<code>${escapeHtml(url)}</code>`,
+      '',
+      'این لینک را در برنامه‌تان به عنوان Subscription اضافه کنید.'
+    ].join('\n'), backRow());
+  } catch (err) {
+    return send(ctx.chatId, `ساخت کانفیگ تست ممکن نشد: ${escapeHtml(err.message)}`, backRow());
+  }
+}
+
 
 function backRow() {
   return [[{ text: '⬅️ بازگشت', callback_data: 'b:screen:start' }]];
@@ -797,7 +1047,10 @@ async function act(ctx, action, value) {
     case 'screen': return showScreen(ctx, value || 'start');
     case 'plans': return showPlans(ctx);
     case 'configs': return showConfigs(ctx);
-    case 'usage': return showUsage(ctx);
+    /* the usage screen folded into the config list; an old button still works */
+    case 'usage': return showConfigs(ctx);
+    case 'trial': return startTrial(ctx);
+    case 'custom': return startCustom(ctx);
     case 'support': {
       const screen = screenByKey('support');
       if (screen) return showScreen(ctx, 'support');
@@ -865,6 +1118,20 @@ async function handle(update) {
     if (!text) return null;
 
     if (text === '/id') return send(ctx.chatId, `آیدی عددی شما: <code>${ctx.userId}</code>`);
+
+    /*
+     * Something was asked for and this is the answer - a name for a trial, or
+     * a number of gigabytes. It is read before the command lookup below, since
+     * somebody naming their config "start" means the word, not the screen; a
+     * real command still gets out, so nobody is trapped in the prompt.
+     */
+    const waitingFor = expected(ctx.userId);
+    if (waitingFor && !text.startsWith('/')) {
+      if (await gate(ctx)) return null;
+      if (waitingFor.kind === 'trialName') return takeTrialName(ctx, text);
+      if (waitingFor.kind === 'customGB') return takeCustomGB(ctx, text);
+    }
+    if (waitingFor && text.startsWith('/')) forget(ctx.userId);
     if (text === '/stats' && ctx.isAdmin) {
       const d = db.data;
       return send(ctx.chatId, [
@@ -974,10 +1241,14 @@ function status() {
 function resume() {
   const b = bot();
   migrateStarter();
+  migrateUsageButton();
   if (b.enabled && b.token) start().catch((err) => { runtime.error = err.message; });
 }
 
 module.exports = {
-  bot, defaults, starterScreens, migrateStarter, start, stop, status, whoAmI, resume,
-  send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines
+  bot, defaults, starterScreens, migrateStarter, migrateUsageButton, start, stop, status, whoAmI, resume,
+  send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
+  /* the entry point for one update: what the polling loop feeds, and what a
+     webhook would feed if this ever grows one */
+  handle
 };
