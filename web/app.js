@@ -5,7 +5,25 @@
    Every request and redirect is built from it, so nothing depends on how the
    current URL happens to be spelled. */
 const BASE = window.__NEXV_BASE__ || './';
+/*
+ * Two budgets, because the two kinds of request are nothing alike.
+ *
+ * Reading is fast, and a short deadline is what tells somebody the panel is
+ * unreachable instead of leaving a page spinning. Writing is not: anything
+ * that changes the configuration ends in xray.apply(), which tests the config
+ * by spawning a thirty-megabyte binary and then restarts the service - and the
+ * server allows that restart thirty seconds, twice over if it has to put the
+ * previous configuration back, plus a journal read. So the server's own worst
+ * case is over a minute while the browser used to give up at twenty seconds,
+ * on every single request.
+ *
+ * That is why an import "never worked": the import is simply the heaviest of
+ * these, so it was the one that lost the race every time. The work carried on
+ * and often finished - the browser had just stopped listening, and the retry
+ * then collided with the clients the first attempt had already created.
+ */
 const REQUEST_TIMEOUT = 20000;
+const WRITE_TIMEOUT = 120000;
 
 /* localStorage throws outright when the browser blocks site data - Safari with
    "Block All Cookies", private windows, some in-app browsers. It only ever
@@ -22,9 +40,11 @@ const store = {
 /* ------------------------------- helpers -------------------------------- */
 
 const api = {
-  async request(method, path, body) {
+  async request(method, path, body, opts = {}) {
     const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), REQUEST_TIMEOUT);
+    const budget = opts.timeout
+      || (method === 'GET' ? REQUEST_TIMEOUT : WRITE_TIMEOUT);
+    const timer = setTimeout(() => abort.abort(), budget);
     let res;
     try {
       res = await fetch(`${BASE}api${path}`, {
@@ -34,9 +54,12 @@ const api = {
         signal: abort.signal
       });
     } catch (err) {
-      throw new Error(err.name === 'AbortError'
+      if (err.name !== 'AbortError') throw new Error('Could not reach the server');
+      /* a write that ran out of time may well have landed: saying otherwise
+         invites a retry that collides with what the first attempt wrote */
+      throw new Error(method === 'GET'
         ? 'The server did not respond in time'
-        : 'Could not reach the server');
+        : 'The server is taking too long. It may still be working - reload the page before trying again.');
     } finally {
       clearTimeout(timer);
     }
@@ -54,10 +77,10 @@ const api = {
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     return data;
   },
-  get: (p) => api.request('GET', p),
-  post: (p, b) => api.request('POST', p, b),
-  put: (p, b) => api.request('PUT', p, b),
-  del: (p) => api.request('DELETE', p)
+  get: (p, opts) => api.request('GET', p, null, opts),
+  post: (p, b, opts) => api.request('POST', p, b, opts),
+  put: (p, b, opts) => api.request('PUT', p, b, opts),
+  del: (p, opts) => api.request('DELETE', p, null, opts)
 };
 
 /*

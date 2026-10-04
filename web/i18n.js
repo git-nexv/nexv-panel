@@ -874,6 +874,8 @@ const FA = {
     'کانفیگی که Xray قبول نکند باعث می‌شود عمداً خاموش بماند؛ پس معمولاً یا پورت اشغال است، یا کلیدی که نمی‌تواند بخواند، یا گواهی‌ای که دسترسی ندارد.',
   'Try to start it': 'تلاش برای روشن کردن',
   'Xray started': 'Xray روشن شد',
+  'The server is taking too long. It may still be working - reload the page before trying again.':
+    'سرور دارد طول می‌دهد. ممکن است هنوز مشغول باشد — قبل از تلاش دوباره، صفحه را رفرش کنید.',
   'REALITY needs a key pair - use Generate next to the private key':
     'REALITY به یک جفت کلید نیاز دارد — کنار کلید خصوصی دکمه‌ی ساختن را بزنید',
   'that REALITY private key is not a valid key - press Generate to make a new pair':
