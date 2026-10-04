@@ -93,6 +93,14 @@ function migrateStarter() {
  */
 const OLD_USAGE_LABELS = ['📊 مصرف من', '📊 My usage', 'مصرف من', 'My usage'];
 
+/* the support screen used to send people away; while it still says so, say the
+   new thing instead - an admin who rewrote it is left alone */
+const OLD_SUPPORT_TEXTS = [
+  'سوال خود را برای {admin} بفرستید، در اولین فرصت پاسخ می‌دهیم.',
+  'Send your question to {admin} and we will answer shortly.'
+];
+const NEW_SUPPORT_TEXT = 'سوال یا مشکلتان را همین‌جا بنویسید و بفرستید — عکس و فایل هم می‌توانید بفرستید. پاسخ در همین چت می‌آید.';
+
 function migrateUsageButton() {
   const b = bot();
   let touched = false;
@@ -104,6 +112,10 @@ function migrateUsageButton() {
         if (OLD_USAGE_LABELS.includes(button.label)) button.label = '🎁 کانفیگ تست';
         touched = true;
       }
+    }
+    if (screen.key === 'support' && OLD_SUPPORT_TEXTS.includes(screen.text)) {
+      screen.text = NEW_SUPPORT_TEXT;
+      touched = true;
     }
   }
   if (touched) db.saveNow();
@@ -161,7 +173,7 @@ function starterScreens() {
     {
       key: 'support',
       title: 'پشتیبانی',
-      text: 'سوال خود را برای {admin} بفرستید، در اولین فرصت پاسخ می‌دهیم.',
+      text: 'سوال یا مشکلتان را همین‌جا بنویسید و بفرستید — عکس و فایل هم می‌توانید بفرستید. پاسخ در همین چت می‌آید.',
       buttons: [[{ label: '⬅️ بازگشت', action: 'screen', value: 'start' }]]
     }
   ];
@@ -605,6 +617,129 @@ async function takeTrialName(ctx, raw) {
 
 function backRow() {
   return [[{ text: '⬅️ بازگشت', callback_data: 'b:screen:start' }]];
+}
+
+/* ------------------------------- support --------------------------------- */
+
+/*
+ * Support was a screen that said "message the admin" and then did nothing with
+ * what anybody typed. It is a relay now: the buyer writes here, the admin gets
+ * it with a name and a number attached, and replying to that in their own chat
+ * goes back to the buyer.
+ *
+ * Which buyer a reply belongs to is worked out from the message being replied
+ * to rather than from anything held in memory. The id is written into the
+ * header in plain sight, so this keeps working after the panel restarts - and
+ * a map is kept as well, only so that replying to the copy of the message
+ * works as naturally as replying to the header.
+ */
+const relayed = new Map();
+const RELAY_MAX = 500;
+
+function rememberRelay(messageId, userId) {
+  if (!messageId) return;
+  relayed.set(String(messageId), String(userId));
+  if (relayed.size > RELAY_MAX) {
+    // oldest first; Map keeps insertion order
+    for (const key of relayed.keys()) {
+      relayed.delete(key);
+      if (relayed.size <= RELAY_MAX) break;
+    }
+  }
+}
+
+/** Who a message in the admin's chat is about, if anybody. */
+function relayTarget(replied) {
+  if (!replied) return '';
+  const known = relayed.get(String(replied.message_id));
+  if (known) return known;
+  /* the forwarded copy still carries its author when their privacy allows it */
+  if (replied.forward_from && replied.forward_from.id) return String(replied.forward_from.id);
+  // written into the header, which is what makes this survive a restart
+  const body = `${replied.text || ''}\n${replied.caption || ''}`;
+  const tagged = /#id(\d{3,})/.exec(body);
+  if (tagged) return tagged[1];
+  // a payment receipt names the buyer the same way, so replying to one works too
+  const buyer = /آیدی عددی:\s*(\d{3,})/.exec(body);
+  return buyer ? buyer[1] : '';
+}
+
+function whoLine(ctx) {
+  return [
+    `از: ${escapeHtml(ctx.name || '-')}`,
+    ctx.username ? `یوزرنیم: @${escapeHtml(ctx.username)}` : 'یوزرنیم: ندارد',
+    `#id${ctx.userId}`
+  ].join(' · ');
+}
+
+async function openSupport(ctx) {
+  expect(ctx.userId, 'support');
+  const screen = screenByKey('support');
+  if (screen) return showScreen(ctx, 'support');
+  return reply(ctx, 'پیامتان را همین‌جا بنویسید و بفرستید؛ به پشتیبانی می‌رسد.', backRow());
+}
+
+/** Pass one message from a buyer through to the admin. Returns false if nobody is there. */
+async function toSupport(ctx, message) {
+  const admin = adminChat();
+  if (!admin) {
+    await send(ctx.chatId, 'پشتیبانی فعلاً در دسترس نیست. کمی بعد دوباره امتحان کنید.');
+    return false;
+  }
+
+  const header = await send(admin, [
+    '<b>💬 پیام پشتیبانی</b>',
+    whoLine(ctx),
+    '',
+    'برای پاسخ، روی همین پیام ریپلای کنید.'
+  ].join('\n'));
+  rememberRelay(header && header.message_id, ctx.userId);
+
+  /*
+   * copyMessage rather than a hand-written re-send: it carries whatever was
+   * sent - text, a screenshot, a voice note, a file - without this having to
+   * know about every kind Telegram has.
+   */
+  try {
+    const copy = await call('copyMessage', {
+      chat_id: admin,
+      from_chat_id: ctx.chatId,
+      message_id: message.message_id
+    });
+    rememberRelay(copy && copy.message_id, ctx.userId);
+  } catch (err) {
+    runtime.error = err.message;
+    await send(admin, `<i>(پیام کپی نشد: ${escapeHtml(err.message)})</i>`);
+  }
+
+  // the window stays open, so a follow-up does not need another tap
+  expect(ctx.userId, 'support');
+  await send(ctx.chatId, 'پیام شما برای پشتیبانی ارسال شد ✅ پاسخ همین‌جا می‌آید.');
+  return true;
+}
+
+/** The admin replied to a relayed message; carry it back to whoever sent it. */
+async function fromSupport(ctx, message) {
+  const target = relayTarget(message.reply_to_message);
+  if (!target) return false;
+  const text = (message.text || '').trim();
+  if (text.startsWith('/')) return false;        // a command is not an answer
+
+  const sentHeader = await send(target, '<b>💬 پاسخ پشتیبانی</b>');
+  if (sentHeader === undefined) { /* send() swallows its own errors */ }
+  try {
+    await call('copyMessage', {
+      chat_id: target,
+      from_chat_id: ctx.chatId,
+      message_id: message.message_id
+    });
+  } catch (err) {
+    runtime.error = err.message;
+    await send(ctx.chatId, `پاسخ فرستاده نشد: ${escapeHtml(err.message)}`);
+    return true;
+  }
+  await send(ctx.chatId, '✅ پاسخ فرستاده شد.');
+  return true;
 }
 
 /* -------------------------------- payment -------------------------------- */
@@ -1051,11 +1186,7 @@ async function act(ctx, action, value) {
     case 'usage': return showConfigs(ctx);
     case 'trial': return startTrial(ctx);
     case 'custom': return startCustom(ctx);
-    case 'support': {
-      const screen = screenByKey('support');
-      if (screen) return showScreen(ctx, 'support');
-      return reply(ctx, `به ${escapeHtml(adminHandle())} پیام بدهید.`, backRow());
-    }
+    case 'support': return openSupport(ctx);
     case 'joined': {
       const ok = await isMember(ctx.userId, true);
       if (!ok) {
@@ -1109,12 +1240,36 @@ async function handle(update) {
      * chatter rather than being forwarded to the admin as a payment.
      */
     const text = (message.text || '').trim();
+
+    /*
+     * The admin answering somebody. This comes first: an admin replying to a
+     * relayed message means that reply for that person, not a command for the
+     * bot, and anything after this point would read it as one.
+     */
+    if (ctx.isAdmin && message.reply_to_message) {
+      if (await fromSupport(ctx, message)) return null;
+    }
+
     const waiting = openOrder(ctx.userId);
     const looksLikeHash = /^[A-Za-z0-9:_-]{12,}$/.test(text);
     if (waiting && (message.photo || message.document
       || (waiting.method === 'crypto' && looksLikeHash))) {
       if (await takeReceipt(ctx, message)) return null;
     }
+
+    /*
+     * A support conversation is open, so this is for the admin - whatever it
+     * is. Checked before the empty-text return, because a screenshot of an
+     * error is the most useful thing somebody can send to support and it
+     * carries no text at all.
+     */
+    const inSupport = expected(ctx.userId);
+    if (inSupport && inSupport.kind === 'support' && !ctx.isAdmin && !text.startsWith('/')) {
+      if (await gate(ctx)) return null;
+      await toSupport(ctx, message);
+      return null;
+    }
+
     if (!text) return null;
 
     if (text === '/id') return send(ctx.chatId, `آیدی عددی شما: <code>${ctx.userId}</code>`);
@@ -1168,6 +1323,15 @@ async function handle(update) {
       return null;
     }
     if (action !== 'joined' && ctx.answer) ctx.answer();
+    /*
+     * Walking away ends the support conversation. Without this, somebody who
+     * taps Support, changes their mind, goes to look at their configs and then
+     * types anything at all has it land in the admin's chat.
+     */
+    if (action !== 'support') {
+      const open = expected(ctx.userId);
+      if (open && open.kind === 'support') forget(ctx.userId);
+    }
     return act(ctx, action, rest.join(':'));
   }
   return null;
