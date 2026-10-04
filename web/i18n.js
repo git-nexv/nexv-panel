@@ -883,6 +883,14 @@ const FA = {
   'The smallest amount somebody may buy': 'کمترین مقداری که می‌شود خرید',
   '0 means no ceiling': 'صفر یعنی بدون سقف',
   'Sold from inbound': 'فروش از اینباند',
+  'Test config': 'کانفیگ تست',
+  'User plan': 'یوزر پلن',
+  '🎚 Buy by the gigabyte': '🎚 خرید گیگی',
+  'Show it in the bot': 'در ربات نمایش بده',
+  'When this is on, the bot puts a "custom volume" button at the bottom of the plan list, just above Back. The buyer taps it, types how many gigabytes they want, and pays that many times the price per GB.':
+    'وقتی روشن باشد، ربات یک دکمه‌ی «حجم دلخواه» ته لیست پلن‌ها می‌گذارد، درست بالای «بازگشت». کاربر رویش می‌زند، عدد گیگابایت دلخواهش را می‌فرستد و به همان تعداد ضرب‌در قیمت هر گیگ پرداخت می‌کند.',
+  'Price per GB is 0, set on the Setup tab — until it is set, this button stays hidden in the bot whatever this switch says.':
+    'قیمت هر گیگ صفر است و در تب Setup تنظیم می‌شود — تا وقتی صفر باشد، این دکمه در ربات نشان داده نمی‌شود، حتی اگر این کلید روشن باشد.',
 
   /* why Xray is down, said where somebody will read it */
   'Xray is down': 'Xray خاموش است',
@@ -992,6 +1000,8 @@ const PATTERNS = [
   [/^pick a password of at least eight characters$/, () => 'گذرواژه‌ای با حداقل هشت کاراکتر انتخاب کنید'],
   [/^"(.+)" is not a usable REALITY short ID - it must be an even number of hex digits \(0-9, a-f\), up to 16$/,
     (m) => `«${m[1]}» شناسه‌ی کوتاه معتبری برای REALITY نیست — باید تعداد زوجی رقم هگز (0-9 و a-f) و حداکثر ۱۶ کاراکتر باشد`],
+  [/^Price per GB is (.+), set on the Setup tab\.$/,
+    (m) => `قیمت هر گیگ ${m[1]} است و در تب Setup تنظیم می‌شود.`],
   [/^(.+) of (.+)$/, (m) => `${m[1]} از ${m[2]}`],
   /* an address row: how many connections, how long it has been quiet, and when
      it first appeared. The spans arrive already built ("4m 12s"), so only the

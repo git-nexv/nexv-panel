@@ -4528,7 +4528,7 @@ async function renderBot(view) {
     custom: JSON.parse(JSON.stringify(data.custom || { enable: false, minGB: 1, maxGB: 0, days: 30, inboundId: '' }))
   };
 
-  const { wrap, panels } = tabbed(['Setup', 'Screens', 'Plans', 'Payment', 'Channel', 'Orders', 'AI']);
+  const { wrap, panels } = tabbed(['Setup', 'Screens', 'Plans', 'Test config', 'User plan', 'Payment', 'Channel', 'Orders', 'AI']);
   for (const panel of Object.values(panels)) panel.className = 'tab-panel';
   view.append(wrap);
 
@@ -4723,63 +4723,71 @@ async function renderBot(view) {
       el('button', { class: 'btn primary', text: 'Save plans', onclick: () => save() })
     ]));
 
-    /* ---- the free trial ---- */
-    const trial = draft.trial = draft.trial || { enable: true, mb: 100, days: 1, inboundId: '', oncePerUser: true };
-    const trialGrid = el('div', { class: 'form-grid' });
-    const bindTo = (obj, field, control, cast) => {
-      control.addEventListener('input', () => { obj[field] = cast ? cast(control.value) : control.value; });
-      return control;
-    };
-    const switchFor = (obj, field, label, onDefault) => {
-      const box = el('input', { type: 'checkbox' });
-      box.checked = onDefault ? obj[field] !== false : !!obj[field];
-      box.addEventListener('change', () => { obj[field] = box.checked; });
-      return el('label', { class: 'switch' }, [box, el('span', { class: 'track' }), el('span', { class: 'muted', text: label })]);
-    };
-
-    formField(trialGrid, 'Quota (MB)', bindTo(trial, 'mb', el('input', { type: 'number', min: '1', value: trial.mb ?? 100 }), Number));
-    formField(trialGrid, 'Days', bindTo(trial, 'days', el('input', { type: 'number', min: '1', value: trial.days ?? 1 }), Number));
-    const trialInb = selectOf(inbounds.map((i) => ({ value: i.id, label: `${i.remark} (${i.protocol}:${i.port})` })), trial.inboundId);
-    trialInb.addEventListener('change', () => { trial.inboundId = trialInb.value; });
-    formField(trialGrid, 'Made on inbound', trialInb, { full: true });
-    trialGrid.append(el('div', { class: 'field full' }, [switchFor(trial, 'oncePerUser', 'One per Telegram account', true)]));
-
-    plansBox.append(el('div', { class: 'card', style: 'margin-top:16px' }, [
-      el('div', { class: 'between', style: 'margin-bottom:12px' }, [
-        el('strong', { text: '🎁 Test config' }), switchFor(trial, 'enable', 'Offer it', true)
-      ]),
-      trialGrid,
-      el('div', { class: 'hint', text: 'The bot asks the buyer for a name, then makes the config and sends the link. The clock starts on first use, not when they ask.' })
-    ]));
-
-    /* ---- buying by the gigabyte ---- */
-    const custom = draft.custom = draft.custom || { enable: false, minGB: 1, maxGB: 0, days: 30, inboundId: '' };
-    const customGrid = el('div', { class: 'form-grid' });
-    formField(customGrid, 'Minimum (GB)', bindTo(custom, 'minGB', el('input', { type: 'number', min: '1', value: custom.minGB ?? 1 }), Number), {
-      hint: 'The smallest amount somebody may buy'
-    });
-    formField(customGrid, 'Maximum (GB)', bindTo(custom, 'maxGB', el('input', { type: 'number', min: '0', value: custom.maxGB ?? 0 }), Number), {
-      hint: '0 means no ceiling'
-    });
-    formField(customGrid, 'Days', bindTo(custom, 'days', el('input', { type: 'number', min: '1', value: custom.days ?? 30 }), Number));
-    const customInb = selectOf(inbounds.map((i) => ({ value: i.id, label: `${i.remark} (${i.protocol}:${i.port})` })), custom.inboundId);
-    customInb.addEventListener('change', () => { custom.inboundId = customInb.value; });
-    formField(customGrid, 'Sold from inbound', customInb, { full: true });
-
-    plansBox.append(el('div', { class: 'card', style: 'margin-top:16px' }, [
-      el('div', { class: 'between', style: 'margin-bottom:12px' }, [
-        el('strong', { text: '🎚 Custom volume' }), switchFor(custom, 'enable', 'Offer it')
-      ]),
-      customGrid,
-      el('div', { class: 'hint', text: `The buyer types how many gigabytes they want and pays that many times the price per GB, which is set on the Setup tab${data.pricePerGB ? '' : ' — it is 0 right now, so this stays hidden in the bot'}.` }),
-      el('div', { class: 'row', style: 'margin-top:12px' }, [
-        el('button', { class: 'btn primary', text: 'Save plans', onclick: () => save() })
-      ])
-    ]));
     hydrateIcons(plansBox);
   };
   drawPlans();
   panels.Plans.append(plansBox);
+
+  /* ---- Test config: the free sample, on a tab of its own ---- */
+  const bindTo = (obj, field, control, cast) => {
+    control.addEventListener('input', () => { obj[field] = cast ? cast(control.value) : control.value; });
+    return control;
+  };
+  const switchFor = (obj, field, label, onDefault) => {
+    const box = el('input', { type: 'checkbox' });
+    box.checked = onDefault ? obj[field] !== false : !!obj[field];
+    box.addEventListener('change', () => { obj[field] = box.checked; });
+    return el('label', { class: 'switch' }, [box, el('span', { class: 'track' }), el('span', { class: 'muted', text: label })]);
+  };
+  const inboundPicker = (obj, field) => {
+    const sel = selectOf(inbounds.map((i) => ({ value: i.id, label: `${i.remark} (${i.protocol}:${i.port})` })), obj[field]);
+    sel.addEventListener('change', () => { obj[field] = sel.value; });
+    return sel;
+  };
+
+  const trial = draft.trial = draft.trial || { enable: true, mb: 100, days: 1, inboundId: '', oncePerUser: true };
+  const trialGrid = el('div', { class: 'form-grid' });
+  formField(trialGrid, 'Quota (MB)', bindTo(trial, 'mb', el('input', { type: 'number', min: '1', value: trial.mb ?? 100 }), Number));
+  formField(trialGrid, 'Days', bindTo(trial, 'days', el('input', { type: 'number', min: '1', value: trial.days ?? 1 }), Number));
+  formField(trialGrid, 'Made on inbound', inboundPicker(trial, 'inboundId'), { full: true });
+  trialGrid.append(el('div', { class: 'field full' }, [switchFor(trial, 'oncePerUser', 'One per Telegram account', true)]));
+
+  panels['Test config'].append(el('div', { class: 'card' }, [
+    el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+      el('strong', { text: '🎁 Test config' }), switchFor(trial, 'enable', 'Offer it', true)
+    ]),
+    trialGrid,
+    el('div', { class: 'hint', text: 'The bot asks the buyer for a name, then makes the config and sends the link. The clock starts on first use, not when they ask.' }),
+    el('div', { class: 'row', style: 'margin-top:12px' }, [
+      el('button', { class: 'btn primary', text: 'Save', onclick: () => save() })
+    ])
+  ]));
+
+  /* ---- User plan: buying by the gigabyte, on a tab of its own ---- */
+  const custom = draft.custom = draft.custom || { enable: false, minGB: 1, maxGB: 0, days: 30, inboundId: '' };
+  const customGrid = el('div', { class: 'form-grid' });
+  formField(customGrid, 'Minimum (GB)', bindTo(custom, 'minGB', el('input', { type: 'number', min: '1', value: custom.minGB ?? 1 }), Number), {
+    hint: 'The smallest amount somebody may buy'
+  });
+  formField(customGrid, 'Maximum (GB)', bindTo(custom, 'maxGB', el('input', { type: 'number', min: '0', value: custom.maxGB ?? 0 }), Number), {
+    hint: '0 means no ceiling'
+  });
+  formField(customGrid, 'Days', bindTo(custom, 'days', el('input', { type: 'number', min: '1', value: custom.days ?? 30 }), Number));
+  formField(customGrid, 'Sold from inbound', inboundPicker(custom, 'inboundId'), { full: true });
+
+  panels['User plan'].append(el('div', { class: 'card' }, [
+    el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+      el('strong', { text: '🎚 Buy by the gigabyte' }), switchFor(custom, 'enable', 'Show it in the bot')
+    ]),
+    el('div', { class: 'hint', style: 'margin-bottom:14px', text: 'When this is on, the bot puts a "custom volume" button at the bottom of the plan list, just above Back. The buyer taps it, types how many gigabytes they want, and pays that many times the price per GB.' }),
+    customGrid,
+    el('div', { class: 'hint', text: data.pricePerGB
+      ? `Price per GB is ${data.pricePerGB}, set on the Setup tab.`
+      : 'Price per GB is 0, set on the Setup tab — until it is set, this button stays hidden in the bot whatever this switch says.' }),
+    el('div', { class: 'row', style: 'margin-top:12px' }, [
+      el('button', { class: 'btn primary', text: 'Save', onclick: () => save() })
+    ])
+  ]));
 
   /* ---- Payment ---- */
   const payBox = el('div');

@@ -118,8 +118,43 @@ function migrateUsageButton() {
       touched = true;
     }
   }
+  /*
+   * Converting an existing button only helps a bot that had one. A menu that
+   * never carried "My usage" - or whose admin had already removed it - came
+   * out of the migration with no trial button at all, which is exactly what
+   * "you didn't add the test config option" was. If nothing offers it by the
+   * time we get here, it is put on the start screen.
+   */
+  if (!hasAction(b.screens, 'trial')) {
+    if (addToStart(b.screens, { label: '🎁 کانفیگ تست', action: 'trial' })) touched = true;
+  }
+
   if (touched) db.saveNow();
   return touched;
+}
+
+function hasAction(screens, action) {
+  return (screens || []).some((screen) => (screen.buttons || [])
+    .some((row) => row.some((button) => button.action === action)));
+}
+
+/**
+ * Put a button on the start screen, beside the configs button when that row
+ * has space - two to a row is how this menu is laid out - and on a row of its
+ * own just above support otherwise.
+ */
+function addToStart(screens, button) {
+  const start = (screens || []).find((screen) => screen.key === 'start');
+  if (!start) return false;
+  start.buttons = start.buttons || [];
+
+  const beside = start.buttons.find((row) => row.length === 1 && row[0].action === 'configs');
+  if (beside) { beside.push(button); return true; }
+
+  const supportAt = start.buttons.findIndex((row) => row.some((b2) => b2.action === 'support'));
+  if (supportAt >= 0) start.buttons.splice(supportAt, 0, [button]);
+  else start.buttons.push([button]);
+  return true;
 }
 
 function defaults() {
