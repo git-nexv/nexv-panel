@@ -555,9 +555,64 @@ function trialSettings() {
   };
 }
 
-/** The config this person was already given, if any. */
+/** The config this person was given, if it is still there. */
 function trialOf(userId) {
   return db.data.clients.find((c) => String(c.tgId || '') === String(userId) && c.isTrial);
+}
+
+/*
+ * Who has had their one, kept as a record of its own rather than inferred from
+ * the client list.
+ *
+ * Looking for an existing trial client was not the same question: a trial is a
+ * hundred megabytes for a day, so it expires almost immediately, and the panel
+ * has a "delete expired clients" button that sweeps exactly those. Every sweep
+ * handed the whole audience a fresh trial. The config can come and go; the
+ * record of having taken one stays until the admin clears it on purpose.
+ */
+function trialLedger() {
+  const b = bot();
+  b.trial = b.trial || {};
+  if (!b.trial.taken || typeof b.trial.taken !== 'object') b.trial.taken = {};
+  return b.trial;
+}
+
+function hasTakenTrial(userId) {
+  const t = trialLedger();
+  if (t.taken[String(userId)]) return true;
+  /* bots that were handing trials out before this record existed have nothing
+     in it, so their clients still count - but only the ones made since the
+     last reset, or a reset would not actually reset anything */
+  const since = Number(t.resetAt) || 0;
+  return db.data.clients.some((c) => String(c.tgId || '') === String(userId)
+    && c.isTrial && (c.createdAt || 0) > since);
+}
+
+function markTrialTaken(userId) {
+  const t = trialLedger();
+  t.taken[String(userId)] = Date.now();
+  db.saveNow();
+}
+
+/** Let everybody have another one. Configs already handed out are left alone. */
+function resetTrials() {
+  const t = trialLedger();
+  const count = Object.keys(t.taken).length;
+  t.taken = {};
+  t.resetAt = Date.now();
+  db.saveNow();
+  return count;
+}
+
+/** How many people have taken one since the last reset. */
+function trialsTaken() {
+  const t = trialLedger();
+  const ids = new Set(Object.keys(t.taken));
+  const since = Number(t.resetAt) || 0;
+  for (const c of db.data.clients) {
+    if (c.isTrial && c.tgId && (c.createdAt || 0) > since) ids.add(String(c.tgId));
+  }
+  return ids.size;
 }
 
 async function startTrial(ctx) {
@@ -568,18 +623,20 @@ async function startTrial(ctx) {
     || db.data.inbounds.find((i) => i.enable !== false);
   if (!inbound) return reply(ctx, 'هنوز اینباندی برای کانفیگ تست تنظیم نشده است.', backRow());
 
-  if (t.oncePerUser) {
+  if (t.oncePerUser && hasTakenTrial(ctx.userId)) {
+    // the record outlives the config, so there may be nothing left to show them
     const had = trialOf(ctx.userId);
-    if (had) {
-      const subUrl = require('./routes/api').subUrl;
-      return reply(ctx, [
-        'شما قبلاً کانفیگ تست گرفته‌اید 🙂',
-        '',
-        `<b>${escapeHtml(had.email)}</b>`,
-        usageLines(had),
-        `<code>${escapeHtml(subUrl(had.subId))}</code>`
-      ].join('\n'), backRow());
+    if (!had) {
+      return reply(ctx, 'شما قبلاً کانفیگ تست گرفته‌اید 🙂 برای ادامه، یکی از اشتراک‌ها را تهیه کنید.', backRow());
     }
+    const subUrl = require('./routes/api').subUrl;
+    return reply(ctx, [
+      'شما قبلاً کانفیگ تست گرفته‌اید 🙂',
+      '',
+      `<b>${escapeHtml(had.email)}</b>`,
+      usageLines(had),
+      `<code>${escapeHtml(subUrl(had.subId))}</code>`
+    ].join('\n'), backRow());
   }
 
   expect(ctx.userId, 'trialName');
@@ -634,6 +691,7 @@ async function takeTrialName(ctx, raw) {
       isTrial: true,
       comment: 'کانفیگ تست - ربات'
     });
+    markTrialTaken(ctx.userId);
     const url = require('./routes/api').subUrl(client.subId);
     return send(ctx.chatId, [
       '<b>کانفیگ تست شما آماده شد ✅</b>',
@@ -1449,6 +1507,7 @@ function resume() {
 
 module.exports = {
   bot, defaults, starterScreens, migrateStarter, migrateUsageButton, start, stop, status, whoAmI, resume,
+  resetTrials, trialsTaken,
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
   /* the entry point for one update: what the polling loop feeds, and what a
      webhook would feed if this ever grows one */

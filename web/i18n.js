@@ -884,6 +884,14 @@ const FA = {
   '0 means no ceiling': 'صفر یعنی بدون سقف',
   'Sold from inbound': 'فروش از اینباند',
   'Test config': 'کانفیگ تست',
+  'Who has had one': 'چه کسانی گرفته‌اند',
+  'Nobody has taken a test config yet': 'هنوز کسی کانفیگ تست نگرفته است',
+  'Let everyone take one again': 'همه بتوانند دوباره بگیرند',
+  'Everyone who has already taken a test config will be able to take one more. The configs they already have are not touched.':
+    'هر کسی که قبلاً کانفیگ تست گرفته، می‌تواند یکی دیگر بگیرد. کانفیگ‌هایی که الان دارند دست‌نخورده می‌مانند.',
+  'Everyone can take one again': 'همه می‌توانند دوباره بگیرند',
+  'One per Telegram account is remembered here, not read off the client list - a test config is small and short, so it expires and gets swept up, and that must not quietly hand everybody another one.':
+    'اینکه هر حساب تلگرام یکی گرفته، همین‌جا ثبت می‌شود نه از روی لیست کلاینت‌ها — کانفیگ تست کم‌حجم و کوتاه است، پس زود منقضی و پاک می‌شود و این نباید بی‌صدا به همه یکی دیگر بدهد.',
   'User plan': 'یوزر پلن',
   '🎚 Buy by the gigabyte': '🎚 خرید گیگی',
   'Show it in the bot': 'در ربات نمایش بده',
@@ -1002,6 +1010,8 @@ const PATTERNS = [
     (m) => `«${m[1]}» شناسه‌ی کوتاه معتبری برای REALITY نیست — باید تعداد زوجی رقم هگز (0-9 و a-f) و حداکثر ۱۶ کاراکتر باشد`],
   [/^Price per GB is (.+), set on the Setup tab\.$/,
     (m) => `قیمت هر گیگ ${m[1]} است و در تب Setup تنظیم می‌شود.`],
+  [/^(\d+) people have taken a test config$/, (m) => `${m[1]} نفر کانفیگ تست گرفته‌اند`],
+  [/^(\d+) people can take one again$/, (m) => `${m[1]} نفر می‌توانند دوباره بگیرند`],
   [/^(.+) of (.+)$/, (m) => `${m[1]} از ${m[2]}`],
   /* an address row: how many connections, how long it has been quiet, and when
      it first appeared. The spans arrive already built ("4m 12s"), so only the

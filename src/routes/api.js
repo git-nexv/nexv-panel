@@ -229,6 +229,7 @@ function botView() {
     plans: (b.plans || []).filter((p) => !p.custom),
     pricePerGB: Number(b.pricePerGB) || 0,
     trial: b.trial || telegram.defaults().trial,
+    trialsTaken: telegram.trialsTaken(),
     custom: b.custom || telegram.defaults().custom,
     orders: (b.orders || []).slice(0, 60),
     pay: b.pay || telegram.defaults().pay,
@@ -368,6 +369,13 @@ router.post('/bot/stop', (req, res) => {
 router.get('/bot/status', (req, res) => res.json(telegram.status()));
 
 /** Throw the screens away and start from the Persian starter again. */
+/* Let everybody have another trial. The configs already handed out stay. */
+router.post('/bot/trial/reset', (req, res) => {
+  const cleared = telegram.resetTrials();
+  logEvent('bot', `test-config eligibility reset for ${cleared} people`);
+  res.json({ ok: true, cleared });
+});
+
 router.post('/bot/reset-screens', (req, res) => {
   const b = telegram.bot();
   b.screens = telegram.starterScreens();

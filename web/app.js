@@ -4763,6 +4763,42 @@ async function renderBot(view) {
     ])
   ]));
 
+  /* ---- who has had one, and the way to start that over ---- */
+  const takenLine = el('div', { class: 'muted' });
+  const paintTaken = (n) => {
+    takenLine.textContent = n
+      ? t(`${n} people have taken a test config`)
+      : t('Nobody has taken a test config yet');
+  };
+  paintTaken(Number(data.trialsTaken) || 0);
+
+  const resetBtn = el('button', {
+    class: 'btn', html: `${icon('update')} Let everyone take one again`,
+    onclick: () => confirmDialog(
+      'Everyone who has already taken a test config will be able to take one more. The configs they already have are not touched.',
+      async () => {
+        resetBtn.disabled = true;
+        try {
+          const out = await api.post('/bot/trial/reset', {});
+          paintTaken(0);
+          toast(out.cleared
+            ? `${out.cleared} people can take one again`
+            : 'Everyone can take one again');
+        } catch (err) { toast(err.message, 'err'); }
+        resetBtn.disabled = false;
+      }
+    )
+  });
+
+  panels['Test config'].append(el('div', { class: 'card', style: 'margin-top:16px' }, [
+    el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+      el('strong', { text: 'Who has had one' }), takenLine
+    ]),
+    el('div', { class: 'hint', style: 'margin-bottom:12px', text: 'One per Telegram account is remembered here, not read off the client list - a test config is small and short, so it expires and gets swept up, and that must not quietly hand everybody another one.' }),
+    el('div', { class: 'row' }, [resetBtn])
+  ]));
+  hydrateIcons(panels['Test config']);
+
   /* ---- User plan: buying by the gigabyte, on a tab of its own ---- */
   const custom = draft.custom = draft.custom || { enable: false, minGB: 1, maxGB: 0, days: 30, inboundId: '' };
   const customGrid = el('div', { class: 'form-grid' });
