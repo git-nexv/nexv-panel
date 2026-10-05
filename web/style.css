@@ -582,6 +582,10 @@ td .row-actions { display: flex; gap: 6px; }
   .table-wrap {
     overflow-x: visible;
     border: none; border-radius: 0; background: none;
+    /* the rows are cards here and the wrapper itself is invisible, so blurring
+       what is behind a full-page-tall rectangle buys nothing and costs a frame
+       on every scroll */
+    -webkit-backdrop-filter: none; backdrop-filter: none;
   }
   table { display: block; min-width: 0; width: 100%; }
   thead { display: none; }
@@ -594,6 +598,10 @@ td .row-actions { display: flex; gap: 6px; }
     margin-bottom: 8px;
   }
   tbody tr:last-child { margin-bottom: 0; }
+  /* a long client list is mostly off screen: this lets the browser skip the
+     layout and painting of the cards nobody is looking at, while the intrinsic
+     size keeps the scrollbar honest */
+  tbody tr { content-visibility: auto; contain-intrinsic-size: auto 132px; }
   /* the second column of a pair gets no more room than it needs, so a card is
      as short as its contents rather than as tall as its emptiest cell */
   tbody tr { align-content: start; }

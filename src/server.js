@@ -482,8 +482,32 @@ function tlsOptions() {
   }
 }
 
+/*
+ * Node lets go of an idle connection after five seconds. The dashboard asks for
+ * its figures every eight, so every single poll arrived at a socket the server
+ * had already closed and had to build a new one - a fresh TCP handshake, and a
+ * TLS handshake on top of it, several times a minute for a payload of a few
+ * hundred bytes. Worse, a request written just as the close is travelling the
+ * other way is simply lost, and that is what "could not reach the server" was:
+ * not the server being down, but the connection having been thrown away under
+ * the panel's feet.
+ *
+ * So the idle window is made longer than any polling the panel does. The
+ * headers timeout has to stay above it, or Node closes a connection it is in
+ * the middle of reading a request on.
+ */
+const KEEP_ALIVE_MS = 75000;
+
+function tuneTimeouts(server) {
+  server.keepAliveTimeout = KEEP_ALIVE_MS;
+  server.headersTimeout = KEEP_ALIVE_MS + 5000;
+  return server;
+}
+
 function createServer(handler, tls) {
-  return tls ? require('https').createServer(tls, handler) : require('http').createServer(handler);
+  return tuneTimeouts(tls
+    ? require('https').createServer(tls, handler)
+    : require('http').createServer(handler));
 }
 
 if (require.main === module) {
@@ -534,13 +558,13 @@ if (require.main === module) {
     }
 
     if (tls && port !== 80 && wantsRedirect && !inboundOn80) {
-      require('http')
+      tuneTimeouts(require('http')
         .createServer((req, res) => {
           const host = (req.headers.host || '').split(':')[0];
           const target = `https://${host}${port === 443 ? '' : `:${port}`}${req.url}`;
           res.writeHead(301, { Location: target });
           res.end();
-        })
+        }))
         .listen(80, host, () => console.log(`[nexv] redirecting http://${host}:80 to the panel`))
         .on('error', (err) => console.warn(`[nexv] no http redirect on port 80: ${err.message}`));
     }

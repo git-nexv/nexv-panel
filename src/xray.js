@@ -951,6 +951,8 @@ function rollBack(previous) {
 
 /** Write the config, verify it parses, and reload the service. Rolls back on a bad config. */
 async function apply() {
+  // whatever happens below changes the service, so the held status is stale now
+  forgetServiceStatus();
   let previous = null;
   if (fs.existsSync(XRAY_CONFIG)) previous = fs.readFileSync(XRAY_CONFIG, 'utf8');
 
@@ -984,7 +986,7 @@ async function apply() {
   }
   if (!hasSystemd()) return { ok: true, warning: 'systemd unavailable; xray was not restarted' };
 
-  const restart = await run('systemctl', ['restart', XRAY_SERVICE], 30000);
+  const restart = await serviceCommand('restart');
   if (restart.ok) {
     keepGood();
     return { ok: true };
@@ -998,7 +1000,7 @@ async function apply() {
    * and bring the service up on it, then report the failure.
    */
   if (rollBack(previous)) {
-    const recovered = await run('systemctl', ['restart', XRAY_SERVICE], 30000);
+    const recovered = await serviceCommand('restart');
     const detail = await lastServiceError();
     return {
       ok: false,
@@ -1030,7 +1032,23 @@ async function xrayVersion() {
   return versionCache;
 }
 
-async function serviceStatus() {
+/*
+ * The dashboard asks for this every eight seconds, and every tab asks
+ * separately. Answering it from scratch means spawning systemctl, and - when
+ * Xray is down, which is exactly when somebody is watching - journalctl on top
+ * of it, which on a box with a full journal is not quick. Two processes every
+ * eight seconds for a line of text nobody can change that fast.
+ *
+ * So the answer is held for a moment and shared. It is short enough that
+ * pressing Start still turns the chip green on the next poll, and anything
+ * that changes the service itself clears it so it never shows a stale state.
+ */
+const STATUS_TTL = 4000;
+let statusCache = { at: 0, value: null, pending: null };
+
+function forgetServiceStatus() { statusCache = { at: 0, value: null, pending: null }; }
+
+async function readServiceStatus() {
   const active = hasSystemd()
     ? await run('systemctl', ['is-active', XRAY_SERVICE], 5000)
     : { stdout: 'unmanaged' };
@@ -1050,9 +1068,37 @@ async function serviceStatus() {
   };
 }
 
-async function restart() { return run('systemctl', ['restart', XRAY_SERVICE], 30000); }
-async function stop() { return run('systemctl', ['stop', XRAY_SERVICE], 30000); }
-async function start() { return run('systemctl', ['start', XRAY_SERVICE], 30000); }
+async function serviceStatus() {
+  if (statusCache.value && Date.now() - statusCache.at < STATUS_TTL) return statusCache.value;
+  // two tabs asking at once share one answer rather than racing two systemctls
+  if (statusCache.pending) return statusCache.pending;
+  statusCache.pending = readServiceStatus()
+    .then((value) => {
+      statusCache = { at: Date.now(), value, pending: null };
+      return value;
+    })
+    .catch((err) => {
+      statusCache.pending = null;
+      throw err;
+    });
+  return statusCache.pending;
+}
+
+/* each of these changes the very thing the cache holds: it is dropped before,
+   so a poll during the command reads the real state, and again after, so the
+   first poll afterwards sees the result rather than a mid-restart snapshot */
+async function serviceCommand(verb) {
+  forgetServiceStatus();
+  try {
+    return await run('systemctl', [verb, XRAY_SERVICE], 30000);
+  } finally {
+    forgetServiceStatus();
+  }
+}
+
+async function restart() { return serviceCommand('restart'); }
+async function stop() { return serviceCommand('stop'); }
+async function start() { return serviceCommand('start'); }
 
 /**
  * Pull user counters from the stats API and fold them into stored totals.

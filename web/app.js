@@ -45,21 +45,41 @@ const api = {
     const budget = opts.timeout
       || (method === 'GET' ? REQUEST_TIMEOUT : WRITE_TIMEOUT);
     const timer = setTimeout(() => abort.abort(), budget);
+    const send = () => fetch(`${BASE}api${path}`, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+      signal: abort.signal
+    });
+    /* a request that ran out of time may well have landed: saying otherwise
+       invites a retry that collides with what the first attempt wrote */
+    const tooSlow = () => new Error(method === 'GET'
+      ? 'The server did not respond in time'
+      : 'The server is taking too long. It may still be working - reload the page before trying again.');
     let res;
     try {
-      res = await fetch(`${BASE}api${path}`, {
-        method,
-        headers: body ? { 'Content-Type': 'application/json' } : {},
-        body: body ? JSON.stringify(body) : undefined,
-        signal: abort.signal
-      });
-    } catch (err) {
-      if (err.name !== 'AbortError') throw new Error('Could not reach the server');
-      /* a write that ran out of time may well have landed: saying otherwise
-         invites a retry that collides with what the first attempt wrote */
-      throw new Error(method === 'GET'
-        ? 'The server did not respond in time'
-        : 'The server is taking too long. It may still be working - reload the page before trying again.');
+      try {
+        res = await send();
+      } catch (err) {
+        if (err.name === 'AbortError') throw tooSlow();
+        /*
+         * One quiet second try, for GETs only.
+         *
+         * A GET that fails before it is answered has changed nothing, and the
+         * usual reason is not a server that has gone away: it is a connection
+         * that was closed between two requests and written to anyway. Asking
+         * again turns what the panel used to report as "could not reach the
+         * server" into a hiccup nobody sees. A write is never repeated, since
+         * it may have been carried out before the connection broke.
+         */
+        if (method !== 'GET') throw new Error('Could not reach the server');
+        await new Promise((r) => setTimeout(r, 150));
+        try {
+          res = await send();
+        } catch (again) {
+          throw again.name === 'AbortError' ? tooSlow() : new Error('Could not reach the server');
+        }
+      }
     } finally {
       clearTimeout(timer);
     }
@@ -754,7 +774,13 @@ function mountTable(wrap, table) {
     if (name !== source) th.textContent = name;
     return name;
   });
-  for (const tr of table.querySelectorAll('tbody tr')) {
+  /*
+   * Each cell carries its column's name, which is what the card layout on a
+   * phone reads out beside the value. A table that fills itself in as it goes
+   * adds rows after this has run, so the labelling is handed back as well as
+   * done here - a row made later is labelled the same way the first ones were.
+   */
+  const label = (tr) => {
     [...tr.children].forEach((td, i) => {
       if (slugs[i]) td.dataset.col = slugs[i];
       if (!heads[i]) td.classList.add('cell-actions');
@@ -769,9 +795,11 @@ function mountTable(wrap, table) {
     // the row's own name heads its card; a table without one (the log) gets no heading
     const title = [...tr.children].find((td) => td.querySelector('strong'));
     if (title) title.classList.add('cell-title');
-  }
+  };
+  for (const tr of table.querySelectorAll('tbody tr')) label(tr);
   wrap.innerHTML = '';
   wrap.append(table);
+  return label;
 }
 
 function emptyState(wrap, message) {
@@ -2179,12 +2207,12 @@ async function renderClients(view) {
   const withLinks = (state.protocols && state.protocols.withLinks) || [];
   const table = el('table');
   table.innerHTML = `<thead><tr>
-    <th>Client</th><th>Inbound</th><th>Now</th><th>Used</th><th>Quota</th>
+    <th>Client</th><th>Inbounds</th><th>Now</th><th>Used</th><th>Quota</th>
     <th>Expires</th><th>Status</th><th></th>
   </tr></thead>`;
   const tbody = el('tbody');
 
-  for (const c of clients) {
+  const makeRow = (c) => {
     const used = (c.up || 0) + (c.down || 0);
     const quota = (c.totalGB || 0) * 1024 ** 3;
     const percent = quota ? (used / quota) * 100 : 0;
@@ -2263,8 +2291,8 @@ async function renderClients(view) {
     ]);
     row.dataset.name = c.email.toLowerCase();
     row.dataset.buckets = CLIENT_STATES.filter((spec) => spec.match(c)).map((spec) => spec.id).join(' ');
-    tbody.append(row);
-  }
+    return row;
+  };
 
   /*
    * Filtering hides rows rather than rebuilding the table: a rebuild on every
@@ -2275,22 +2303,68 @@ async function renderClients(view) {
     el('td', { colspan: '8', class: 'muted', text: 'No client matches that.' })
   ]);
 
+  const matches = (row, needle) => row.dataset.buckets.split(' ').includes(picked)
+    && (!needle || row.dataset.name.includes(needle));
+
   function applyFilter() {
     const needle = search.value.trim().toLowerCase();
     let shown = 0;
     for (const row of tbody.querySelectorAll('tr[data-name]')) {
-      const ok = row.dataset.buckets.split(' ').includes(picked)
-        && (!needle || row.dataset.name.includes(needle));
-      row.hidden = !ok;
+      const ok = matches(row, needle);
+      // only touching the rows that actually change: setting `hidden` to what
+      // it already is still makes the browser work out the whole table again
+      if (row.hidden === ok) row.hidden = !ok;
       if (ok) shown++;
     }
     nothing.hidden = shown > 0;
     for (const [id, button] of buttons) button.classList.toggle('on', id === picked);
   }
 
-  search.addEventListener('input', applyFilter);
+  /*
+   * The rows are built a chunk at a time rather than all at once.
+   *
+   * Five hundred clients is twenty-odd thousand nodes, and building them in
+   * one go left the page blank for about three seconds on a phone - the panel
+   * looked frozen, because it was. The first chunk goes up straight away and
+   * the rest arrive over the following frames, so the table is readable
+   * immediately and the browser is free to answer a tap in between.
+   */
+  const FIRST = 30;    // enough to fill a screen, and no more
+  const CHUNK = 120;   // then in blocks, with a frame between for anything waiting
+  let cursor = 0;
+  let label = null;    // set by mountTable, below
+  const buildChunk = () => {
+    const needle = search.value.trim().toLowerCase();
+    const frag = document.createDocumentFragment();
+    /* the first pass is deliberately small - what matters is that something
+       readable is up at once. The rest follows in blocks with a frame between
+       them, which keeps the whole list quick to finish while still letting a
+       tap or a keystroke through on the way. */
+    const limit = Math.min(clients.length, cursor + (cursor === 0 ? FIRST : CHUNK));
+    for (; cursor < limit; cursor++) {
+      const row = makeRow(clients[cursor]);
+      // decided as it is made, so the first paint is already filtered
+      if (!matches(row, needle)) row.hidden = true;
+      if (label) label(row);
+      frag.append(row);
+    }
+    if (nothing.parentNode === tbody) tbody.insertBefore(frag, nothing);
+    else tbody.append(frag);
+    if (cursor < clients.length) requestAnimationFrame(buildChunk);
+    else applyFilter();   // the counts under the boxes, once everyone is in
+  };
+
+  // a keystroke must not run the whole table on every letter
+  let typing = null;
+  search.addEventListener('input', () => {
+    clearTimeout(typing);
+    typing = setTimeout(applyFilter, 120);
+  });
   table.append(tbody);
-  mountTable(wrap, table);
+  buildChunk();
+  /* mountTable labels what is already there and hands back the labeller, so
+     the rows that arrive over the next few frames are built the same way */
+  label = mountTable(wrap, table);
   tbody.append(nothing);   // after mountTable: it is a notice, not a row with columns
   applyFilter();
 }
