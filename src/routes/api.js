@@ -20,6 +20,7 @@ const resellers = require('../reseller');
 const probe = require('../probe');
 const botai = require('../botai');
 const system = require('../system');
+const membership = require('../membership');
 
 const router = express.Router();
 
@@ -821,7 +822,7 @@ function normalizeInbound(body, existing) {
 router.get('/inbounds', (req, res) => {
   const d = db.data;
   res.json(d.inbounds.map((inb) => {
-    const clients = d.clients.filter((c) => c.inboundId === inb.id);
+    const clients = membership.clientsOn(d.clients, inb.id);
     return Object.assign({}, inb, {
       clientCount: clients.length,
       up: clients.reduce((a, c) => a + (c.up || 0), 0),
@@ -900,31 +901,41 @@ router.delete('/inbounds/:id', async (req, res) => {
   let detached = 0;
   let deleted = 0;
   if (withClients) {
-    const doomed = d.clients.filter((c) => c.inboundId === inb.id);
+    /*
+     * Only the people who had nowhere else to go. A client attached to this
+     * inbound and to others is still a working client afterwards, so deleting
+     * it along with the inbound would throw away a config that still has a way
+     * in - it loses this one inbound and keeps the rest.
+     */
+    const doomed = membership.clientsOn(d.clients, inb.id)
+      .filter((c) => membership.inboundIdsOf(c).length === 1);
+    const doomedIds = new Set(doomed.map((c) => c.id));
     deleted = doomed.length;
     for (const c of doomed) online.forget(xray.clientTag(c));
-    d.clients = d.clients.filter((c) => c.inboundId !== inb.id);
+    d.clients = d.clients.filter((c) => !doomedIds.has(c.id));
+    detached = membership.forgetInbound(d.clients, inb.id);
   } else {
-    for (const client of d.clients) {
-      if (client.inboundId === inb.id) { client.inboundId = ''; detached++; }
-    }
+    detached = membership.forgetInbound(d.clients, inb.id);
   }
 
   db.saveNow();
   await xray.apply();
-  const fate = deleted
-    ? ` - ${deleted} client(s) deleted with it`
-    : detached ? ` - ${detached} client(s) kept, now unattached` : '';
+  const parts = [];
+  if (deleted) parts.push(`${deleted} client(s) deleted with it`);
+  if (detached) parts.push(`${detached} client(s) kept, taken off this inbound`);
+  const fate = parts.length ? ` - ${parts.join(', ')}` : '';
   logEvent('inbound', `deleted inbound ${inb.remark}${fate}`);
   res.json({ ok: true, detached, deleted });
 });
 
 /**
- * Move clients onto this inbound, or off it.
+ * Put clients on this inbound, or take them off it.
  *
- * A client belongs to one inbound at a time. Moving does not touch their subId,
- * so a subscription link that was working before keeps working afterwards - it
- * is how you rebuild an inbound without reissuing anyone's config.
+ * A client can sit on as many inbounds as you like, and every one of them
+ * carries that client - so attaching adds this inbound to whatever the client
+ * already had rather than moving it here. Nothing touches their subId, so a
+ * subscription link that was working before keeps working afterwards, and it
+ * simply grows a config for each inbound the client is now on.
  */
 router.post('/inbounds/:id/attach', async (req, res) => {
   const d = db.data;
@@ -937,15 +948,22 @@ router.post('/inbounds/:id/attach', async (req, res) => {
     : d.clients.filter((c) => (body.clientIds || []).includes(c.id));
   if (!wanted.length) return bad(res, 'no clients to attach');
 
+  const before = new Map(wanted.map((c) => [c.id, membership.inboundIdsOf(c)]));
   let moved = 0;
   for (const client of wanted) {
-    if (client.inboundId === inb.id) continue;
-    client.inboundId = inb.id;
+    if (membership.isOn(client, inb.id)) continue;
+    membership.addInbound(client, inb.id);
     moved++;
   }
   db.saveNow();
   const applied = await xray.apply();
-  if (!applied.ok) return bad(res, applied.error);
+  if (!applied.ok) {
+    // xray refused the result, so nobody gets attached
+    for (const client of wanted) membership.setInbounds(client, before.get(client.id));
+    db.saveNow();
+    await xray.apply();
+    return bad(res, applied.error);
+  }
   logEvent('client', `attached ${moved} client(s) to ${inb.remark}`);
   res.json({ ok: true, moved });
 });
@@ -956,9 +974,9 @@ router.post('/inbounds/:id/detach', async (req, res) => {
   if (!inb) return bad(res, 'inbound not found', 404);
 
   const body = req.body || {};
-  const mine = d.clients.filter((c) => c.inboundId === inb.id);
+  const mine = membership.clientsOn(d.clients, inb.id);
   const wanted = body.all ? mine : mine.filter((c) => (body.clientIds || []).includes(c.id));
-  for (const client of wanted) client.inboundId = '';
+  for (const client of wanted) membership.removeInbound(client, inb.id);
   db.saveNow();
   await xray.apply();
   logEvent('client', `detached ${wanted.length} client(s) from ${inb.remark}`);
@@ -1024,8 +1042,7 @@ router.get('/reality-keys', async (req, res) => {
 
 /** Every share link for one inbound, newest client last. */
 function inboundLinks(inb) {
-  return db.data.clients
-    .filter((c) => c.inboundId === inb.id)
+  return membership.clientsOn(db.data.clients, inb.id)
     .map((c) => links.buildLink(inb, c))
     .filter(Boolean);
 }
@@ -1033,7 +1050,7 @@ function inboundLinks(inb) {
 router.get('/inbounds/:id/export', (req, res) => {
   const inb = db.data.inbounds.find((i) => i.id === req.params.id);
   if (!inb) return bad(res, 'inbound not found', 404);
-  const clients = db.data.clients.filter((c) => c.inboundId === inb.id);
+  const clients = membership.clientsOn(db.data.clients, inb.id);
   /*
    * Both shapes, because the two things you might do with it want different
    * ones: reading it, or pasting it where another panel's export would go,
@@ -1089,11 +1106,10 @@ router.post('/inbounds/import', async (req, res) => {
   inbound.id = db.id();
   inbound.tag = `inbound-${inbound.port}-${inbound.id.slice(0, 4)}`;
   inbound.createdAt = Date.now();
-  const stored = clients.map((c) => Object.assign(c, {
+  const stored = clients.map((c) => membership.setInbounds(Object.assign(c, {
     id: db.id(),
-    inboundId: inbound.id,
     createdAt: Date.now()
-  }));
+  }), [inbound.id]));
 
   db.data.inbounds.push(inbound);
   db.data.clients.push(...stored);
@@ -1102,7 +1118,7 @@ router.post('/inbounds/import', async (req, res) => {
   const applied = await xray.apply();
   if (!applied.ok) {
     db.data.inbounds = db.data.inbounds.filter((i) => i.id !== inbound.id);
-    db.data.clients = db.data.clients.filter((c) => c.inboundId !== inbound.id);
+    db.data.clients = db.data.clients.filter((c) => !membership.isOn(c, inbound.id));
     db.saveNow();
     await xray.apply();
     return bad(res, applied.error);
@@ -1133,7 +1149,7 @@ router.get('/sub-urls', (req, res) => {
   const seen = new Set();
   const list = [];
   for (const c of db.data.clients) {
-    if (wanted && c.inboundId !== wanted) continue;
+    if (wanted && !membership.isOn(c, wanted)) continue;
     if (!c.subId || seen.has(c.subId)) continue;
     seen.add(c.subId);
     list.push(`${c.email}: ${subUrl(c.subId)}`);
@@ -1146,7 +1162,7 @@ router.post('/inbounds/reset-traffic', async (req, res) => {
   const wanted = req.body && req.body.inboundId;
   let count = 0;
   for (const c of db.data.clients) {
-    if (wanted && c.inboundId !== wanted) continue;
+    if (wanted && !membership.isOn(c, wanted)) continue;
     c.up = 0;
     c.down = 0;
     c.autoDisabled = false;
@@ -1196,10 +1212,28 @@ function nameTaken(client, inbound, ignoreId) {
   }
   const protocol = inbound && inbound.protocol;
   if ((protocol === 'socks' || protocol === 'http')
-      && others.some((c) => c.email === name && c.inboundId === inbound.id)) {
+      && others.some((c) => c.email === name && membership.isOn(c, inbound.id))) {
     return 'on a SOCKS or HTTP inbound the name is the login, so it has to be free on that inbound';
   }
   return '';
+}
+
+/**
+ * Which inbounds does this request want the client on?
+ *
+ * `inboundIds` is the whole list and replaces whatever the client had. A lone
+ * `inboundId` - what the Telegram bot, the reseller panel and any older caller
+ * of this API send - means that one inbound and nothing else. Neither given
+ * leaves the client where it was. Ids of inbounds that no longer exist are
+ * dropped here, so a stale form cannot attach anyone to a hole.
+ */
+function wantedInbounds(body, existing) {
+  const known = new Set(db.data.inbounds.map((i) => i.id));
+  let ids;
+  if (Array.isArray(body.inboundIds)) ids = body.inboundIds;
+  else if (body.inboundId !== undefined) ids = [body.inboundId];
+  else ids = membership.inboundIdsOf(existing);
+  return ids.filter((id) => known.has(id));
 }
 
 function normalizeClient(body, existing, inbound) {
@@ -1240,6 +1274,14 @@ function normalizeClient(body, existing, inbound) {
     enable: body.enable ?? existing?.enable ?? true,
     subId: body.subId || existing?.subId || randomPass(8)
   });
+  /*
+   * Every inbound this client is on. The inbound the request was made against
+   * leads the list and so becomes the primary, which is the one the per-client
+   * protocol rules below are decided by and the one a single link points at.
+   */
+  const ids = wantedInbounds(body, existing);
+  membership.setInbounds(c, inbound && ids.includes(inbound.id) ? [inbound.id, ...ids] : ids);
+
   // xtls-rprx-vision only makes sense on raw TCP with TLS or REALITY
   if (c.flow && !(inbound.protocol === 'vless' && (inbound.network || 'tcp') === 'tcp')) c.flow = '';
   // an ss-2022 user key must be base64 of the cipher's exact key size
@@ -1255,16 +1297,28 @@ function normalizeClient(body, existing, inbound) {
 router.get('/clients', (req, res) => {
   const d = db.data;
   let list = req.query.inboundId
-    ? d.clients.filter((c) => c.inboundId === req.query.inboundId)
+    ? membership.clientsOn(d.clients, req.query.inboundId)
     : d.clients;
   // a reseller sees the people they sold to and nobody else
   if (req.reseller) list = d.clients.filter((c) => c.resellerId === req.reseller.id);
   res.json(list.map((c) => {
-    const inb = d.inbounds.find((i) => i.id === c.inboundId);
+    const mine = membership.inboundsOf(c, d.inbounds);
+    const inb = mine[0];
     const live = online.forTag(xray.clientTag(c));
     const rate = xray.rateFor(c.id);
     return Object.assign({}, c, {
+      inboundIds: membership.inboundIdsOf(c),
       inboundRemark: inb ? inb.remark : 'not attached',
+      /* one entry per inbound the client is on, each with its own link: the
+         page draws them all, because every one of them is a way in */
+      inbounds: mine.map((i) => ({
+        id: i.id,
+        remark: i.remark,
+        protocol: i.protocol,
+        port: i.port,
+        enable: i.enable !== false,
+        link: links.buildLink(i, c)
+      })),
       protocol: inb ? inb.protocol : '',
       expired: xray.isExpired(c),
       depleted: xray.isOverQuota(c),
@@ -1294,7 +1348,6 @@ async function createClient(inbound, body) {
   const clash = nameTaken(client, inbound, null);
   if (clash) throw new Error(clash);
   client.id = db.id();
-  client.inboundId = inbound.id;
   client.up = 0;
   client.down = 0;
   client.createdAt = Date.now();
@@ -1328,6 +1381,9 @@ router.post('/clients', async (req, res) => {
   if (req.reseller) {
     const gb = Number(body.totalGB) || 0;
     if (gb <= 0) return bad(res, 'set a quota - an unlimited client cannot be sold from this panel');
+    /* a reseller's client goes on the one inbound the leader put them on -
+       the list in the form is not theirs to choose */
+    delete body.inboundIds;
     body.inboundId = req.reseller.inboundId;
     body.resellerId = req.reseller.id;
     const bill = resellers.charge(req.reseller, gb, `client ${body.email || ''}`.trim());
@@ -1337,7 +1393,7 @@ router.post('/clients', async (req, res) => {
     body.cost = bill.cost;
   }
 
-  const inb = db.data.inbounds.find((i) => i.id === body.inboundId);
+  const inb = db.data.inbounds.find((i) => i.id === wantedInbounds(body, null)[0]);
   if (!inb) {
     if (charged) resellers.adjust(req.reseller, charged, 'refund - inbound missing');
     return bad(res, req.reseller ? 'this panel has no inbound set up yet - talk to whoever sold it to you' : 'inbound not found', 404);
@@ -1378,14 +1434,14 @@ router.put('/clients/:id', async (req, res) => {
       resellers.adjust(req.reseller, back, `${before.email}: quota lowered`);
       req.body.cost = Math.max(0, Math.round((Number(before.cost) || 0) - back));
     }
+    delete req.body.inboundIds;
     req.body.inboundId = req.reseller.inboundId;
     req.body.resellerId = req.reseller.id;
   }
-  const inb = d.inbounds.find((i) => i.id === (req.body.inboundId || before.inboundId));
+  const inb = d.inbounds.find((i) => i.id === wantedInbounds(req.body || {}, before)[0]);
   if (!inb) return bad(res, 'inbound not found', 404);
   const updated = normalizeClient(req.body || {}, before, inb);
   updated.id = before.id;
-  updated.inboundId = inb.id;
   const clash = nameTaken(updated, inb, updated.id);
   if (clash) return bad(res, clash);
   d.clients[idx] = updated;
@@ -1434,7 +1490,7 @@ router.post('/clients/purge', async (req, res) => {
 
   const d = db.data;
   const scoped = body.inboundId
-    ? d.clients.filter((c) => c.inboundId === body.inboundId)
+    ? membership.clientsOn(d.clients, body.inboundId)
     : d.clients;
   const doomed = scoped.filter(scope.match);
   if (!doomed.length) return res.json({ ok: true, deleted: 0, names: [] });
@@ -1577,7 +1633,9 @@ router.get('/clients/:id/qrcode', async (req, res) => {
   const d = db.data;
   const client = d.clients.find((c) => c.id === req.params.id);
   if (!client) return bad(res, 'client not found', 404);
-  const inb = d.inbounds.find((i) => i.id === client.inboundId);
+  // a client on several inbounds has a config for each, so the caller may say which
+  const mine = membership.inboundsOf(client, d.inbounds);
+  const inb = mine.find((i) => i.id === req.query.inboundId) || mine[0];
   if (!inb) return bad(res, 'inbound not found', 404);
   const target = req.query.sub === '1' ? subUrl(client.subId) : links.buildLink(inb, client);
   const dataUrl = await QRCode.toDataURL(target, { margin: 1, width: 380, errorCorrectionLevel: 'M' });

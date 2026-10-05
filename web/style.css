@@ -1015,11 +1015,15 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
 .seg {
   display: inline-flex; padding: 3px; gap: 2px;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  /* a client on several inbounds gets one tab per config, so the row wraps
+     rather than running off the side of a narrow dialog */
+  flex-wrap: wrap; max-width: 100%;
 }
 .seg button {
   appearance: none; border: 0; background: transparent; color: var(--muted);
   padding: 7px 15px; border-radius: 7px; cursor: pointer;
   font: inherit; font-size: 12.5px; font-weight: 600;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .seg button.active { background: var(--brand); color: var(--brand-ink); text-shadow: none; }
 

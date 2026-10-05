@@ -10,6 +10,7 @@
  */
 const https = require('https');
 const db = require('./db');
+const membership = require('./membership');
 
 /* A mirror can be set when api.telegram.org itself is filtered on the server. */
 const [API_HOST, API_PORT] = String(process.env.NEXV_TG_API || 'api.telegram.org').split(':');
@@ -510,9 +511,10 @@ async function showConfigs(ctx) {
   }
   const subUrl = require('./routes/api').subUrl;
   const lines = mine.map((c) => {
-    const inb = db.data.inbounds.find((i) => i.id === c.inboundId);
+    // every inbound the config is on, because the subscription carries them all
+    const names = membership.inboundsOf(c, db.data.inbounds).map((i) => i.remark).join(' + ');
     return [
-      `<b>${escapeHtml(c.email)}</b>${inb ? ` · ${escapeHtml(inb.remark)}` : ''}`,
+      `<b>${escapeHtml(c.email)}</b>${names ? ` · ${escapeHtml(names)}` : ''}`,
       usageLines(c),
       `<code>${escapeHtml(subUrl(c.subId))}</code>`
     ].join('\n');

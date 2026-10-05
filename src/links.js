@@ -1,6 +1,7 @@
 'use strict';
 /** Share-link generation (vless / vmess / trojan / ss / socks) and subscription rendering. */
 const db = require('./db');
+const membership = require('./membership');
 
 function hostFor(inb) {
   return inb.address || db.settings.domain || db.settings.serverIP || '127.0.0.1';
@@ -235,11 +236,17 @@ function subscriptionFor(subId) {
      * buyer with a subscription that silently empties itself.
      */
     if (c.enable === false && !c.blockedReason) continue;
-    const inb = d.inbounds.find((i) => i.id === c.inboundId);
-    if (!inb || inb.enable === false) continue;
-    for (const where of addressesFor(inb)) {
-      const link = buildLink(inb, c, where);
-      if (link) links.push(link);
+    /*
+     * One client can sit on several inbounds. Each one is a separate way in,
+     * so each contributes its own links and the subscription carries all of
+     * them - that is what makes multiple inbounds per client usable at all.
+     */
+    for (const inb of membership.inboundsOf(c, d.inbounds)) {
+      if (inb.enable === false) continue;
+      for (const where of addressesFor(inb)) {
+        const link = buildLink(inb, c, where);
+        if (link) links.push(link);
+      }
     }
   }
   return links;

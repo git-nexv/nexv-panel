@@ -10,6 +10,7 @@ const auth = require('./auth');
 const resellers = require('./reseller');
 const xray = require('./xray');
 const links = require('./links');
+const membership = require('./membership');
 const system = require('./system');
 const api = require('./routes/api');
 
@@ -140,18 +141,19 @@ async function subscriptionInfo(subId) {
 
   const configs = [];
   for (const c of clients) {
-    const inb = d.inbounds.find((i) => i.id === c.inboundId);
-    if (!inb) continue;
-    const link = links.buildLink(inb, c);
-    if (!link) continue;
-    configs.push({
-      name: inb.remark || inb.protocol,
-      protocol: inb.protocol,
-      network: inb.network || 'tcp',
-      security: inb.security || 'none',
-      link,
-      enabled: c.enable !== false && inb.enable !== false
-    });
+    // a client on several inbounds has a config on each - the page lists them all
+    for (const inb of membership.inboundsOf(c, d.inbounds)) {
+      const link = links.buildLink(inb, c);
+      if (!link) continue;
+      configs.push({
+        name: inb.remark || inb.protocol,
+        protocol: inb.protocol,
+        network: inb.network || 'tcp',
+        security: inb.security || 'none',
+        link,
+        enabled: c.enable !== false && inb.enable !== false
+      });
+    }
   }
 
   // the codes come with the page, so it needs no QR library of its own; a

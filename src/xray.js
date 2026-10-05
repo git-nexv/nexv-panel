@@ -9,6 +9,7 @@ const { execFile, execFileSync } = require('child_process');
 const db = require('./db');
 const certs = require('./certs');
 const online = require('./online');
+const membership = require('./membership');
 
 const XRAY_BIN = process.env.NEXV_XRAY_BIN || '/usr/local/bin/xray';
 const XRAY_CONFIG = process.env.NEXV_XRAY_CONFIG || '/usr/local/etc/xray/config.json';
@@ -713,7 +714,7 @@ function buildConfig() {
     if (inb.enable === false) continue;
     // an inbound past its own expiry or cap stops listening, like a dead client
     if (inboundDead(inb)) continue;
-    const clients = d.clients.filter((c) => c.inboundId === inb.id);
+    const clients = membership.clientsOn(d.clients, inb.id);
     const entry = {
       tag: inb.tag,
       listen: inb.listen || '0.0.0.0',

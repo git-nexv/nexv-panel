@@ -916,6 +916,16 @@ const FA = {
   'that REALITY private key is not a valid key - press Generate to make a new pair':
     'این کلید خصوصی REALITY معتبر نیست — دکمه‌ی ساختن را بزنید تا جفت کلید تازه ساخته شود',
 
+  /* several inbounds for one client: each is a separate way in */
+  'Tick every inbound this client should be able to connect through. The subscription carries one config per inbound.':
+    'هر اینباندی که این کلاینت باید بتواند از آن وصل شود را تیک بزنید. لینک اشتراک برای هر اینباند یک کانفیگ می‌دهد.',
+  'Tick at least one inbound — a client with none has no way in':
+    'حداقل یک اینباند را تیک بزنید — کلاینتی که هیچ اینباندی ندارد راهی برای وصل شدن ندارد',
+  'Ticked clients are carried by this inbound as well as by any others they are on. Unticking takes only this one off.':
+    'کلاینت‌های تیک‌خورده هم روی این اینباند می‌روند و هم روی هر اینباند دیگری که دارند. برداشتن تیک فقط همین یکی را حذف می‌کند.',
+  'already here': 'همین‌جا هست',
+  'No inbounds yet.': 'هنوز اینباندی ساخته نشده.',
+
   /* the share dialog: one code, and a switch saying which link it is */
   'Subscription': 'اشتراک',
   'Config link': 'لینک کانفیگ',

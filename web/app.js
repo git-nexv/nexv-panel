@@ -1007,7 +1007,13 @@ async function exportInboundText(inb) {
   });
 }
 
-/** Pick who sits on this inbound. Moving nobody's subId, nobody loses a link. */
+/**
+ * Pick who sits on this inbound.
+ *
+ * A client can be on several inbounds at once, so ticking adds this one to
+ * whatever they already had instead of taking the others away. No subId is
+ * touched, so nobody loses a link either way.
+ */
 async function attachClients(inb) {
   let clients;
   try { clients = await api.get('/clients'); } catch (err) { return toast(err.message, 'err'); }
@@ -1016,14 +1022,20 @@ async function attachClients(inb) {
   const boxes = new Map();
   const list = el('div', { class: 'attach-list' });
   for (const client of clients) {
+    const here = (client.inboundIds || []).includes(inb.id);
     const box = el('input', { type: 'checkbox' });
-    box.checked = client.inboundId === inb.id;
+    box.checked = here;
     boxes.set(client.id, box);
+    // what else carries them, so taking this one off is an informed choice
+    const others = (client.inbounds || []).filter((i) => i.id !== inb.id).map((i) => i.remark);
+    const note = here
+      ? (others.length ? `already here, also on ${others.join(', ')}` : 'already here')
+      : (others.length ? `on ${others.join(', ')}` : 'not attached');
     list.append(el('label', { class: 'attach-row' }, [
       box,
       el('div', {}, [
         el('strong', { text: client.email }),
-        el('div', { class: 'faint', style: 'font-size:11px', text: client.inboundId === inb.id ? 'already here' : (client.inboundRemark || 'not attached') })
+        el('div', { class: 'faint', style: 'font-size:11px', text: note })
       ])
     ]));
   }
@@ -1039,7 +1051,7 @@ async function attachClients(inb) {
 
   modal({
     title: `Clients on "${inb.remark}"`,
-    subtitle: 'Ticked clients move here; unticked ones are taken off. Subscription links are unaffected.',
+    subtitle: 'Ticked clients are carried by this inbound as well as by any others they are on. Unticking takes only this one off.',
     body,
     width: 560,
     actions: [{
@@ -1050,8 +1062,9 @@ async function attachClients(inb) {
         const detach = [];
         for (const [id, box] of boxes) {
           const client = clients.find((c) => c.id === id);
-          if (box.checked && client.inboundId !== inb.id) attach.push(id);
-          if (!box.checked && client.inboundId === inb.id) detach.push(id);
+          const here = (client.inboundIds || []).includes(inb.id);
+          if (box.checked && !here) attach.push(id);
+          if (!box.checked && here) detach.push(id);
         }
         if (!attach.length && !detach.length) { close(); return toast('Nothing changed'); }
         try {
@@ -2040,6 +2053,24 @@ const CLIENT_CHIPS = {
 };
 
 /**
+ * One cell naming every inbound this client is on.
+ *
+ * A client can be carried by several at once, so the cell is a list and not a
+ * name: one line each, the first being the primary - the inbound a single
+ * pasted link points at. An inbound that is switched off is said to be, since
+ * that is the difference between "you have three ways in" and "you have two".
+ */
+function inboundCell(c) {
+  const mine = c.inbounds || (c.inboundRemark ? [{ remark: c.inboundRemark, protocol: c.protocol, enable: true }] : []);
+  if (!mine.length) return el('span', { class: 'faint', text: 'not attached' });
+  return el('div', { class: 'cell-stack' }, mine.map((inb, i) => el('div', {
+    class: i ? 'faint sub' : '',
+    title: `${inb.protocol || ''}${inb.port ? `:${inb.port}` : ''}`,
+    text: inb.enable === false ? `${inb.remark} (off)` : inb.remark
+  })));
+}
+
+/**
  * Delete everyone a scope matches, after saying out loud how many that is and
  * naming a few of them - "delete all clients" is not a button anybody should be
  * able to press without seeing whose configs are about to stop working.
@@ -2170,7 +2201,7 @@ async function renderClients(view) {
           el('div', { class: 'faint mono sub', text: c.protocol })
         ])
       ]),
-      el('td', { class: 'muted', text: c.inboundRemark }),
+      el('td', { class: 'muted' }, [inboundCell(c)]),
       el('td', {}, [liveCell(c)]),
       el('td', {}, [
         el('div', { class: 'cell-stack' }, [
@@ -2573,10 +2604,19 @@ function onOffSwitch(on, apply, title) {
  * the text under it and the copy button all follow the switch together.
  */
 async function showClientLink(client) {
-  const [config, subQr, sub] = await Promise.all([
-    api.get(`/clients/${client.id}/qrcode`),
+  /*
+   * One code per way in. A client on several inbounds has a config on each and
+   * they are genuinely different configs, so the switch grows an entry per
+   * inbound instead of showing the first one and calling it "the" config. The
+   * subscription stays the first entry, because it is the one that carries all
+   * of them at once.
+   */
+  const mine = (client.inbounds || []).filter((i) => i.link);
+  const wanted = mine.length ? mine : [null];
+  const [sub, subQr, ...codes] = await Promise.all([
+    api.get(`/clients/${client.id}/sub-url`),
     api.get(`/clients/${client.id}/qrcode?sub=1`),
-    api.get(`/clients/${client.id}/sub-url`)
+    ...wanted.map((inb) => api.get(`/clients/${client.id}/qrcode${inb ? `?inboundId=${encodeURIComponent(inb.id)}` : ''}`))
   ]);
 
   const views = {
@@ -2585,14 +2625,19 @@ async function showClientLink(client) {
       text: sub.url,
       copy: 'Copy subscription link',
       note: 'Updates by itself when you change the config, and carries the quota and expiry back to the app.'
-    },
-    config: {
-      dataUrl: config.dataUrl,
-      text: config.content,
-      copy: 'Copy config link',
-      note: 'One config, exactly as it is now. An app given this will not follow later changes.'
     }
   };
+  const tabs = [{ value: 'sub', label: 'Subscription' }];
+  wanted.forEach((inb, i) => {
+    const key = `config:${i}`;
+    views[key] = {
+      dataUrl: codes[i].dataUrl,
+      text: codes[i].content,
+      copy: 'Copy config link',
+      note: 'One config, exactly as it is now. An app given this will not follow later changes.'
+    };
+    tabs.push({ value: key, label: wanted.length > 1 ? (inb.remark || `Config ${i + 1}`) : 'Config link' });
+  });
 
   const image = el('img', { alt: 'QR code' });
   const text = el('div', { class: 'link-box' });
@@ -2610,10 +2655,7 @@ async function showClientLink(client) {
   };
 
   const body = el('div', { class: 'qr-box' }, [
-    segmented([
-      { value: 'sub', label: 'Subscription' },
-      { value: 'config', label: 'Config link' }
-    ], current, show),
+    segmented(tabs, current, show),
     image,
     note,
     text,
@@ -2635,13 +2677,32 @@ function clientForm(existing) {
   const form = el('div', { class: 'form-grid' });
 
   const email = formField(form, 'Client name', el('input', { value: v.email || '', placeholder: 'user-01' }));
-  const inboundSel = el('select');
+
+  /*
+   * As many inbounds as you like, not one. Every ticked inbound carries this
+   * client, and the subscription hands the app a config for each of them - so
+   * two inbounds is two ways in for the same person, and if one stops working
+   * the other still does. The first ticked one leads: it is what a single
+   * pasted link points at.
+   */
+  const already = Array.isArray(v.inboundIds) && v.inboundIds.length
+    ? v.inboundIds
+    : (v.inboundId ? [v.inboundId] : []);
+  const inboundPick = el('div', { class: 'chips' });
   for (const inb of state.inbounds) {
-    inboundSel.append(el('option', { value: inb.id, selected: v.inboundId === inb.id }, [`${inb.remark} · ${inb.protocol}:${inb.port}`]));
+    const box = el('input', { type: 'checkbox', value: inb.id });
+    // a brand new client starts on the first inbound, which is the common case
+    box.checked = existing ? already.includes(inb.id) : inb.id === (state.inbounds[0] || {}).id;
+    inboundPick.append(el('label', { title: `${inb.protocol}:${inb.port}` },
+      [box, `${inb.remark} · ${inb.protocol}:${inb.port}`]));
   }
+  const pickedIds = () => Array.from(inboundPick.querySelectorAll('input:checked')).map((i) => i.value);
   /* a reseller has one inbound, chosen for them by the leader; the field would
      be a list of one they cannot change, so it is simply not there */
-  if (!isReseller()) formField(form, 'Inbound', inboundSel);
+  if (!isReseller()) {
+    formField(form, 'Inbounds', state.inbounds.length ? inboundPick : el('div', { class: 'hint', text: 'No inbounds yet.' }),
+      { full: true, hint: 'Tick every inbound this client should be able to connect through. The subscription carries one config per inbound.' });
+  }
 
   const uuidRow = generatedField(v.uuid || '', 'uuid', { placeholder: 'generated when you save' });
   const passwordRow = generatedField(v.password || '', 'password', { placeholder: 'generated when you save' });
@@ -2754,14 +2815,14 @@ function clientForm(existing) {
   // only show the WireGuard peer fields when the selected inbound needs them,
   // and not at all on a panel where they were never put on the form
   const syncProtocol = () => {
-    const inb = state.inbounds.find((i) => i.id === inboundSel.value);
-    const isWg = inb && inb.protocol === 'wireguard';
+    const picked = pickedIds();
+    const isWg = state.inbounds.some((i) => picked.includes(i.id) && i.protocol === 'wireguard');
     for (const control of [wgPublicKey, wgAllowedIPs]) {
       const field = control.closest('.field');
       if (field) field.classList.toggle('hidden', !isWg);
     }
   };
-  inboundSel.addEventListener('change', syncProtocol);
+  inboundPick.addEventListener('change', syncProtocol);
   syncProtocol();
 
   modal({
@@ -2777,12 +2838,16 @@ function clientForm(existing) {
         if (isReseller() && !(Number(totalGB.value) > 0)) {
           return toast('Set a quota — this panel cannot sell an unlimited client', 'err');
         }
+        const chosenInbounds = pickedIds();
+        if (!isReseller() && !chosenInbounds.length) {
+          return toast('Tick at least one inbound — a client with none has no way in', 'err');
+        }
         /* waiting for first use means no expiry is written yet - the days are
            kept to one side and become a date when traffic first moves */
         const waiting = startOnUse.checked && !v.startedAt;
         const payload = {
           email: email.value.trim(),
-          inboundId: inboundSel.value,
+          inboundIds: chosenInbounds,
           uuid: uuid.value.trim() || undefined,
           password: password.value.trim() || undefined,
           totalGB: Number(totalGB.value),
