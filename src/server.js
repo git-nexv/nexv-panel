@@ -449,6 +449,14 @@ async function bootstrap() {
   }).catch((err) => console.error('[xray] could not be started:', err.message));
   // a bot that was running before the restart starts polling again on its own
   try { require('./telegram').resume(); } catch (err) { console.error('[bot] could not resume:', err.message); }
+  /*
+   * Configs the bot sold while they were coming out attached to no inbound at
+   * all. They do not work and cannot be imported, so they are put back on the
+   * inbound their plan names. Does nothing once there are none left.
+   */
+  require('./telegram').repairOrphanClients()
+    .then((r) => { if (r && r.fixed) console.log(`[bot] put ${r.fixed} config(s) back on an inbound`); })
+    .catch((err) => console.error('[bot] could not repair sold configs:', err.message));
   // and from here on xray gets itself picked up when it falls over
   try { require('./watchdog').start(); } catch (err) { console.error('[watchdog] could not start:', err.message); }
 

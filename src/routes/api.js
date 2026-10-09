@@ -1282,9 +1282,16 @@ function normalizeClient(body, existing, inbound) {
    * Every inbound this client is on. The inbound the request was made against
    * leads the list and so becomes the primary, which is the one the per-client
    * protocol rules below are decided by and the one a single link points at.
+   *
+   * And when the request names none at all, that inbound IS the list. Callers
+   * that pass the inbound as an argument and nothing in the body - the bot
+   * selling a plan, the bot handing out a test config - were getting a client
+   * on no inbound whatever: Xray never heard of it, its subscription came back
+   * empty, and what the buyer was sold would not import into anything.
    */
   const ids = wantedInbounds(body, existing);
-  membership.setInbounds(c, inbound && ids.includes(inbound.id) ? [inbound.id, ...ids] : ids);
+  const lead = inbound && (ids.includes(inbound.id) || !ids.length) ? [inbound.id] : [];
+  membership.setInbounds(c, [...lead, ...ids]);
 
   // xtls-rprx-vision only makes sense on raw TCP with TLS or REALITY
   if (c.flow && !(inbound.protocol === 'vless' && (inbound.network || 'tcp') === 'tcp')) c.flow = '';

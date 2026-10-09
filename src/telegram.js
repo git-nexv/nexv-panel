@@ -470,6 +470,7 @@ async function showPlans(ctx, renewId) {
   rows.push(renewId
     ? [{ text: '⬅️ بازگشت', callback_data: `b:cfg:${renewId}` }]
     : backRow()[0]);
+
   const head = renewId
     ? '<b>تمدید اشتراک</b>\nحجم یا پلن تازه را انتخاب کنید — روی همین کانفیگ اعمال می‌شود:'
     : '<b>اشتراک‌ها</b>\nیکی را انتخاب کنید:';
@@ -568,7 +569,7 @@ async function showConfigs(ctx) {
   }
   const rows = mine.map((c, i) => ([{
     text: `${i + 1}  ${dead(c) ? '⛔️' : '✅'}  ${c.email}`,
-    callback_data: `b:cfg:${c.id}`
+    callback_data: `b:cfg:${shortId(c)}`
   }]));
   rows.push(backRow()[0]);
   return reply(ctx, [
@@ -587,9 +588,27 @@ function dead(c) {
   return !!(quota && (c.up || 0) + (c.down || 0) >= quota);
 }
 
+/*
+ * A config's id, short enough to travel in a button.
+ *
+ * Telegram gives callback_data sixty-four bytes and refuses the whole message
+ * if a single button is over it - and refuses it with an error nobody sees,
+ * so the button simply does nothing. A plan button carrying both a plan id and
+ * a config id was 79 bytes of two full UUIDs, which is why renew looked dead.
+ * Eight characters is what clientTag already puts in the Xray config, and it
+ * leaves room for whatever else a button has to say.
+ */
+function shortId(client) {
+  return String(client.id || '').slice(0, 8);
+}
+
 /** One config, whoever it belongs to - or nothing, if it is not theirs. */
-function myConfig(ctx, clientId) {
-  return clientsOf(ctx.userId).find((c) => c.id === clientId) || null;
+function myConfig(ctx, token) {
+  const want = String(token || '');
+  if (!want) return null;
+  const mine = clientsOf(ctx.userId);
+  // the whole id still works, so a button made before this keeps working
+  return mine.find((c) => c.id === want) || mine.find((c) => c.id.startsWith(want)) || null;
 }
 
 /** What this config cost, if it came through the bot and we still know. */
@@ -650,13 +669,14 @@ async function showConfig(ctx, clientId) {
     'این لینک را در برنامه‌تان به عنوان Subscription اضافه کنید.'
   );
 
+  const id = shortId(c);
   return reply(ctx, lines.join('\n'), [
-    [{ text: '🔄 تمدید / ارتقا اشتراک', callback_data: `b:renew:${c.id}` }],
+    [{ text: '🔄 تمدید / ارتقا اشتراک', callback_data: `b:renew:${id}` }],
     [
-      { text: off ? '🔛 روشن کردن' : '⏸ خاموش کردن', callback_data: `b:power:${c.id}` },
-      { text: '✏️ تغییر نام', callback_data: `b:rename:${c.id}` }
+      { text: off ? '🔛 روشن کردن' : '⏸ خاموش کردن', callback_data: `b:power:${id}` },
+      { text: '✏️ تغییر نام', callback_data: `b:rename:${id}` }
     ],
-    [{ text: '🔗 لینک جدید', callback_data: `b:newlink:${c.id}` }],
+    [{ text: '🔗 لینک جدید', callback_data: `b:newlink:${id}` }],
     [{ text: '⬅️ بازگشت', callback_data: 'b:configs:' }]
   ]);
 }
@@ -700,14 +720,14 @@ async function newLink(ctx, clientId) {
 async function startRename(ctx, clientId) {
   const c = myConfig(ctx, clientId);
   if (!c) return showConfigs(ctx);
-  expect(ctx.userId, 'renameConfig', { clientId });
+  expect(ctx.userId, 'renameConfig', { clientId: c.id });
   return reply(ctx, [
     '✏️ <b>تغییر نام</b>',
     '',
     `نام فعلی: <b>${escapeHtml(c.email)}</b>`,
     '',
     'نام تازه را بفرستید. با حروف انگلیسی و عدد، حداقل دو کاراکتر.'
-  ].join('\n'), [[{ text: '⬅️ بازگشت', callback_data: `b:cfg:${c.id}` }]]);
+  ].join('\n'), [[{ text: '⬅️ بازگشت', callback_data: `b:cfg:${shortId(c)}` }]]);
 }
 
 async function takeRename(ctx, raw, waiting) {
@@ -1618,7 +1638,10 @@ async function act(ctx, action, value) {
     case 'newlink': return newLink(ctx, value);
     case 'renew': return showPlans(ctx, value);
     case 'trial': return startTrial(ctx);
-    case 'custom': return startCustom(ctx, value);
+    case 'custom': {
+      const renewing = value ? myConfig(ctx, value) : null;
+      return startCustom(ctx, renewing ? renewing.id : '');
+    }
     case 'support': return openSupport(ctx);
     case 'answer': return startAnswer(ctx, value);
     case 'joined': {
@@ -1630,11 +1653,13 @@ async function act(ctx, action, value) {
       if (ctx.answer) ctx.answer('عضویت تایید شد ✅');
       return showScreen(ctx, 'start');
     }
-    /* `planId` on its own is a new purchase; a second part means it is a
-       top-up of that config, which skips the name question */
+    /* `planId` on its own is a new purchase; a second part is the short id of
+       the config being topped up, which skips the name question. It is turned
+       back into the real id here so nothing downstream deals in prefixes. */
     case 'buy': {
-      const [planId, renewId] = String(value).split(':');
-      return askName(ctx, planId, renewId || '');
+      const [planId, token] = String(value).split(':');
+      const renewing = token ? myConfig(ctx, token) : null;
+      return askName(ctx, planId, renewing ? renewing.id : '');
     }
     case 'pay': {
       const [orderId, method] = String(value).split(':');
@@ -1852,6 +1877,56 @@ function status() {
 }
 
 /** Bring the bot back up after a panel restart, if it was running before. */
+/*
+ * Put back the inbound on configs that were sold without one.
+ *
+ * Between the change that let a client sit on several inbounds and this, a
+ * client created by the bot came out attached to none at all: the caller named
+ * the inbound as an argument and put nothing in the body, and only the body
+ * was read. Xray never heard of those configs, their subscription link came
+ * back empty, and what the buyer paid for would not import into anything.
+ *
+ * Only configs the bot made are touched - they carry the buyer's Telegram id -
+ * and only ones on no inbound whatever. A client the admin detached on purpose
+ * has no Telegram id on it and is left exactly where they left it. The inbound
+ * is the one the plan it was sold on names, or the one test configs are made
+ * on, or failing both the first inbound that is switched on.
+ */
+async function repairOrphanClients() {
+  const d = db.data;
+  const b = bot();
+  const fallback = (d.inbounds.find((i) => i.enable !== false) || d.inbounds[0] || {}).id || '';
+  if (!fallback) return { fixed: 0, reason: 'there are no inbounds to attach them to' };
+
+  const inboundFor = (client) => {
+    const order = (b.orders || []).find((o) => o.clientId === client.id);
+    const plan = order && (b.plans || []).find((p) => p.id === order.planId);
+    const known = [
+      plan && plan.inboundId,
+      client.isTrial && (b.trial || {}).inboundId,
+      fallback
+    ];
+    return known.find((id) => id && d.inbounds.some((i) => i.id === id)) || '';
+  };
+
+  let fixed = 0;
+  for (const client of d.clients) {
+    if (!String(client.tgId || '').trim()) continue;
+    if (membership.inboundIdsOf(client).length) continue;
+    const id = inboundFor(client);
+    if (!id) continue;
+    membership.setInbounds(client, [id]);
+    fixed++;
+  }
+  if (!fixed) return { fixed: 0 };
+
+  db.saveNow();
+  d.logs.unshift({ at: Date.now(), type: 'client',
+    message: `${fixed} config(s) sold by the bot had no inbound and have been put back on one` });
+  await require('./xray').apply();
+  return { fixed };
+}
+
 function resume() {
   const b = bot();
   migrateStarter();
@@ -1861,7 +1936,7 @@ function resume() {
 
 module.exports = {
   bot, defaults, starterScreens, migrateStarter, migrateUsageButton, start, stop, status, whoAmI, resume,
-  resetTrials, trialsTaken,
+  resetTrials, trialsTaken, repairOrphanClients,
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
   /* the entry point for one update: what the polling loop feeds, and what a
      webhook would feed if this ever grows one */
