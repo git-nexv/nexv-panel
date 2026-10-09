@@ -189,7 +189,10 @@ function defaults() {
     trial: { enable: true, mb: 100, days: 1, inboundId: '', oncePerUser: true },
 
     /* buying by the gigabyte instead of from the fixed list */
-    custom: { enable: false, minGB: 1, maxGB: 0, days: 30, inboundId: '' }
+    custom: { enable: false, minGB: 1, maxGB: 0, days: 30, inboundId: '' },
+
+    /* what the buyer is allowed to decide for themselves rather than be given */
+    access: { chooseName: true }
   };
 }
 
@@ -412,29 +415,51 @@ function customSettings() {
 
 function pricePerGB() { return Math.max(0, Number(bot().pricePerGB) || 0); }
 
+/** What the buyer gets to decide. Older settings files have none of this. */
+function accessSettings() {
+  const a = bot().access || {};
+  return { chooseName: a.chooseName !== false };
+}
+
 /** Custom volume is only on offer once there is a price to put on a gigabyte. */
 function customOn() {
   const c = customSettings();
   return c.enable && pricePerGB() > 0;
 }
 
-async function showPlans(ctx) {
+/*
+ * The plan list, which doubles as the renewal list.
+ *
+ * `renewId` is the config being topped up, carried through the buttons so that
+ * whatever is picked lands on that same config instead of cutting a new one.
+ * Everything downstream - the order, the receipt, the admin's approve button -
+ * is identical either way; only delivery looks at it.
+ */
+async function showPlans(ctx, renewId) {
   const b = bot();
   const plans = b.plans.filter((p) => p.enable !== false && !p.custom);
-  const rows = plans.map((p) => ([{ text: planLine(p).replace(/<[^>]+>/g, ''), callback_data: `b:buy:${p.id}` }]));
-  if (customOn()) rows.push([{ text: '🎚 حجم دلخواه', callback_data: 'b:custom:' }]);
-  if (!rows.length) return reply(ctx, 'فعلاً اشتراکی برای فروش تعریف نشده است.', backRow());
-  rows.push(backRow()[0]);
-  return reply(ctx, '<b>اشتراک‌ها</b>\nیکی را انتخاب کنید:', rows);
+  const tail = renewId ? `:${renewId}` : '';
+  const rows = plans.map((p) => ([{ text: planLine(p).replace(/<[^>]+>/g, ''), callback_data: `b:buy:${p.id}${tail}` }]));
+  if (customOn()) rows.push([{ text: '🎚 حجم دلخواه', callback_data: `b:custom:${renewId || ''}` }]);
+  if (!rows.length) {
+    return reply(ctx, 'فعلاً اشتراکی برای فروش تعریف نشده است.', renewId ? [[{ text: '⬅️ بازگشت', callback_data: `b:cfg:${renewId}` }]] : backRow());
+  }
+  rows.push(renewId
+    ? [{ text: '⬅️ بازگشت', callback_data: `b:cfg:${renewId}` }]
+    : backRow()[0]);
+  const head = renewId
+    ? '<b>تمدید اشتراک</b>\nحجم یا پلن تازه را انتخاب کنید — روی همین کانفیگ اعمال می‌شود:'
+    : '<b>اشتراک‌ها</b>\nیکی را انتخاب کنید:';
+  return reply(ctx, head, rows);
 }
 
 /* --------------------------- buying by the gigabyte ---------------------- */
 
-async function startCustom(ctx) {
+async function startCustom(ctx, renewId) {
   if (!customOn()) return reply(ctx, 'خرید حجم دلخواه فعلاً فعال نیست.', backRow());
   const c = customSettings();
   const per = pricePerGB();
-  expect(ctx.userId, 'customGB');
+  expect(ctx.userId, 'customGB', { renewId: renewId || '' });
   return reply(ctx, [
     '<b>حجم دلخواه</b>',
     `هر گیگابایت ${per.toLocaleString('en-US')} ${escapeHtml(bot().currency || '')}`,
@@ -444,9 +469,10 @@ async function startCustom(ctx) {
   ].join('\n'), backRow());
 }
 
-async function takeCustomGB(ctx, raw) {
+async function takeCustomGB(ctx, raw, waiting) {
   const c = customSettings();
   const per = pricePerGB();
+  const renewId = (waiting && waiting.data && waiting.data.renewId) || '';
   const gb = Math.floor(Number(String(raw).replace(/[^\d.]/g, '')));
   if (!Number.isFinite(gb) || gb <= 0) return send(ctx.chatId, 'یک عدد بفرستید، مثلاً 20');
   if (gb < c.minGB) return send(ctx.chatId, `حداقل ${c.minGB} گیگابایت است.`);
@@ -479,7 +505,7 @@ async function takeCustomGB(ctx, raw) {
     b.plans = b.plans.filter((p) => !drop.has(p.id));
   }
   db.saveNow();
-  return placeOrder(ctx, plan.id);
+  return askName(ctx, plan.id, renewId);
 }
 
 /*
@@ -504,22 +530,175 @@ function usageLines(c) {
   return out.join(' · ');
 }
 
+/*
+ * The config list: one numbered button per config, and nothing else.
+ *
+ * It used to print every config, its usage and its whole subscription link
+ * into one message. Three configs made a wall of text with two links in it
+ * that were easy to copy the wrong one of. Now the list is just the names,
+ * numbered, and tapping one opens it on its own.
+ */
 async function showConfigs(ctx) {
   const mine = clientsOf(ctx.userId);
   if (!mine.length) {
     return reply(ctx, 'هنوز کانفیگی به حساب شما وصل نشده است. یک اشتراک بخرید یا از پشتیبانی بخواهید کانفیگتان را وصل کند.', backRow());
   }
+  const rows = mine.map((c, i) => ([{
+    text: `${i + 1}  ${dead(c) ? '⛔️' : '✅'}  ${c.email}`,
+    callback_data: `b:cfg:${c.id}`
+  }]));
+  rows.push(backRow()[0]);
+  return reply(ctx, [
+    '<b>🔑 کانفیگ‌های شما</b>',
+    '',
+    mine.length === 1 ? 'یک کانفیگ دارید. برای دیدن جزئیاتش روی آن بزنید.'
+      : `${mine.length} کانفیگ دارید. روی هرکدام بزنید تا جزئیاتش را ببینید.`
+  ].join('\n'), rows);
+}
+
+/** Is this config unusable right now, for any of the reasons it can be? */
+function dead(c) {
+  if (c.enable === false || c.autoDisabled) return true;
+  if (c.expiryTime && c.expiryTime < Date.now()) return true;
+  const quota = (c.totalGB || 0) * 1024 ** 3;
+  return !!(quota && (c.up || 0) + (c.down || 0) >= quota);
+}
+
+/** One config, whoever it belongs to - or nothing, if it is not theirs. */
+function myConfig(ctx, clientId) {
+  return clientsOf(ctx.userId).find((c) => c.id === clientId) || null;
+}
+
+/** What this config cost, if it came through the bot and we still know. */
+function priceOf(client) {
+  const b = bot();
+  const order = (b.orders || []).find((o) => o.clientId === client.id);
+  if (order && order.price) return `${order.price} ${b.currency || ''}`.trim();
+  return '';
+}
+
+/** How long is left, in words, with the "not started yet" case spelled out. */
+function timeLeft(c) {
+  if (!c.expiryTime && c.startAfterFirstUse && c.expiryDays) return `${c.expiryDays} روز (از اولین اتصال)`;
+  if (!c.expiryTime) return 'بدون محدودیت زمانی';
+  const ms = c.expiryTime - Date.now();
+  if (ms <= 0) return 'منقضی شده';
+  const days = Math.floor(ms / 86400000);
+  const hours = Math.floor((ms % 86400000) / 3600000);
+  if (days >= 1) return `${days} روز و ${hours} ساعت`;
+  const minutes = Math.floor((ms % 3600000) / 60000);
+  return `${hours} ساعت و ${minutes} دقیقه`;
+}
+
+/*
+ * One config, laid out so it can be read at a glance.
+ *
+ * Every line is a label, a value and the emoji that tells them apart, with the
+ * blank lines kept in: on a phone this is read in a second between other
+ * things, not studied.
+ */
+async function showConfig(ctx, clientId) {
+  const c = myConfig(ctx, clientId);
+  if (!c) return showConfigs(ctx);
+
   const subUrl = require('./routes/api').subUrl;
-  const lines = mine.map((c) => {
-    // every inbound the config is on, because the subscription carries them all
-    const names = membership.inboundsOf(c, db.data.inbounds).map((i) => i.remark).join(' + ');
-    return [
-      `<b>${escapeHtml(c.email)}</b>${names ? ` · ${escapeHtml(names)}` : ''}`,
-      usageLines(c),
-      `<code>${escapeHtml(subUrl(c.subId))}</code>`
-    ].join('\n');
-  });
-  return reply(ctx, `<b>کانفیگ‌های شما</b>\n\n${lines.join('\n\n')}\n\nلینک را در برنامه‌تان به عنوان Subscription اضافه کنید.`, backRow());
+  const used = (c.up || 0) + (c.down || 0);
+  const quota = (c.totalGB || 0) * 1024 ** 3;
+  const price = priceOf(c);
+  const where = membership.inboundsOf(c, db.data.inbounds).map((i) => i.remark).join(' + ');
+  const off = c.enable === false || c.autoDisabled;
+
+  const lines = [
+    `🔑  <b>${escapeHtml(c.email)}</b>`,
+    '',
+    `📊  مصرف‌شده:  <b>${bytes(used)}</b>`,
+    `💾  حجم کل:  <b>${quota ? bytes(quota) : 'نامحدود'}</b>`
+  ];
+  if (quota) lines.push(`📉  باقی‌مانده:  <b>${bytes(Math.max(0, quota - used))}</b>`);
+  lines.push(`⏳  زمان باقی‌مانده:  <b>${timeLeft(c)}</b>`);
+  if (price) lines.push(`💰  قیمت سرویس:  <b>${escapeHtml(price)}</b>`);
+  if (where) lines.push(`🌐  سرور:  <b>${escapeHtml(where)}</b>`);
+  lines.push(
+    `${off ? '⛔️' : '✅'}  وضعیت:  <b>${off ? 'غیرفعال' : 'فعال'}</b>`,
+    '',
+    '🔗  <b>لینک اشتراک</b>',
+    `<code>${escapeHtml(subUrl(c.subId))}</code>`,
+    '',
+    'این لینک را در برنامه‌تان به عنوان Subscription اضافه کنید.'
+  );
+
+  return reply(ctx, lines.join('\n'), [
+    [{ text: '🔄 تمدید / ارتقا اشتراک', callback_data: `b:renew:${c.id}` }],
+    [
+      { text: off ? '🔛 روشن کردن' : '⏸ خاموش کردن', callback_data: `b:power:${c.id}` },
+      { text: '✏️ تغییر نام', callback_data: `b:rename:${c.id}` }
+    ],
+    [{ text: '🔗 لینک جدید', callback_data: `b:newlink:${c.id}` }],
+    [{ text: '⬅️ بازگشت', callback_data: 'b:configs:' }]
+  ]);
+}
+
+/** Turn one of their own configs off, or back on. */
+async function powerConfig(ctx, clientId) {
+  const c = myConfig(ctx, clientId);
+  if (!c) return showConfigs(ctx);
+  /* a config switched off for not being paid for is not theirs to switch on */
+  if (c.blockedReason) {
+    if (ctx.answer) ctx.answer('این کانفیگ توسط پشتیبانی غیرفعال شده است.', true);
+    return null;
+  }
+  c.enable = c.enable === false;
+  c.autoDisabled = false;
+  db.saveNow();
+  await require('./xray').apply();
+  if (ctx.answer) ctx.answer(c.enable ? 'روشن شد ✅' : 'خاموش شد ⏸');
+  return showConfig(ctx, clientId);
+}
+
+/** A fresh subscription link for the same config; the old one stops working. */
+async function newLink(ctx, clientId) {
+  const c = myConfig(ctx, clientId);
+  if (!c) return showConfigs(ctx);
+  const api = require('./routes/api');
+  c.subId = require('crypto').randomBytes(6).toString('base64url');
+  db.saveNow();
+  if (ctx.answer) ctx.answer('لینک تازه ساخته شد ✅');
+  await send(ctx.chatId, [
+    '🔗 <b>لینک تازه‌ی شما</b>',
+    '',
+    `<code>${escapeHtml(api.subUrl(c.subId))}</code>`,
+    '',
+    '⚠️ لینک قبلی از این لحظه کار نمی‌کند. این یکی را در برنامه‌تان جایگزین کنید.'
+  ].join('\n'));
+  return showConfig(ctx, clientId);
+}
+
+/** Ask for a new name for a config they already own. */
+async function startRename(ctx, clientId) {
+  const c = myConfig(ctx, clientId);
+  if (!c) return showConfigs(ctx);
+  expect(ctx.userId, 'renameConfig', { clientId });
+  return reply(ctx, [
+    '✏️ <b>تغییر نام</b>',
+    '',
+    `نام فعلی: <b>${escapeHtml(c.email)}</b>`,
+    '',
+    'نام تازه را بفرستید. با حروف انگلیسی و عدد، حداقل دو کاراکتر.'
+  ].join('\n'), [[{ text: '⬅️ بازگشت', callback_data: `b:cfg:${c.id}` }]]);
+}
+
+async function takeRename(ctx, raw, waiting) {
+  const clientId = waiting && waiting.data && waiting.data.clientId;
+  const c = myConfig(ctx, clientId);
+  if (!c) { forget(ctx.userId); return showConfigs(ctx); }
+  const wanted = uniqueName(cleanName(raw), c.id);
+  if (!wanted) return send(ctx.chatId, 'این اسم کار نمی‌کند. با حروف انگلیسی و عدد بفرستید، حداقل دو کاراکتر.');
+  forget(ctx.userId);
+  c.email = wanted;
+  db.saveNow();
+  await require('./xray').apply();
+  await send(ctx.chatId, `نام کانفیگ به <b>${escapeHtml(wanted)}</b> تغییر کرد ✅`);
+  return showConfig(ctx, c.id);
 }
 
 /* ---------------------------- the free trial ----------------------------- */
@@ -665,6 +844,49 @@ function cleanName(raw) {
     .slice(0, 24);
 }
 
+/*
+ * A name nobody else is using. Two people may both want "ali", and refusing
+ * the second one outright helps nobody, so the clash is settled here with a
+ * number rather than handed back as an error.
+ */
+function uniqueName(wanted, exceptId) {
+  if (!wanted || wanted.length < 2) return '';
+  let name = wanted;
+  let n = 2;
+  while (db.data.clients.some((c) => c.email === name && c.id !== exceptId)) name = `${wanted}-${n++}`;
+  return name;
+}
+
+/*
+ * The name the buyer picks for what they are about to buy.
+ *
+ * Asked once the plan is settled and before any money is mentioned, because
+ * it is the last thing about the config that is theirs to decide. When the
+ * panel has that switched off, or when they are topping up a config that
+ * already has a name, this falls straight through to the order.
+ */
+async function askName(ctx, planId, renewId) {
+  if (renewId || !accessSettings().chooseName) return placeOrder(ctx, planId, '', renewId);
+  const plan = bot().plans.find((p) => p.id === planId);
+  if (!plan) return reply(ctx, 'این اشتراک دیگر موجود نیست.', backRow());
+  expect(ctx.userId, 'orderName', { planId });
+  return reply(ctx, [
+    `<b>${escapeHtml(plan.name)}</b>`,
+    planLine(plan),
+    '',
+    '✏️ یک <b>نام</b> برای کانفیگتان بفرستید.',
+    'با حروف انگلیسی و عدد، حداقل دو کاراکتر — مثلاً <code>ali-phone</code>.'
+  ].join('\n'), [[{ text: '⬅️ بازگشت', callback_data: 'b:plans:' }]]);
+}
+
+async function takeOrderName(ctx, raw, waiting) {
+  const planId = waiting && waiting.data && waiting.data.planId;
+  const name = uniqueName(cleanName(raw));
+  if (!name) return send(ctx.chatId, 'این اسم کار نمی‌کند. با حروف انگلیسی و عدد بفرستید، حداقل دو کاراکتر.');
+  forget(ctx.userId);
+  return placeOrder(ctx, planId, name, '');
+}
+
 async function takeTrialName(ctx, raw) {
   const t = trialSettings();
   const wanted = cleanName(raw);
@@ -677,9 +899,7 @@ async function takeTrialName(ctx, raw) {
   if (!inbound) { forget(ctx.userId); return send(ctx.chatId, 'اینباندی برای کانفیگ تست تنظیم نشده است.'); }
 
   // a name already in use would be refused outright, so it is made unique here
-  let email = wanted;
-  let n = 2;
-  while (db.data.clients.some((c) => c.email === email)) email = `${wanted}-${n++}`;
+  const email = uniqueName(wanted);
 
   forget(ctx.userId);
   try {
@@ -782,12 +1002,17 @@ async function toSupport(ctx, message) {
     return false;
   }
 
+  /*
+   * Two ways to answer, because replying to a message is not obvious on every
+   * client and is awkward on a phone: the button puts the admin straight into
+   * answering this person, and a plain reply still works as it always did.
+   */
   const header = await send(admin, [
     '<b>💬 پیام پشتیبانی</b>',
     whoLine(ctx),
     '',
-    'برای پاسخ، روی همین پیام ریپلای کنید.'
-  ].join('\n'));
+    'برای پاسخ، دکمه‌ی زیر را بزنید یا روی همین پیام ریپلای کنید.'
+  ].join('\n'), [[{ text: '✍️ پاسخ به این کاربر', callback_data: `b:answer:${ctx.userId}` }]]);
   rememberRelay(header && header.message_id, ctx.userId);
 
   /*
@@ -813,18 +1038,36 @@ async function toSupport(ctx, message) {
   return true;
 }
 
-/** The admin replied to a relayed message; carry it back to whoever sent it. */
-async function fromSupport(ctx, message) {
-  const target = relayTarget(message.reply_to_message);
-  if (!target) return false;
+/** The admin pressed answer on somebody's message; the next thing they send goes there. */
+async function startAnswer(ctx, userId) {
+  if (!ctx.isAdmin) return null;
+  expect(ctx.userId, 'supportReply', { target: String(userId) });
+  return send(ctx.chatId, [
+    `✍️ در حال پاسخ به <code>${escapeHtml(String(userId))}</code>`,
+    '',
+    'پیامتان را بفرستید — متن، عکس یا فایل. برای انصراف /start بزنید.'
+  ].join('\n'));
+}
+
+/**
+ * The admin answered somebody; carry it back to them.
+ *
+ * `target` is either worked out from the message being replied to, or held
+ * from the answer button. The buyer gets a button to carry on, so a
+ * conversation does not end just because the admin spoke last: pressing it
+ * opens the same support window and their next message comes straight back
+ * here.
+ */
+async function fromSupport(ctx, message, target) {
+  const to = target || relayTarget(message.reply_to_message);
+  if (!to) return false;
   const text = (message.text || '').trim();
   if (text.startsWith('/')) return false;        // a command is not an answer
 
-  const sentHeader = await send(target, '<b>💬 پاسخ پشتیبانی</b>');
-  if (sentHeader === undefined) { /* send() swallows its own errors */ }
+  await send(to, '<b>💬 پاسخ پشتیبانی</b>');
   try {
     await call('copyMessage', {
-      chat_id: target,
+      chat_id: to,
       from_chat_id: ctx.chatId,
       message_id: message.message_id
     });
@@ -833,6 +1076,10 @@ async function fromSupport(ctx, message) {
     await send(ctx.chatId, `پاسخ فرستاده نشد: ${escapeHtml(err.message)}`);
     return true;
   }
+  await send(to, 'اگر هنوز سوالی دارید، همین‌جا بنویسید یا دکمه‌ی زیر را بزنید.', [
+    [{ text: '💬 ادامه‌ی گفتگو', callback_data: 'b:support:' }],
+    [{ text: '⬅️ بازگشت به منو', callback_data: 'b:screen:start' }]
+  ]);
   await send(ctx.chatId, '✅ پاسخ فرستاده شد.');
   return true;
 }
@@ -848,7 +1095,7 @@ function payWays() {
 }
 
 /** A purchase starts here: pick how to pay, or go straight there if only one way. */
-async function placeOrder(ctx, planId) {
+async function placeOrder(ctx, planId, clientName, renewId) {
   const b = bot();
   const plan = b.plans.find((p) => p.id === planId);
   if (!plan) return reply(ctx, 'این اشتراک دیگر موجود نیست.', backRow());
@@ -862,6 +1109,10 @@ async function placeOrder(ctx, planId) {
     userId: ctx.userId,
     username: ctx.username || '',
     name: ctx.name || '',
+    /* what the buyer asked their config be called, and - for a top-up - which
+       config this is being added to rather than cut fresh */
+    clientName: clientName || '',
+    renewClientId: renewId || '',
     method: '',
     status: 'awaiting'
   };
@@ -874,16 +1125,19 @@ async function placeOrder(ctx, planId) {
   if (!ways.length) return submitOrder(ctx, order, null);
   if (ways.length === 1) return showPayment(ctx, order, ways[0]);
 
+  /* both ways are on, so the buyer says which. The rows are built from what
+     is actually configured rather than written out, so a third method later
+     appears here without this having to be touched again. */
+  const label = { card: '💳 کارت به کارت', crypto: '🪙 ارز دیجیتال' };
   return reply(ctx, [
     `<b>${escapeHtml(plan.name)}</b>`,
     planLine(plan),
+    order.clientName ? `نام کانفیگ: <b>${escapeHtml(order.clientName)}</b>` : '',
     '',
-    'روش پرداخت را انتخاب کنید:'
-  ].join('\n'), [
-    [{ text: '💳 کارت به کارت', callback_data: `b:pay:${order.id}:card` }],
-    [{ text: '🪙 ارز دیجیتال', callback_data: `b:pay:${order.id}:crypto` }],
-    [{ text: '⬅️ بازگشت', callback_data: 'b:plans:' }]
-  ]);
+    '💰 پرداخت را چطور انجام می‌دهید؟'
+  ].filter(Boolean).join('\n'),
+  ways.map((way) => ([{ text: label[way] || way, callback_data: `b:pay:${order.id}:${way}` }]))
+    .concat([[{ text: '⬅️ بازگشت', callback_data: 'b:plans:' }]]));
 }
 
 /** Show where to send the money, then wait for the receipt. */
@@ -1051,9 +1305,30 @@ async function deliverOrder(order) {
   const inbound = db.data.inbounds.find((i) => i.id === (plan && plan.inboundId));
   if (!plan || !inbound) return { ok: false, error: 'اشتراک یا اینباند آن پیدا نشد' };
 
+  /*
+   * A top-up lands on the config the buyer was looking at when they pressed
+   * renew: the volume is added to what is left rather than replacing it, and
+   * the days are added to whatever is still to run. Nothing about the config
+   * changes - same link, same name - so the app on their phone keeps working
+   * and simply has more in it.
+   */
+  if (order.renewClientId) {
+    const client = db.data.clients.find((c) => c.id === order.renewClientId
+      && String(c.tgId || '') === String(order.userId));
+    if (client) {
+      try {
+        return { ok: true, renewed: true, plan, client: await topUp(client, plan) };
+      } catch (err) {
+        return { ok: false, error: err.message };
+      }
+    }
+    // the config went away between buying and delivering; cut a new one instead
+  }
+
   try {
     const client = await require('./routes/api').createClient(inbound, {
-      email: `tg-${order.userId}-${String(order.id).slice(0, 4)}`,
+      // what the buyer called it, if they were asked and the name is still free
+      email: uniqueName(cleanName(order.clientName)) || `tg-${order.userId}-${String(order.id).slice(0, 4)}`,
       totalGB: plan.gb || 0,
       /* the clock starts when they first use it, not when they paid: a buyer
          who installs tomorrow has not lost a day of what they bought */
@@ -1067,6 +1342,43 @@ async function deliverOrder(order) {
   } catch (err) {
     return { ok: false, error: err.message };
   }
+}
+
+/**
+ * Add a plan's worth of volume and days to a config that already exists.
+ *
+ * Both are added rather than set: somebody who tops up with a week still to
+ * run keeps that week. An expired or used-up config starts its new allowance
+ * from now, which is the only reading that is not a cheat either way.
+ */
+async function topUp(client, plan) {
+  const now = Date.now();
+  if (plan.gb) {
+    const used = (client.up || 0) + (client.down || 0);
+    const hadGB = Number(client.totalGB) || 0;
+    // an unlimited config stays unlimited; there is nothing to add to
+    if (hadGB) {
+      const leftBytes = Math.max(0, hadGB * 1024 ** 3 - used);
+      client.totalGB = (used + leftBytes) / 1024 ** 3 + plan.gb;
+    }
+  } else {
+    client.totalGB = 0;
+  }
+  if (plan.days) {
+    if (client.expiryTime && client.expiryTime > now) client.expiryTime += plan.days * 86400000;
+    else if (!client.expiryTime && client.startAfterFirstUse && !client.startedAt) {
+      client.expiryDays = (Number(client.expiryDays) || 0) + plan.days;
+    } else {
+      client.expiryTime = now + plan.days * 86400000;
+    }
+  }
+  // a top-up is also a reprieve: whatever had switched it off is settled now
+  client.autoDisabled = false;
+  client.blockedReason = '';
+  client.enable = true;
+  db.saveNow();
+  await require('./xray').apply();
+  return client;
 }
 
 /** The admin looked at the receipt and it was good. */
@@ -1279,9 +1591,15 @@ async function act(ctx, action, value) {
     case 'configs': return showConfigs(ctx);
     /* the usage screen folded into the config list; an old button still works */
     case 'usage': return showConfigs(ctx);
+    case 'cfg': return showConfig(ctx, value);
+    case 'power': return powerConfig(ctx, value);
+    case 'rename': return startRename(ctx, value);
+    case 'newlink': return newLink(ctx, value);
+    case 'renew': return showPlans(ctx, value);
     case 'trial': return startTrial(ctx);
-    case 'custom': return startCustom(ctx);
+    case 'custom': return startCustom(ctx, value);
     case 'support': return openSupport(ctx);
+    case 'answer': return startAnswer(ctx, value);
     case 'joined': {
       const ok = await isMember(ctx.userId, true);
       if (!ok) {
@@ -1291,7 +1609,12 @@ async function act(ctx, action, value) {
       if (ctx.answer) ctx.answer('عضویت تایید شد ✅');
       return showScreen(ctx, 'start');
     }
-    case 'buy': return placeOrder(ctx, value);
+    /* `planId` on its own is a new purchase; a second part means it is a
+       top-up of that config, which skips the name question */
+    case 'buy': {
+      const [planId, renewId] = String(value).split(':');
+      return askName(ctx, planId, renewId || '');
+    }
     case 'pay': {
       const [orderId, method] = String(value).split(':');
       const order = bot().orders.find((o) => o.id === orderId);
@@ -1344,6 +1667,12 @@ async function handle(update) {
     if (ctx.isAdmin && message.reply_to_message) {
       if (await fromSupport(ctx, message)) return null;
     }
+    /* or via the answer button, which named who they are answering */
+    const answering = expected(ctx.userId);
+    if (ctx.isAdmin && answering && answering.kind === 'supportReply' && !text.startsWith('/')) {
+      forget(ctx.userId);
+      if (await fromSupport(ctx, message, answering.data.target)) return null;
+    }
 
     const waiting = openOrder(ctx.userId);
     const looksLikeHash = /^[A-Za-z0-9:_-]{12,}$/.test(text);
@@ -1379,7 +1708,9 @@ async function handle(update) {
     if (waitingFor && !text.startsWith('/')) {
       if (await gate(ctx)) return null;
       if (waitingFor.kind === 'trialName') return takeTrialName(ctx, text);
-      if (waitingFor.kind === 'customGB') return takeCustomGB(ctx, text);
+      if (waitingFor.kind === 'customGB') return takeCustomGB(ctx, text, waitingFor);
+      if (waitingFor.kind === 'orderName') return takeOrderName(ctx, text, waitingFor);
+      if (waitingFor.kind === 'renameConfig') return takeRename(ctx, text, waitingFor);
     }
     if (waitingFor && text.startsWith('/')) forget(ctx.userId);
     if (text === '/stats' && ctx.isAdmin) {

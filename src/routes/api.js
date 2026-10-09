@@ -232,6 +232,7 @@ function botView() {
     trial: b.trial || telegram.defaults().trial,
     trialsTaken: telegram.trialsTaken(),
     custom: b.custom || telegram.defaults().custom,
+    access: b.access || telegram.defaults().access,
     orders: (b.orders || []).slice(0, 60),
     pay: b.pay || telegram.defaults().pay,
     payWays: telegram.payWays(),
@@ -298,6 +299,9 @@ router.put('/bot', async (req, res) => {
       days: Math.max(1, Number(body.custom.days) || 30),
       inboundId: body.custom.inboundId || ''
     };
+  }
+  if (body.access && typeof body.access === 'object') {
+    b.access = { chooseName: body.access.chooseName !== false };
   }
   if (body.pay && typeof body.pay === 'object') {
     const pay = b.pay || telegram.defaults().pay;

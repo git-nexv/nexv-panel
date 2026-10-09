@@ -4705,10 +4705,18 @@ async function renderBot(view) {
     channel: JSON.parse(JSON.stringify(data.channel || { enable: false, id: '', link: '', text: '' })),
     pricePerGB: Number(data.pricePerGB) || 0,
     trial: JSON.parse(JSON.stringify(data.trial || { enable: true, mb: 100, days: 1, inboundId: '', oncePerUser: true })),
-    custom: JSON.parse(JSON.stringify(data.custom || { enable: false, minGB: 1, maxGB: 0, days: 30, inboundId: '' }))
+    custom: JSON.parse(JSON.stringify(data.custom || { enable: false, minGB: 1, maxGB: 0, days: 30, inboundId: '' })),
+    access: JSON.parse(JSON.stringify(data.access || { chooseName: true }))
   };
 
-  const { wrap, panels } = tabbed(['Setup', 'Screens', 'Plans', 'Test config', 'User plan', 'Payment', 'Channel', 'Orders', 'AI']);
+  /*
+   * No Screens tab. The bot is meant to be a simple one - the menus it ships
+   * with are the menus - and a page of free-text editing for them invited
+   * breaking the thing rather than selling with it. The screens themselves are
+   * untouched: they are still loaded, still saved, and still what the bot
+   * shows; there is just no longer a tab for rewriting them.
+   */
+  const { wrap, panels } = tabbed(['Setup', 'Plans', 'Test config', 'Manual plan', 'Access user', 'Payment', 'Channel', 'Orders', 'AI']);
   for (const panel of Object.values(panels)) panel.className = 'tab-panel';
   view.append(wrap);
 
@@ -4716,7 +4724,8 @@ async function renderBot(view) {
     const payload = Object.assign({
       brand: draft.brand, currency: draft.currency, adminId: draft.adminId,
       screens: draft.screens, plans: draft.plans, pay: draft.pay, channel: draft.channel,
-      pricePerGB: draft.pricePerGB, trial: draft.trial, custom: draft.custom
+      pricePerGB: draft.pricePerGB, trial: draft.trial, custom: draft.custom,
+      access: draft.access
     }, extra || {});
     try {
       await api.put('/bot', payload);
@@ -4815,54 +4824,6 @@ async function renderBot(view) {
       ? 'The admin chat is linked, so orders and alerts can reach you.'
       : 'Send /start to your bot from the admin account once, so the panel learns where to send orders.' })
   ]));
-
-  /* ---- Screens ---- */
-  const list = el('div', { class: 'bot-list' });
-  const preview = el('div', { class: 'card bot-preview-card' });
-  const drawPreview = () => {
-    preview.innerHTML = '';
-    preview.append(el('strong', { text: 'Preview' }));
-    for (const screen of draft.screens) {
-      preview.append(el('div', { class: 'muted', style: 'margin:12px 0 4px', text: `/${screen.key}` }));
-      preview.append(botPreview(screen, draft.brand));
-    }
-  };
-  const drawScreens = () => {
-    list.innerHTML = '';
-    const ctx = {
-      refresh: drawScreens,
-      preview: drawPreview,
-      remove: (screen) => { draft.screens = draft.screens.filter((s) => s !== screen); }
-    };
-    for (const screen of draft.screens) list.append(botScreenCard(screen, ctx));
-    list.append(el('button', {
-      class: 'btn', html: `${icon('plus')} Add a screen`,
-      onclick: () => {
-        draft.screens.push({ key: `screen${draft.screens.length + 1}`, title: 'New screen', text: 'Your message here.', buttons: [[{ label: '⬅️ Back', action: 'screen', value: 'start' }]] });
-        drawScreens(); drawPreview();
-      }
-    }));
-    hydrateIcons(list);
-    drawPreview();
-  };
-  drawScreens();
-  panels.Screens.append(
-    el('div', { class: 'row', style: 'margin-bottom:14px' }, [
-      el('button', { class: 'btn primary', text: 'Save the bot', onclick: () => save() }),
-      el('button', {
-        class: 'btn ghost', text: 'Load the Persian starter',
-        onclick: () => confirmDialog('Replace every screen with the Persian starter?', async () => {
-          try {
-            const result = await api.post('/bot/reset-screens', {});
-            draft.screens = result.screens;
-            drawScreens();
-            toast('Starter loaded');
-          } catch (err) { toast(err.message, 'err'); }
-        })
-      })
-    ]),
-    el('div', { class: 'bot-split' }, [list, preview])
-  );
 
   /* ---- Plans ---- */
   const plansBox = el('div');
@@ -4979,7 +4940,7 @@ async function renderBot(view) {
   ]));
   hydrateIcons(panels['Test config']);
 
-  /* ---- User plan: buying by the gigabyte, on a tab of its own ---- */
+  /* ---- Manual plan: buying by the gigabyte, on a tab of its own ---- */
   const custom = draft.custom = draft.custom || { enable: false, minGB: 1, maxGB: 0, days: 30, inboundId: '' };
   const customGrid = el('div', { class: 'form-grid' });
   formField(customGrid, 'Minimum (GB)', bindTo(custom, 'minGB', el('input', { type: 'number', min: '1', value: custom.minGB ?? 1 }), Number), {
@@ -4991,7 +4952,7 @@ async function renderBot(view) {
   formField(customGrid, 'Days', bindTo(custom, 'days', el('input', { type: 'number', min: '1', value: custom.days ?? 30 }), Number));
   formField(customGrid, 'Sold from inbound', inboundPicker(custom, 'inboundId'), { full: true });
 
-  panels['User plan'].append(el('div', { class: 'card' }, [
+  panels['Manual plan'].append(el('div', { class: 'card' }, [
     el('div', { class: 'between', style: 'margin-bottom:12px' }, [
       el('strong', { text: '🎚 Buy by the gigabyte' }), switchFor(custom, 'enable', 'Show it in the bot')
     ]),
@@ -5004,6 +4965,21 @@ async function renderBot(view) {
       el('button', { class: 'btn primary', text: 'Save', onclick: () => save() })
     ])
   ]));
+
+  /* ---- Access user: what the buyer gets to decide for themselves ---- */
+  const access = draft.access = draft.access || { chooseName: true };
+  panels['Access user'].append(el('div', { class: 'card' }, [
+    el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+      el('strong', { text: '✏️ Let the buyer name their own config' }),
+      switchFor(access, 'chooseName', 'Ask for a name')
+    ]),
+    el('div', { class: 'hint', style: 'margin-bottom:14px', text: 'With this on, once a buyer has picked a plan or a volume the bot asks them what to call it, and that is the name the config is made under — so they recognise it in their app and you recognise it in the client list. With it off they are never asked and the name is generated.' }),
+    el('div', { class: 'hint', style: 'margin-bottom:14px', text: 'A name is cleaned to letters, digits, dot, dash and underscore, and a number is added if somebody else already has it. Topping up an existing config never asks: it keeps the name it has.' }),
+    el('div', { class: 'row' }, [
+      el('button', { class: 'btn primary', text: 'Save', onclick: () => save() })
+    ])
+  ]));
+  hydrateIcons(panels['Access user']);
 
   /* ---- Payment ---- */
   const payBox = el('div');
@@ -5256,10 +5232,9 @@ async function renderBot(view) {
                 class: 'btn primary', text: 'Use these screens',
                 onclick: async () => {
                   draft.screens = result.screens;
-                  drawScreens();
                   await save();
                   proposal.innerHTML = '';
-                  toast('The bot was rebuilt — open the Screens tab to fine-tune it');
+                  toast('The bot was rebuilt');
                 }
               }),
               el('button', { class: 'btn ghost', text: 'Discard', onclick: () => { proposal.innerHTML = ''; } })
