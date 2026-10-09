@@ -75,8 +75,10 @@ function messageOf(result) {
 /** systemd is absent in some containers; degrade to config-only mode there. */
 let systemdWarned = false;
 function hasSystemd() {
-  // the canonical check: systemd creates this directory only when it is PID 1
-  const available = fs.existsSync('/run/systemd/system');
+  // the canonical check: systemd creates this directory only when it is PID 1.
+  // The path is settable so the service handling can be exercised off a box
+  // that runs systemd for real.
+  const available = fs.existsSync(process.env.NEXV_SYSTEMD_DIR || '/run/systemd/system');
   if (!available && !systemdWarned) {
     systemdWarned = true;
     console.warn('[xray] systemd unavailable - config is written but the service is not managed');
@@ -1096,6 +1098,46 @@ async function serviceCommand(verb) {
   }
 }
 
+/*
+ * Bring Xray up if it is not up, and leave it alone if it is.
+ *
+ * A fresh install enabled the service but never started it, on the reasoning
+ * that there was no config to serve yet. The effect was that the first thing
+ * anybody saw after installing was a panel reporting "Xray down", which they
+ * then had to start by hand from the header or the terminal - every single
+ * time. There is nothing to wait for: a config with only the panel's own API
+ * inbound in it is a perfectly good config, Xray runs on it happily, and the
+ * moment an inbound is added apply() reloads it.
+ *
+ * It never restarts a running service: a panel that restarts for its own
+ * reasons must not cut off everybody who is connected.
+ */
+async function ensureRunning() {
+  if (!hasSystemd()) return { ok: false, reason: 'systemd is not available here' };
+  if (!fs.existsSync(XRAY_BIN)) return { ok: false, reason: 'the xray binary is not installed yet' };
+
+  const before = await serviceStatus();
+  if (before.running) return { ok: true, already: true };
+
+  // whatever is on disk may be from a version that is gone; make it ours again
+  try { writeConfig(); } catch (err) { return { ok: false, reason: err.message }; }
+  let test = await testConfig();
+  if (!test.ok) {
+    /* the stored setup does not build into something Xray will take. Rather
+       than leave the service down, put back the last config it did start on,
+       or an empty one, so the panel is at least running and can be fixed */
+    if (!rollBack(null)) writeMinimalConfig();
+    test = await testConfig();
+    if (!test.ok) return { ok: false, reason: test.message || 'xray refused every config' };
+  }
+
+  const started = await serviceCommand('start');
+  if (!started.ok) return { ok: false, reason: messageOf(started) };
+  const after = await serviceStatus();
+  if (after.running) keepGood();
+  return { ok: after.running, reason: after.running ? '' : (after.reason || 'the service did not come up') };
+}
+
 async function restart() { return serviceCommand('restart'); }
 async function stop() { return serviceCommand('stop'); }
 async function start() { return serviceCommand('start'); }
@@ -1324,6 +1366,6 @@ module.exports = {
   buildConfig, writeConfig, testConfig, apply, serviceStatus, repairCerts, messageOf, isOverIpLimit,
   outboundConfig, outboundStream,
   INBOUND_PROTOCOLS, OUTBOUND_PROTOCOLS, CLIENT_PROTOCOLS, LINK_PROTOCOLS,
-  restart, start, stop, collectTraffic, enforceLimits, ensureAccessLog, accessLogUsable, ACCESS_LOG, rateFor,
+  restart, start, stop, ensureRunning, collectTraffic, enforceLimits, ensureAccessLog, accessLogUsable, ACCESS_LOG, rateFor,
   clientTag, isExpired, isOverQuota, inboundDead, generateReality, generateECH, parseECH, run, serviceUser
 };

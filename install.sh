@@ -617,6 +617,9 @@ Environment=NEXV_ADMIN_PASS=$ADMIN_PASS
 Restart=always
 RestartSec=3
 LimitNOFILE=65535
+# Belt and braces for a stop that hangs: the default is ninety seconds, and a
+# minute and a half of nothing happening is indistinguishable from a freeze.
+TimeoutStopSec=15
 
 [Install]
 WantedBy=multi-user.target

@@ -436,6 +436,17 @@ async function bootstrap() {
     db.saveNow();
   }
   try { xray.writeConfig(); } catch (err) { console.error('[xray] cannot write config:', err.message); }
+  /*
+   * And bring it up if it is down. A fresh install used to leave the service
+   * enabled but stopped, so the first thing anybody saw after installing was
+   * a panel reporting "Xray down" that they had to start by hand. A running
+   * service is never touched, so a panel restart does not cut anybody off.
+   */
+  xray.ensureRunning().then((result) => {
+    if (result.already) return;
+    if (result.ok) console.log('[xray] started');
+    else if (result.reason) console.log(`[xray] not started: ${result.reason}`);
+  }).catch((err) => console.error('[xray] could not be started:', err.message));
   // a bot that was running before the restart starts polling again on its own
   try { require('./telegram').resume(); } catch (err) { console.error('[bot] could not resume:', err.message); }
   // and from here on xray gets itself picked up when it falls over

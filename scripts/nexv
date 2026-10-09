@@ -131,6 +131,18 @@ lock_sum() {
   ' 2>/dev/null || echo "unknown-$RANDOM"
 }
 
+# Settings the unit file needs that an older install was written without. The
+# panel is updated far more often than it is reinstalled, so a line added to
+# the installer would otherwise never reach a machine that already has it.
+refresh_unit() {
+  local unit="/etc/systemd/system/${SERVICE}.service"
+  [[ -f $unit ]] || return 0
+  grep -q '^TimeoutStopSec=' "$unit" && return 0
+  # after the last Restart/Limit line, before [Install]
+  sed -i 's/^\[Install\]$/TimeoutStopSec=15\n\n[Install]/' "$unit"
+  systemctl daemon-reload 2>/dev/null || true
+}
+
 act_update() {
   need_root
   local before after rc
@@ -185,6 +197,7 @@ act_update() {
   fi
 
   install -m 755 "$INSTALL_DIR/scripts/nexv" /usr/local/bin/nexv
+  refresh_unit
   echo "Restarting the panel..."
   systemctl restart "$SERVICE"
   ok "Panel updated"

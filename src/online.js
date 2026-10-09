@@ -321,9 +321,23 @@ function start() {
   timer.unref?.();
   const writer = setInterval(save, SAVE_EVERY);
   writer.unref?.();
-  // a clean shutdown should not throw away the last minute of history
-  process.once('SIGTERM', save);
-  process.once('SIGINT', save);
+  /*
+   * A clean shutdown should not throw away the last minute of history - but
+   * it does have to be a shutdown.
+   *
+   * Listening for SIGTERM replaces node's own handler, and node's own handler
+   * is the one that ends the process. So the panel saved its history and then
+   * carried on running, systemd waited out the full ninety seconds of its
+   * stop timeout and killed it. Stopping the panel took a minute and a half,
+   * restarting it took three, and almost every entry in the terminal menu
+   * restarts the panel - which is why the whole menu felt frozen.
+   */
+  const bye = () => {
+    try { save(); } catch (_) { /* a shutdown is not the place to throw */ }
+    process.exit(0);
+  };
+  process.once('SIGTERM', bye);
+  process.once('SIGINT', bye);
   return timer;
 }
 
