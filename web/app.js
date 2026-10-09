@@ -124,12 +124,51 @@ const tHtml = (value) => String(value).replace(/(^|>)([^<>]+)(?=<|$)/g, (whole, 
 
 const TRANSLATED_ATTRS = ['title', 'placeholder', 'aria-label'];
 
+/*
+ * A button whose job takes a moment says so, and only does it once.
+ *
+ * Pressing Save used to leave the key looking exactly as it had before while
+ * a request went off to the server. Over a slow link that reads as a key that
+ * did nothing, so it gets pressed again, and again - and every one of those
+ * presses really did fire, so the save ran eight times and the eighth one's
+ * toast was the one that finally appeared. Now the first press takes the key
+ * out of service until its work is finished, and the key shows it is working
+ * while it waits.
+ */
+function guardAsync(node, handler) {
+  let running = false;
+  return async function (event) {
+    if (running) { event.preventDefault(); return undefined; }
+    let result;
+    try {
+      result = handler.call(this, event);
+    } catch (err) {
+      throw err;
+    }
+    // a handler that finishes there and then needs none of this
+    if (!result || typeof result.then !== 'function') return result;
+    running = true;
+    node.classList.add('working');
+    node.setAttribute('aria-busy', 'true');
+    try {
+      return await result;
+    } finally {
+      running = false;
+      node.classList.remove('working');
+      node.removeAttribute('aria-busy');
+    }
+  };
+}
+
 const el = (tag, attrs = {}, children = []) => {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
     if (key === 'class') node.className = value;
     else if (key === 'html') node.innerHTML = tHtml(value);
     else if (key === 'text') node.textContent = t(value);
+    else if (key === 'onclick' && typeof value === 'function' && tag === 'button') {
+      node.addEventListener('click', guardAsync(node, value));
+    }
     else if (key.startsWith('on') && typeof value === 'function') node.addEventListener(key.slice(2), value);
     else if (value !== null && value !== undefined && value !== false) {
       node.setAttribute(key, TRANSLATED_ATTRS.includes(key) ? t(value) : value);
@@ -339,6 +378,8 @@ function modal({ title, subtitle, body, actions, width }) {
       bar.append(el('button', {
         class: `btn ${action.kind || 'ghost'}`,
         text: action.label,
+        /* returned, not dropped: el() watches for a promise here and holds the
+           key out of service until the work behind it is done */
         onclick: () => action.onClick(close)
       }));
     }

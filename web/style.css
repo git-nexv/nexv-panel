@@ -55,17 +55,29 @@
   --dot-lit: rgba(255,255,255,.26);
 
   /*
-   * Glass, in three depths. Each is a wash rather than a colour: what you see
-   * through a card is the page, dimmed. Going up the stack the wash thickens
-   * and the hairline brightens, which is the whole of the depth cue.
+   * Glass, in three depths. Each is the ground with a little light stirred
+   * into it, kept at an opacity that actually covers what is behind it.
+   *
+   * It used to be a wash of pure white at five per cent. Blur alone does not
+   * hide anything - it only smears it - so a card over a card, the bar over a
+   * heading, the dock over a button all showed both at once and read as boxes
+   * run into each other. Mixing the ground in fixes that everywhere at once,
+   * and because the mix is taken from --bg each skin gets its own glass for
+   * free.
    */
-  --glass: rgba(255,255,255,.055);
-  --glass-2: rgba(255,255,255,.085);
-  --glass-3: rgba(255,255,255,.125);
-  --glass-edge: rgba(255,255,255,.10);
-  --glass-edge-2: rgba(255,255,255,.16);
+  --pane: color-mix(in srgb, var(--bg) 88%, #ffffff);
+  --pane-2: color-mix(in srgb, var(--bg) 80%, #ffffff);
+  --pane-3: color-mix(in srgb, var(--bg) 71%, #ffffff);
+  --glass: color-mix(in srgb, var(--pane) 88%, transparent);
+  --glass-2: color-mix(in srgb, var(--pane-2) 92%, transparent);
+  --glass-3: color-mix(in srgb, var(--pane-3) 96%, transparent);
+  --glass-edge: rgba(255,255,255,.14);
+  --glass-edge-2: rgba(255,255,255,.24);
   /* the highlight along the top of a pane, which is what sells it as glass */
-  --glass-sheen: rgba(255,255,255,.14);
+  --glass-sheen: rgba(255,255,255,.16);
+  /* what floats over the page rather than sitting in it - the bar, the dock,
+     a dialog, a toast. Nothing may read through these at all. */
+  --chrome: color-mix(in srgb, var(--pane) 96%, transparent);
   --blur: 22px;
 
   /* cards are glass now; the names stay so nothing downstream has to change */
@@ -110,12 +122,16 @@
   --dot: rgba(16,17,20,.075);
   --dot-lit: rgba(16,17,20,.18);
 
-  --glass: rgba(255,255,255,.62);
-  --glass-2: rgba(255,255,255,.78);
-  --glass-3: rgba(255,255,255,.92);
-  --glass-edge: rgba(16,17,20,.10);
-  --glass-edge-2: rgba(16,17,20,.20);
-  --glass-sheen: rgba(255,255,255,.85);
+  --pane: color-mix(in srgb, var(--bg) 26%, #ffffff);
+  --pane-2: color-mix(in srgb, var(--bg) 12%, #ffffff);
+  --pane-3: #ffffff;
+  --glass: color-mix(in srgb, var(--pane) 90%, transparent);
+  --glass-2: color-mix(in srgb, var(--pane-2) 94%, transparent);
+  --glass-3: color-mix(in srgb, var(--pane-3) 97%, transparent);
+  --glass-edge: rgba(16,17,20,.14);
+  --glass-edge-2: rgba(16,17,20,.26);
+  --glass-sheen: rgba(255,255,255,.9);
+  --chrome: color-mix(in srgb, var(--pane) 97%, transparent);
 
   --text: #16171b;
   --muted: #4c505a;
@@ -344,7 +360,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   padding: 8px 10px 8px 16px;
   border-radius: 999px;
   border: 1px solid var(--glass-edge);
-  background: var(--glass);
+  background: var(--chrome);
   -webkit-backdrop-filter: blur(14px) saturate(125%);
   backdrop-filter: blur(14px) saturate(125%);
   box-shadow: var(--glass-shadow);
@@ -769,7 +785,7 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
   max-width: min(390px, 100%);
   padding: 7px 14px; border-radius: 14px;
   font-size: 12.5px; font-weight: 600; line-height: 1.45;
-  background: var(--card); border: 1px solid var(--border-strong);
+  background: var(--chrome); border: 1px solid var(--border-strong);
   box-shadow: var(--shadow);
 }
 /* the same dot the status chips use, in the same two colours */
@@ -822,12 +838,20 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
 @keyframes shimmer { to { background-position: -200% 0; } }
 
 @media (max-width: 900px) {
-  /* the off-canvas sidebar sits outside the viewport; don't let it widen the page.
-     safe here because the sidebar is position:fixed at this breakpoint, not sticky */
-  body, .app { overflow-x: hidden; }
+  /*
+   * The off-canvas sidebar sits outside the viewport; don't let it widen the
+   * page. `clip` and not `hidden`: hidden turns the element into a scroll
+   * container, and the top bar - which is sticky and lives inside .app - then
+   * had nothing to stick to, so on every phone it scrolled away and left the
+   * page showing under the status bar. `clip` cuts the overflow without
+   * making a scroller, so the bar stays put.
+   */
+  body, .app { overflow-x: clip; }
   .topbar { flex-wrap: wrap; row-gap: 8px; }
   .topbar h1 { font-size: 15.5px; }
-  .content { padding: 18px 14px 50px; }
+  /* the dock floats 10px off the bottom and is 52px tall, so anything less
+     than that plus a margin leaves the last button sitting underneath it */
+  .content { padding: 18px 14px calc(96px + env(safe-area-inset-bottom)); }
   .topbar { padding: 12px 14px; }
   .form-grid { grid-template-columns: 1fr; }
   /* two across: eight of these stacked was most of a screen of scrolling to
@@ -1144,6 +1168,32 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
   border: 1px solid var(--glass-edge);
   box-shadow: var(--glass-shadow);
 }
+
+/* what floats over the page is opaque: the bar, the dock and a dialog sit on
+   top of whatever you were reading, and a heading showing through one of them
+   is the single thing that made the panel look like boxes inside boxes */
+.topbar,
+.dock-bar,
+.dock-more,
+.dock-solo,
+.modal,
+.popup,
+.toast {
+  background: var(--chrome);
+}
+/*
+ * And the bar stays put. It is declared sticky where it is defined, but the
+ * shared glass rule further up sets `position: relative` on everything it
+ * touches and quietly won - so the bar scrolled away with the page and left
+ * whatever you were reading sitting under the phone's status bar, which is
+ * what made the top of the screen look like two things printed on top of
+ * each other.
+ */
+.topbar {
+  position: sticky;
+  top: max(10px, env(safe-area-inset-top));
+}
+
 /* the bright hairline along the top edge that sells the material */
 .glass::before {
   content: '';
@@ -1333,7 +1383,7 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
   .dock-item svg { width: 20px; height: 20px; }
 }
 /* the dock is the navigation, so every layout leaves room for it */
-.content { padding-bottom: 96px; }
+.content { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
 
 @media (prefers-reduced-motion: reduce) {
   .dock-item, .dock-thumb, .dock-more, .dock-row, .dock-item svg, .dock-row svg {
@@ -1373,10 +1423,30 @@ tbody tr:nth-child(n+6) { animation-delay: 110ms; }
     box-shadow .28s var(--glide);
 }
 .btn:active, .nav-item:active { transform: scale(.97); }
+
+/*
+ * A key doing something. The stripe crossing it is the only thing on screen
+ * that says the press landed, which is the difference between waiting and
+ * pressing it another seven times.
+ */
+.btn.working {
+  position: relative; overflow: hidden;
+  cursor: progress; opacity: .82;
+}
+.btn.working > * { opacity: .6; }
+.btn.working::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, var(--glass-sheen), transparent);
+  animation: btn-working 1s linear infinite;
+}
+@keyframes btn-working { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) {
+  .btn.working::after { animation: none; opacity: .35; }
+}
 .card:hover { transform: translateY(-1px); }
 
 /* dialogs and menus share the dock's material and its spring */
-.modal, .popup { background: var(--glass); -webkit-backdrop-filter: blur(16px) saturate(125%); backdrop-filter: blur(16px) saturate(125%); border-color: var(--glass-edge); }
+.modal, .popup { background: var(--chrome); -webkit-backdrop-filter: blur(16px) saturate(125%); backdrop-filter: blur(16px) saturate(125%); border-color: var(--glass-edge); }
 .modal { animation: modal-in .42s var(--spring) both; }
 @keyframes modal-in {
   from { opacity: 0; transform: translateY(18px) scale(.94); }
@@ -1786,11 +1856,12 @@ td .row-actions { display: inline-flex; width: auto; }
   --glow: 255, 255, 255;
   --dot: rgba(255,255,255,.07);
   --dot-lit: rgba(255,255,255,.2);
-  --glass: rgba(255,255,255,.04);
-  --glass-2: rgba(255,255,255,.07);
-  --glass-3: rgba(255,255,255,.11);
-  --glass-edge: rgba(255,255,255,.16);
-  --glass-edge-2: rgba(255,255,255,.3);
+  /* mono keeps its flatter panes; the glass formula above does the rest */
+  --pane: color-mix(in srgb, var(--bg) 92%, #ffffff);
+  --pane-2: color-mix(in srgb, var(--bg) 86%, #ffffff);
+  --pane-3: color-mix(in srgb, var(--bg) 78%, #ffffff);
+  --glass-edge: rgba(255,255,255,.2);
+  --glass-edge-2: rgba(255,255,255,.34);
   --text: #ffffff;
   --muted: #b9bcc2;
   --faint: #83868d;
@@ -1810,8 +1881,11 @@ td .row-actions { display: inline-flex; width: auto; }
   --glow: 90, 92, 98;
   --dot: rgba(0,0,0,.08);
   --dot-lit: rgba(0,0,0,.2);
-  --glass-edge: rgba(0,0,0,.16);
-  --glass-edge-2: rgba(0,0,0,.34);
+  --pane: color-mix(in srgb, var(--bg) 18%, #ffffff);
+  --pane-2: color-mix(in srgb, var(--bg) 8%, #ffffff);
+  --pane-3: #ffffff;
+  --glass-edge: rgba(0,0,0,.2);
+  --glass-edge-2: rgba(0,0,0,.38);
   --text: #0d0e10;
   --muted: #45484e;
   --faint: #6a6d74;
@@ -1835,8 +1909,9 @@ td .row-actions { display: inline-flex; width: auto; }
   --glass: #212328;
   --glass-2: #282a30;
   --glass-3: #31343b;
-  --glass-edge: #34373e;
-  --glass-edge-2: #474b54;
+  --chrome: #212328;
+  --glass-edge: #3c404899;
+  --glass-edge-2: #545965;
   --glass-sheen: transparent;
   --text: #f1f2f4;
   --muted: #a9adb5;
@@ -1856,8 +1931,9 @@ td .row-actions { display: inline-flex; width: auto; }
   --glass: #ffffff;
   --glass-2: #f4f5f7;
   --glass-3: #e8eaee;
-  --glass-edge: #dcdee3;
-  --glass-edge-2: #b9bdc6;
+  --chrome: #ffffff;
+  --glass-edge: #d2d5dc;
+  --glass-edge-2: #a9aeb9;
   --glass-sheen: transparent;
   --text: #15161a;
   --muted: #4d515a;
