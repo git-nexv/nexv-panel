@@ -1334,6 +1334,9 @@ router.get('/clients', (req, res) => {
       // moving traffic right now counts as online even before a new connection
       // shows up in the access log, which is only read every ten seconds
       online: live.online || rate.up + rate.down > 0,
+      /* when this client last had a connection accepted. Zero means the panel
+         has never seen one - a config that was made and never used */
+      lastSeen: live.lastSeen || 0,
       speed: { up: Math.round(rate.up), down: Math.round(rate.down) },
       ips: live.ips,
       ipCount: live.ips.length

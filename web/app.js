@@ -224,6 +224,30 @@ function exactSpan(ms) {
   return parts.join(' ');
 }
 
+/**
+ * How long ago, in the fewest words that are still true.
+ *
+ * "last seen 14 Sept 2026, 09:12" is the honest answer and the wrong one: what
+ * anybody wants from this column is whether it was minutes or months, read at
+ * a glance down a list. The exact moment goes in the tooltip.
+ */
+function ago(ts) {
+  if (!ts) return '';
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 45) return 'just now';
+  if (s < 90) return 'a minute ago';
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return h === 1 ? 'an hour ago' : `${h} hours ago`;
+  const d = Math.round(h / 24);
+  if (d < 30) return d === 1 ? 'yesterday' : `${d} days ago`;
+  const mo = Math.round(d / 30);
+  if (mo < 12) return mo === 1 ? 'a month ago' : `${mo} months ago`;
+  const y = Math.round(mo / 12);
+  return y === 1 ? 'a year ago' : `${y} years ago`;
+}
+
 function duration(seconds) {
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
@@ -2431,6 +2455,15 @@ function liveCell(client) {
             ? `${client.ipCount} / ${client.limitIp} IP`
             : `${client.ipCount} IP${client.ipCount > 1 ? 's' : ''}`,
           onclick: () => showClientActivity(client, 'Addresses')
+        })
+        : null,
+      /* when it was last connected. Only worth saying while it is not: an
+         online client's answer to "when was it last seen" is "now" */
+      !client.online
+        ? el('div', {
+          class: 'faint live-seen',
+          title: client.lastSeen ? `Last connected ${fmtDate(client.lastSeen)}` : 'Never connected',
+          text: client.lastSeen ? ago(client.lastSeen) : 'never used'
         })
         : null
     ])

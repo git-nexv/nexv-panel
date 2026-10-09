@@ -100,6 +100,25 @@ const OTHER = { kind: 'other', label: 'Something else' };
 const RAW_IP = { kind: 'ip', label: 'Plain addresses' };
 
 /*
+ * A bare address the range table recognised. "Plain addresses" was the honest
+ * answer when nothing here could say more, and it was also useless: an admin
+ * looking at forty numbers wants to know whether they are Telegram, a CDN, or
+ * somebody's home connection. Each kind the table can report gets a label of
+ * its own here so the groups on the page read as sentences rather than codes.
+ */
+const ipname = require('./ipname');
+const IP_KINDS = {
+  chat: { kind: 'chat', label: 'Messaging & calls' },
+  social: { kind: 'social', label: 'Social' },
+  cdn: { kind: 'cdn', label: 'CDN & hosting' },
+  cloud: { kind: 'cloud', label: 'Cloud servers' },
+  dns: { kind: 'dns', label: 'DNS' },
+  local: { kind: 'local', label: 'Local network' },
+  'local-country': { kind: 'local-country', label: 'Inside the country' },
+  other: { kind: 'ip-known', label: 'Named addresses' }
+};
+
+/*
  * The app behind a hostname.
  *
  * "scontent-fra3-2.cdninstagram.com" is Instagram and
@@ -170,7 +189,10 @@ const APPS = [
  */
 function appOf(host) {
   const name = String(host || '').toLowerCase().replace(/\.$/, '');
-  if (!name || looksLikeAddress(name)) return '';
+  if (!name) return '';
+  /* a bare address: the only thing that can name it is who the range belongs
+     to, and that is better than a row of digits however approximate it is */
+  if (looksLikeAddress(name)) return ipname.nameOf(name);
   for (const [label, needles] of APPS) {
     for (const needle of needles) {
       if (needle.includes('.')) {
@@ -197,7 +219,10 @@ function looksLikeAddress(host) {
 function kindOf(host) {
   const name = String(host || '').toLowerCase().replace(/\.$/, '');
   if (!name) return OTHER;
-  if (looksLikeAddress(name)) return RAW_IP;
+  if (looksLikeAddress(name)) {
+    const hit = ipname.lookup(name);
+    return (hit && IP_KINDS[hit.kind]) || RAW_IP;
+  }
 
   for (const group of KINDS) {
     for (const needle of group.match) {
@@ -215,9 +240,10 @@ function kindOf(host) {
 function labels() {
   const out = {};
   for (const group of KINDS) out[group.kind] = group.label;
+  for (const group of Object.values(IP_KINDS)) out[group.kind] = group.label;
   out[RAW_IP.kind] = RAW_IP.label;
   out[OTHER.kind] = OTHER.label;
   return out;
 }
 
-module.exports = { kindOf, appOf, labels, KINDS, APPS };
+module.exports = { kindOf, appOf, labels, KINDS, APPS, IP_KINDS };

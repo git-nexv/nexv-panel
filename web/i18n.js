@@ -838,7 +838,16 @@ const FA = {
   'Cloud & updates': 'کلود و آپدیت',
   'Web & search': 'وب و جست‌وجو',
   'Something else': 'چیز دیگر',
-  'Plain addresses': 'آی‌پی خام',
+  'Plain addresses': 'آی‌پی ناشناس',
+  /* a bare address the range table could put a name to */
+  'CDN & hosting': 'شبکه توزیع محتوا',
+  'Cloud servers': 'سرور ابری',
+  'DNS': 'دی‌ان‌اس',
+  'Local network': 'شبکه داخلی',
+  'Inside the country': 'داخل کشور',
+  'Named addresses': 'آی‌پی شناسایی‌شده',
+  'Iran (domestic)': 'ایران (داخلی)',
+  'Meta (Instagram, WhatsApp, Facebook)': 'متا (اینستاگرام، واتساپ، فیسبوک)',
 
   /* ----------------------------- settings ----------------------------- */
   'General': 'عمومی',
@@ -915,6 +924,16 @@ const FA = {
     'REALITY به یک جفت کلید نیاز دارد — کنار کلید خصوصی دکمه‌ی ساختن را بزنید',
   'that REALITY private key is not a valid key - press Generate to make a new pair':
     'این کلید خصوصی REALITY معتبر نیست — دکمه‌ی ساختن را بزنید تا جفت کلید تازه ساخته شود',
+
+  /* when a client was last connected, said in the fewest words that are true */
+  'just now': 'همین حالا',
+  'a minute ago': 'یک دقیقه پیش',
+  'an hour ago': 'یک ساعت پیش',
+  'yesterday': 'دیروز',
+  'a month ago': 'یک ماه پیش',
+  'a year ago': 'یک سال پیش',
+  'never used': 'هیچ‌وقت وصل نشده',
+  'Never connected': 'هیچ‌وقت وصل نشده',
 
   /* several inbounds for one client: each is a separate way in */
   'Tick every inbound this client should be able to connect through. The subscription carries one config per inbound.':
@@ -1117,7 +1136,12 @@ const PATTERNS = [
   [/^Looked (.+)\. The panel keeps looking on its own\.$/,
     (m) => `${m[1]} بررسی شد. پنل خودش دنبالش می‌گردد.`],
   [/^(\d+) minutes ago$/, (m) => `${m[1]} دقیقه پیش`],
+  [/^(\d+) min ago$/, (m) => `${m[1]} دقیقه پیش`],
   [/^(\d+) hours ago$/, (m) => `${m[1]} ساعت پیش`],
+  [/^(\d+) days ago$/, (m) => `${m[1]} روز پیش`],
+  [/^(\d+) months ago$/, (m) => `${m[1]} ماه پیش`],
+  [/^(\d+) years ago$/, (m) => `${m[1]} سال پیش`],
+  [/^Last connected (.+)$/, (m) => `آخرین اتصال: ${m[1]}`],
   [/^(.+) is missing - update with: nexv update$/, (m) => `${m[1]} وجود ندارد — با این دستور به‌روزرسانی کنید: nexv update`],
   [/^Updating to (.+)$/, (m) => `در حال به‌روزرسانی به ${m[1]}`],
   [/^Updated to (.+)$/, (m) => `به ${m[1]} به‌روز شد`],

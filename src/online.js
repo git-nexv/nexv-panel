@@ -31,6 +31,9 @@ const ONLINE_TTL = 60 * 1000; // and a client counts as online for this long
  * to ride along with it.
  */
 const SITE_TTL = 7 * 24 * 60 * 60 * 1000;
+/* "last connected" is kept far longer than anything else here: a client that
+   has not been seen for a month is exactly the one somebody asks about */
+const LAST_SEEN_TTL = 180 * 24 * 60 * 60 * 1000;
 const SITES_PER_TAG = 250;    // most-recent wins once a client is past this
 const SAVE_EVERY = 60 * 1000;
 
@@ -157,7 +160,9 @@ function prune(now) {
     for (const [host, site] of entry.sites) {
       if (now - site.at > SITE_TTL) entry.sites.delete(host);
     }
-    if (!entry.ips.size && !entry.sites.size && now - entry.lastSeen > IP_TTL) seen.delete(tag);
+    /* an entry with nothing current in it still holds when this client was
+       last connected, which is worth keeping long after the addresses are */
+    if (!entry.ips.size && !entry.sites.size && now - entry.lastSeen > LAST_SEEN_TTL) seen.delete(tag);
   }
 }
 
@@ -174,18 +179,28 @@ function load() {
       entry.sites.set(host, { hits: Number(value.hits) || 0, at: Number(value.at) || 0 });
     }
   }
+  /* when somebody was last connected, which is a question about last month as
+     often as about this minute, so it has to survive the panel restarting */
+  for (const [tag, at] of Object.entries(raw.lastSeen || {})) {
+    const when = Number(at) || 0;
+    if (!when || now - when > LAST_SEEN_TTL) continue;
+    const entry = entryFor(tag);
+    if (when > entry.lastSeen) entry.lastSeen = when;
+  }
 }
 
 function save() {
   if (!state.dirty) return;
   const tags = {};
+  const lastSeen = {};
   for (const [tag, entry] of seen) {
+    if (entry.lastSeen) lastSeen[tag] = entry.lastSeen;
     if (!entry.sites || !entry.sites.size) continue;
     tags[tag] = Object.fromEntries(entry.sites);
   }
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(`${SITE_FILE}.tmp`, JSON.stringify({ savedAt: Date.now(), tags }), { mode: 0o600 });
+    fs.writeFileSync(`${SITE_FILE}.tmp`, JSON.stringify({ savedAt: Date.now(), tags, lastSeen }), { mode: 0o600 });
     fs.renameSync(`${SITE_FILE}.tmp`, SITE_FILE);
     state.dirty = false;
   } catch (err) {
