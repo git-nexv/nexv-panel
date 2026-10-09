@@ -1034,6 +1034,21 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
   display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none;
   border-bottom: 1px solid var(--border); margin: -4px 0 18px;
 }
+/*
+ * The strip scrolls sideways and hides its scrollbar, so on a phone the Bot
+ * page's nine tabs ended at a half-drawn word with nothing to say there were
+ * more. `.more-after` fades the last one out instead of chopping it, which
+ * reads as "keep going" the way a cut edge does not; the class is put on and
+ * taken off as it is scrolled, so a strip with nothing hidden has no fade.
+ */
+.tabs.more-after {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 30px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 30px), transparent);
+}
+[dir="rtl"] .tabs.more-after {
+  -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 30px), transparent);
+  mask-image: linear-gradient(to left, #000 calc(100% - 30px), transparent);
+}
 .tabs::-webkit-scrollbar { display: none; }
 .tab {
   flex: 0 0 auto; padding: 10px 14px; cursor: pointer; white-space: nowrap;
@@ -1195,6 +1210,46 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
   top: max(10px, env(safe-area-inset-top));
 }
 
+/*
+ * What the bar and the dock are standing on.
+ *
+ * Both of them are pills floating over a page that keeps scrolling underneath,
+ * and the page was simply sliced by them: a card's rounded edge ran up to the
+ * pill, the pill sat in the gap, and the same card carried on out the other
+ * side. Read quickly that is not a pill over a card, it is a box inside a box,
+ * which is exactly what it looked like.
+ *
+ * So each one carries a band of the page's own background, solid behind the
+ * pill and fading out past it. Whatever scrolls under them dissolves into the
+ * page instead of being cut in half. It takes no presses: the band is drawn
+ * behind its own pill and lets everything through.
+ */
+.topbar::before,
+.dock::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+}
+.topbar::before {
+  /* out past the bar's own 14px side margin, and up over the status bar */
+  inset-inline: -18px;
+  top: calc(-1 * max(10px, env(safe-area-inset-top)) - 14px);
+  bottom: -20px;
+  background: linear-gradient(to bottom,
+    var(--bg) 0%, var(--bg) 62%, color-mix(in srgb, var(--bg) 55%, transparent) 82%, transparent 100%);
+}
+.dock::before {
+  inset-inline: calc(-1 * var(--dock-inset) - 6px);
+  top: -22px;
+  bottom: calc(-1 * (10px + env(safe-area-inset-bottom)) - 6px);
+  background: linear-gradient(to top,
+    var(--bg) 0%, var(--bg) 58%, color-mix(in srgb, var(--bg) 55%, transparent) 80%, transparent 100%);
+}
+/* the flat skin has no glass and no drifting ground, so the band is plain */
+[data-skin="flat"] .topbar::before { background: linear-gradient(to bottom, var(--bg) 70%, transparent); }
+[data-skin="flat"] .dock::before { background: linear-gradient(to top, var(--bg) 70%, transparent); }
+
 /* the bright hairline along the top edge that sells the material */
 .glass::before {
   content: '';
@@ -1227,7 +1282,19 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
   display: flex; align-items: center; justify-content: center; gap: var(--dock-gap);
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
+  /*
+   * The container is a full-width strip and the pill inside it is not: either
+   * side of the pill, and in the gap before the More key, it was an invisible
+   * 52px-tall bar lying across the bottom of every page and eating every tap
+   * that landed on it. A button there simply did nothing - press it again
+   * after the page has shifted a few pixels and it works, which is why it took
+   * seven or eight goes. Only the things you can actually see take a press.
+   */
+  pointer-events: none;
 }
+.dock-bar,
+.dock-solo,
+.dock-more { pointer-events: auto; }
 .dock * { -webkit-user-select: none; user-select: none; }
 
 .dock-bar {

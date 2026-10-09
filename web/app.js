@@ -1406,6 +1406,17 @@ function tabbed(names) {
     bar.append(tab);
   });
 
+  /* the strip scrolls sideways; say so only while something is still off it */
+  const markOverflow = () => {
+    const room = bar.scrollWidth - bar.clientWidth;
+    const atEnd = Math.abs(bar.scrollLeft) >= room - 2;
+    bar.classList.toggle('more-after', room > 4 && !atEnd);
+  };
+  bar.addEventListener('scroll', markOverflow, { passive: true });
+  // after layout, when the widths are real
+  requestAnimationFrame(markOverflow);
+  window.addEventListener('resize', markOverflow, { passive: true });
+
   wrap.append(bar, ...Object.values(panels));
   return { wrap, panels };
 }
