@@ -351,9 +351,32 @@ function buyerLines(order) {
   ];
 }
 
+/*
+ * How a plan is put to a buyer, everywhere: the name the admin typed, and what
+ * it costs. Nothing else.
+ *
+ * It used to spell out the quota and the days as well, so a button read
+ * "50 گیگ | 30 روزه — 50 گیگ / 30 روز · 25000 تومان": the admin's own name had
+ * already said all of that once, and Telegram then cut the line off before the
+ * price - the one part of it they could not have written into the name
+ * themselves. What the name says is the admin's business; the price is ours.
+ */
+function planPrice(plan) {
+  const price = String(plan.price || '').trim();
+  if (!price) return '';
+  return `${price} ${String(bot().currency || '').trim()}`.trim();
+}
+
+/** For a message, where the name is marked up. */
 function planLine(plan) {
-  const b = bot();
-  return `${escapeHtml(plan.name)} — ${plan.gb ? `${plan.gb} گیگ` : 'نامحدود'} / ${plan.days} روز · ${plan.price} ${escapeHtml(b.currency)}`;
+  const price = planPrice(plan);
+  return `<b>${escapeHtml(plan.name)}</b>${price ? ` — ${escapeHtml(price)}` : ''}`;
+}
+
+/** The same thing for a button, where Telegram parses no markup at all. */
+function planButton(plan) {
+  const price = planPrice(plan);
+  return `${plan.name}${price ? ` — ${price}` : ''}`;
 }
 
 function isAdmin(from) {
@@ -439,7 +462,7 @@ async function showPlans(ctx, renewId) {
   const b = bot();
   const plans = b.plans.filter((p) => p.enable !== false && !p.custom);
   const tail = renewId ? `:${renewId}` : '';
-  const rows = plans.map((p) => ([{ text: planLine(p).replace(/<[^>]+>/g, ''), callback_data: `b:buy:${p.id}${tail}` }]));
+  const rows = plans.map((p) => ([{ text: planButton(p), callback_data: `b:buy:${p.id}${tail}` }]));
   if (customOn()) rows.push([{ text: '🎚 حجم دلخواه', callback_data: `b:custom:${renewId || ''}` }]);
   if (!rows.length) {
     return reply(ctx, 'فعلاً اشتراکی برای فروش تعریف نشده است.', renewId ? [[{ text: '⬅️ بازگشت', callback_data: `b:cfg:${renewId}` }]] : backRow());
@@ -871,7 +894,6 @@ async function askName(ctx, planId, renewId) {
   if (!plan) return reply(ctx, 'این اشتراک دیگر موجود نیست.', backRow());
   expect(ctx.userId, 'orderName', { planId });
   return reply(ctx, [
-    `<b>${escapeHtml(plan.name)}</b>`,
     planLine(plan),
     '',
     '✏️ یک <b>نام</b> برای کانفیگتان بفرستید.',
@@ -1130,7 +1152,6 @@ async function placeOrder(ctx, planId, clientName, renewId) {
      appears here without this having to be touched again. */
   const label = { card: '💳 کارت به کارت', crypto: '🪙 ارز دیجیتال' };
   return reply(ctx, [
-    `<b>${escapeHtml(plan.name)}</b>`,
     planLine(plan),
     order.clientName ? `نام کانفیگ: <b>${escapeHtml(order.clientName)}</b>` : '',
     '',
