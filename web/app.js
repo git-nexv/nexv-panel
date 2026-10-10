@@ -5033,17 +5033,21 @@ async function renderBot(view) {
   const termsBox = el('div', { class: 'term-list' });
   const drawTerms = () => {
     termsBox.innerHTML = '';
-    const live = custom.terms.filter((t) => t.enable !== false).sort((a, b) => a.months - b.months);
-    const base = live[0];
     for (const term of custom.terms.slice().sort((a, b) => a.months - b.months)) {
-      const isBase = base && term.months === base.months && term.enable !== false;
+      // one month is the volume's own price; every other length has a box
+      const isBase = term.months <= 1;
       const price = el('input', {
         type: 'number', min: '0', value: term.extra ?? 0,
         placeholder: '0', disabled: isBase ? 'disabled' : null
       });
       price.addEventListener('input', () => { term.extra = Number(price.value) || 0; });
       const toggle = switchFor(term, 'enable', '', true);
-      toggle.querySelector('input').addEventListener('change', () => drawTerms());
+      toggle.querySelector('input').addEventListener('change', () => {
+        termsBox.querySelectorAll('.term-row').forEach((row, i) => {
+          const t = custom.terms.slice().sort((a, b) => a.months - b.months)[i];
+          row.classList.toggle('off', t.enable === false);
+        });
+      });
       termsBox.append(el('div', { class: `term-row ${term.enable === false ? 'off' : ''}` }, [
         el('div', { class: 'term-name', text: term.months === 1 ? '1 month' : `${term.months} months` }),
         el('div', { class: 'term-price' }, [

@@ -491,11 +491,17 @@ function offeredTerms() {
   return customTerms().filter((t) => t.enable);
 }
 
-/** What one month of a term adds on top of the volume. The shortest adds nothing. */
-function extraFor(term, all) {
-  const shortest = (all || offeredTerms())[0];
-  if (shortest && term.months === shortest.months) return 0;
-  return term.extra;
+/*
+ * What a length adds on top of the volume.
+ *
+ * One month adds nothing - it is the volume's own price, which is the rate the
+ * admin already set per gigabyte. Every other length carries whatever they
+ * wrote against it. Tied to the month and not to "whichever is shortest on the
+ * list", so switching the one-month option off does not silently make three
+ * months free.
+ */
+function extraFor(term) {
+  return term.months <= 1 ? 0 : term.extra;
 }
 
 /** Whether a config sold now should start its clock now or on first use. */
@@ -589,7 +595,7 @@ async function takeCustomGB(ctx, raw, waiting) {
   const per = pricePerGB();
   const cur = escapeHtml(bot().currency || '');
   const rows = terms.map((t) => {
-    const total = gb * per + extraFor(t, terms);
+    const total = gb * per + extraFor(t);
     return [{ text: `${monthWord(t.months)} — ${total.toLocaleString('en-US')} ${bot().currency || ''}`.trim(),
       callback_data: `b:term:${t.months}` }];
   });
@@ -618,7 +624,7 @@ async function takeCustomTerm(ctx, months, waiting) {
   const term = terms.find((t) => t.months === Number(months));
   if (!term) return null;
   forget(ctx.userId);
-  return makeCustomPlan(ctx, gb, term.months * DAYS_PER_MONTH, extraFor(term, terms), data.renewId || '');
+  return makeCustomPlan(ctx, gb, term.months * DAYS_PER_MONTH, extraFor(term), data.renewId || '');
 }
 
 /*

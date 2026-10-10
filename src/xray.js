@@ -1188,23 +1188,6 @@ async function collectTraffic() {
     c.up = (c.up || 0) + delta.up;
     c.down = (c.down || 0) + delta.down;
 
-    /*
-     * First traffic on a client sold with the clock unwound: this is the
-     * moment it was actually used, so this is when its month starts. Traffic
-     * rather than a connection, because an app that is merely added to and
-     * never opened still opens a connection or two.
-     */
-    if (c.startAfterFirstUse && !c.expiryTime && c.expiryDays > 0) {
-      c.expiryTime = now + c.expiryDays * 86400000;
-      c.startedAt = now;
-      d.logs.unshift({
-        at: now,
-        type: 'client',
-        message: `${c.email} was used for the first time - its ${c.expiryDays} days start now`
-      });
-      if (d.logs.length > 500) d.logs.length = 500;
-    }
-
     c.lastSeen = now;
     if (window) {
       rates.set(c.id, { up: delta.up / window, down: delta.down / window, at: now });
@@ -1261,11 +1244,39 @@ function noteOverIpLimit(c) {
 }
 
 /** Disable clients that ran out of quota or time or are in too many places. */
+/*
+ * A config sold with the clock unwound starts it the first time it is used.
+ *
+ * Worked out from the totals the client carries, not from the delta of one
+ * traffic poll. It used to live inside that poll's loop, which meant the whole
+ * countdown hung on a single reading being taken, parsed and matched to this
+ * client at the one moment it first moved any bytes: a poll that failed, a
+ * panel restarted in the wrong minute, a stats API that answers for a while
+ * and then does not, and the config quietly never expired at all. From the
+ * totals it is simply true whenever it is true, and it is re-checked every
+ * thirty seconds until it is.
+ */
+function startClockIfUsed(c, now, d) {
+  if (!c.startAfterFirstUse || c.expiryTime || !(c.expiryDays > 0)) return false;
+  if (((c.up || 0) + (c.down || 0)) <= 0) return false;
+  c.expiryTime = now + c.expiryDays * 86400000;
+  c.startedAt = c.startedAt || now;
+  d.logs.unshift({
+    at: now,
+    type: 'client',
+    message: `${c.email} was used for the first time - its ${c.expiryDays} days start now`
+  });
+  if (d.logs.length > 500) d.logs.length = 500;
+  return true;
+}
+
 async function enforceLimits() {
   const d = db.data;
   let dirty = false;
   const now = Date.now();
   for (const c of d.clients) {
+    // before anything is judged: a config that has been used has a deadline
+    if (startClockIfUsed(c, now, d)) dirty = true;
     const overIps = isOverIpLimit(c);
     if (overIps) cutOffAt.set(c.id, now);
     /* still inside the cooling period counts as still over the limit, so the
