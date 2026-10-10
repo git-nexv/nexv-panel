@@ -932,7 +932,9 @@ const FA = {
   'yesterday': 'دیروز',
   'a month ago': 'یک ماه پیش',
   'a year ago': 'یک سال پیش',
+  'Last seen': 'آخرین اتصال',
   'never used': 'هیچ‌وقت وصل نشده',
+  'now': 'هم‌اکنون',
   'Never connected': 'هیچ‌وقت وصل نشده',
 
   /* several inbounds for one client: each is a separate way in */

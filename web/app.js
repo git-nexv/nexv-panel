@@ -2283,7 +2283,7 @@ async function renderClients(view) {
   const withLinks = (state.protocols && state.protocols.withLinks) || [];
   const table = el('table');
   table.innerHTML = `<thead><tr>
-    <th>Client</th><th>Inbounds</th><th>Now</th><th>Used</th><th>Quota</th>
+    <th>Client</th><th>Inbounds</th><th>Now</th><th>Last seen</th><th>Used</th><th>Quota</th>
     <th>Expires</th><th>Status</th><th></th>
   </tr></thead>`;
   const tbody = el('tbody');
@@ -2307,6 +2307,7 @@ async function renderClients(view) {
       ]),
       el('td', { class: 'muted' }, [inboundCell(c)]),
       el('td', {}, [liveCell(c)]),
+      el('td', { class: 'muted' }, [lastSeenCell(c)]),
       el('td', {}, [
         el('div', { class: 'cell-stack' }, [
           el('div', { class: 'num', text: bytes(used) }),
@@ -2376,7 +2377,7 @@ async function renderClients(view) {
    * the scroll position while the admin is still typing.
    */
   const nothing = el('tr', { class: 'filter-empty', hidden: 'hidden' }, [
-    el('td', { colspan: '8', class: 'muted', text: 'No client matches that.' })
+    el('td', { colspan: '9', class: 'muted', text: 'No client matches that.' })
   ]);
 
   const matches = (row, needle) => row.dataset.buckets.split(' ').includes(picked)
@@ -2467,19 +2468,27 @@ function liveCell(client) {
             : `${client.ipCount} IP${client.ipCount > 1 ? 's' : ''}`,
           onclick: () => showClientActivity(client, 'Addresses')
         })
-        : null,
-      /* when it was last connected. Only worth saying while it is not: an
-         online client's answer to "when was it last seen" is "now" */
-      !client.online
-        ? el('div', {
-          class: 'faint live-seen',
-          title: client.lastSeen ? `Last connected ${fmtDate(client.lastSeen)}` : 'Never connected',
-          text: client.lastSeen ? ago(client.lastSeen) : 'never used'
-        })
         : null
     ])
   ]);
   return box;
+}
+
+/**
+ * When this client last had a connection accepted.
+ *
+ * A column of its own rather than a line tucked under "offline": on a phone
+ * every column becomes a labelled field in the card, and a value with no label
+ * beside five that have one reads as a stray note rather than an answer. An
+ * online client's answer is "now", said plainly so the field is never blank.
+ */
+function lastSeenCell(client) {
+  if (client.online) return el('div', { class: 'ok-text', text: 'now' });
+  if (!client.lastSeen) return el('div', { class: 'faint', text: 'never used' });
+  return el('div', { class: 'cell-stack' }, [
+    el('div', { text: ago(client.lastSeen) }),
+    el('div', { class: 'faint sub', text: fmtDate(client.lastSeen) })
+  ]);
 }
 
 /**
