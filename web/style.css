@@ -1074,6 +1074,37 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
 }
 .seg button.active { background: var(--brand); color: var(--brand-ink); text-shadow: none; }
 
+/* how long a custom volume may be bought for: a row each, with what it adds */
+.term-list { display: flex; flex-direction: column; gap: 8px; }
+.term-row {
+  display: grid;
+  grid-template-columns: 96px 1fr auto;
+  grid-template-areas: "name price toggle";
+  align-items: center; gap: 12px;
+  padding: 10px 12px; border-radius: var(--radius-sm);
+  background: var(--surface); border: 1px solid var(--border);
+}
+.term-row.off { opacity: .5; }
+.term-name { grid-area: name; font-weight: 650; font-size: 13px; }
+.term-price { grid-area: price; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.term-row > .switch { grid-area: toggle; }
+.term-price input { width: 130px; flex: 0 0 auto; }
+.term-price input:disabled { opacity: .45; cursor: not-allowed; }
+.term-price .faint { font-size: 11.5px; min-width: 0; }
+/*
+ * Narrow: the name and its switch stay on one line - they are the pair you
+ * read together - and the price drops underneath. Named areas rather than
+ * auto-placement, which put the switch on a third row of its own.
+ */
+@media (max-width: 560px) {
+  .term-row {
+    grid-template-columns: 1fr auto;
+    grid-template-areas: "name toggle" "price price";
+    row-gap: 8px;
+  }
+  .term-price input { width: 110px; }
+}
+
 .chips { display: flex; flex-wrap: wrap; gap: 7px; }
 .chips label {
   display: inline-flex; align-items: center; gap: 6px; cursor: pointer;

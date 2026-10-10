@@ -4778,7 +4778,7 @@ async function renderBot(view) {
       brand: draft.brand, currency: draft.currency, adminId: draft.adminId,
       screens: draft.screens, plans: draft.plans, pay: draft.pay, channel: draft.channel,
       pricePerGB: draft.pricePerGB, trial: draft.trial, custom: draft.custom,
-      access: draft.access
+      access: draft.access, startOnFirstUse: draft.startOnFirstUse
     }, extra || {});
     try {
       await api.put('/bot', payload);
@@ -4820,6 +4820,19 @@ async function renderBot(view) {
   formField(setupGrid, 'Price', perGB, {
     hint: 'What one gigabyte costs. Custom-volume buying uses this, and stays off until it is set.'
   });
+
+  /*
+   * When a sold config's days begin. Left on, the clock is unwound until the
+   * first byte moves - kinder to a buyer who installs on Friday - but the
+   * panel then shows no expiry date at all until they do, which reads as the
+   * length you set having been ignored.
+   */
+  draft.startOnFirstUse = data.startOnFirstUse !== false;
+  const clock = switchFor(draft, 'startOnFirstUse', 'Start the days on first use, not at the sale', true);
+  setupGrid.append(el('div', { class: 'field full' }, [
+    clock,
+    el('div', { class: 'hint', text: 'On: a config bought today shows "Not started" until it is first used, and its days begin then. Off: the days start the moment it is sold and the expiry date is on the panel straight away.' })
+  ]));
 
   const startBtn = el('button', {
     class: 'btn primary', html: `${icon('power')} ${data.status.running ? 'Stop the bot' : 'Start the bot'}`,
@@ -4927,12 +4940,14 @@ async function renderBot(view) {
     control.addEventListener('input', () => { obj[field] = cast ? cast(control.value) : control.value; });
     return control;
   };
-  const switchFor = (obj, field, label, onDefault) => {
+  /* a function rather than a const: the Setup tab above uses it too, and a
+     const here would not exist yet by the time that code runs */
+  function switchFor(obj, field, label, onDefault) {
     const box = el('input', { type: 'checkbox' });
     box.checked = onDefault ? obj[field] !== false : !!obj[field];
     box.addEventListener('change', () => { obj[field] = box.checked; });
     return el('label', { class: 'switch' }, [box, el('span', { class: 'track' }), el('span', { class: 'muted', text: label })]);
-  };
+  }
   const inboundPicker = (obj, field) => {
     const sel = selectOf(inbounds.map((i) => ({ value: i.id, label: `${i.remark} (${i.protocol}:${i.port})` })), obj[field]);
     sel.addEventListener('change', () => { obj[field] = sel.value; });
@@ -4995,6 +5010,9 @@ async function renderBot(view) {
 
   /* ---- Manual plan: buying by the gigabyte, on a tab of its own ---- */
   const custom = draft.custom = draft.custom || { enable: false, minGB: 1, maxGB: 0, days: 30, inboundId: '' };
+  if (!Array.isArray(custom.terms) || !custom.terms.length) {
+    custom.terms = [1, 3, 6, 12].map((months) => ({ months, enable: true, extra: 0 }));
+  }
   const customGrid = el('div', { class: 'form-grid' });
   formField(customGrid, 'Minimum (GB)', bindTo(custom, 'minGB', el('input', { type: 'number', min: '1', value: custom.minGB ?? 1 }), Number), {
     hint: 'The smallest amount somebody may buy'
@@ -5002,16 +5020,52 @@ async function renderBot(view) {
   formField(customGrid, 'Maximum (GB)', bindTo(custom, 'maxGB', el('input', { type: 'number', min: '0', value: custom.maxGB ?? 0 }), Number), {
     hint: '0 means no ceiling'
   });
-  formField(customGrid, 'Days', bindTo(custom, 'days', el('input', { type: 'number', min: '1', value: custom.days ?? 30 }), Number));
   formField(customGrid, 'Sold from inbound', inboundPicker(custom, 'inboundId'), { full: true });
+
+  /*
+   * How long they may buy it for.
+   *
+   * The shortest length on offer is the base: the volume's own price and
+   * nothing added. Each of the others has a box for what it adds on top, so
+   * six months at a discount or a premium is a number the admin writes rather
+   * than a rule in the code. Switch one off and the bot does not offer it.
+   */
+  const termsBox = el('div', { class: 'term-list' });
+  const drawTerms = () => {
+    termsBox.innerHTML = '';
+    const live = custom.terms.filter((t) => t.enable !== false).sort((a, b) => a.months - b.months);
+    const base = live[0];
+    for (const term of custom.terms.slice().sort((a, b) => a.months - b.months)) {
+      const isBase = base && term.months === base.months && term.enable !== false;
+      const price = el('input', {
+        type: 'number', min: '0', value: term.extra ?? 0,
+        placeholder: '0', disabled: isBase ? 'disabled' : null
+      });
+      price.addEventListener('input', () => { term.extra = Number(price.value) || 0; });
+      const toggle = switchFor(term, 'enable', '', true);
+      toggle.querySelector('input').addEventListener('change', () => drawTerms());
+      termsBox.append(el('div', { class: `term-row ${term.enable === false ? 'off' : ''}` }, [
+        el('div', { class: 'term-name', text: term.months === 1 ? '1 month' : `${term.months} months` }),
+        el('div', { class: 'term-price' }, [
+          price,
+          el('span', { class: 'faint', text: isBase ? 'the volume price on its own' : 'added to the volume price' })
+        ]),
+        toggle
+      ]));
+    }
+  };
+  drawTerms();
 
   panels['Manual plan'].append(el('div', { class: 'card' }, [
     el('div', { class: 'between', style: 'margin-bottom:12px' }, [
       el('strong', { text: '🎚 Buy by the gigabyte' }), switchFor(custom, 'enable', 'Show it in the bot')
     ]),
-    el('div', { class: 'hint', style: 'margin-bottom:14px', text: 'When this is on, the bot puts a "custom volume" button at the bottom of the plan list, just above Back. The buyer taps it, types how many gigabytes they want, and pays that many times the price per GB.' }),
+    el('div', { class: 'hint', style: 'margin-bottom:14px', text: 'When this is on, the bot puts a "custom volume" button at the bottom of the plan list, just above Back. The buyer taps it, types how many gigabytes they want, then picks how long for.' }),
     customGrid,
-    el('div', { class: 'hint', text: data.pricePerGB
+    el('div', { class: 'section-title', style: 'margin-top:18px', text: 'How long they may buy it for' }),
+    el('div', { class: 'hint', style: 'margin-bottom:10px', text: 'The shortest length you leave on is the base — it costs the volume price and nothing more. Put against each of the others what it adds on top, and the buyer pays the volume plus that. Switch one off and the bot stops offering it.' }),
+    termsBox,
+    el('div', { class: 'hint', style: 'margin-top:10px', text: data.pricePerGB
       ? `Price per GB is ${data.pricePerGB}, set on the Setup tab.`
       : 'Price per GB is 0, set on the Setup tab — until it is set, this button stays hidden in the bot whatever this switch says.' }),
     el('div', { class: 'row', style: 'margin-top:12px' }, [

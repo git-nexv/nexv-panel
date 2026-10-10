@@ -231,7 +231,9 @@ function botView() {
     pricePerGB: Number(b.pricePerGB) || 0,
     trial: b.trial || telegram.defaults().trial,
     trialsTaken: telegram.trialsTaken(),
-    custom: b.custom || telegram.defaults().custom,
+    custom: Object.assign({}, telegram.defaults().custom, b.custom || {},
+      { terms: telegram.customTerms() }),
+    startOnFirstUse: b.startOnFirstUse !== false,
     access: b.access || telegram.defaults().access,
     orders: (b.orders || []).slice(0, 60),
     pay: b.pay || telegram.defaults().pay,
@@ -297,9 +299,22 @@ router.put('/bot', async (req, res) => {
       minGB: Math.max(1, Number(body.custom.minGB) || 1),
       maxGB: Math.max(0, Number(body.custom.maxGB) || 0),
       days: Math.max(1, Number(body.custom.days) || 30),
-      inboundId: body.custom.inboundId || ''
+      inboundId: body.custom.inboundId || '',
+      /* how long it may be bought for, and what each length adds on top of
+         the volume. Anything unreadable falls back to what the panel ships. */
+      terms: Array.isArray(body.custom.terms) && body.custom.terms.length
+        ? body.custom.terms
+          .map((t) => ({
+            months: Math.max(1, Math.round(Number(t.months) || 0)),
+            enable: t.enable !== false,
+            extra: Math.max(0, Math.round(Number(t.extra) || 0))
+          }))
+          .filter((t) => t.months > 0)
+          .sort((a, c) => a.months - c.months)
+        : telegram.defaults().custom.terms
     };
   }
+  if (body.startOnFirstUse !== undefined) b.startOnFirstUse = body.startOnFirstUse !== false;
   if (body.access && typeof body.access === 'object') {
     b.access = { chooseName: body.access.chooseName !== false };
   }

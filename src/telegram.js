@@ -188,8 +188,33 @@ function defaults() {
        server works from the buyer's own phone, not to be a plan. */
     trial: { enable: true, mb: 100, days: 1, inboundId: '', oncePerUser: true },
 
-    /* buying by the gigabyte instead of from the fixed list */
-    custom: { enable: false, minGB: 1, maxGB: 0, days: 30, inboundId: '' },
+    /*
+     * Buying by the gigabyte instead of from the fixed list.
+     *
+     * `terms` is how long they may buy it for. The first one is the base - the
+     * volume's own price and nothing else - and each of the others adds what
+     * the admin put against it, so six months at a discount or a premium is
+     * theirs to set. Any of them can be switched off and then it is not
+     * offered.
+     */
+    custom: {
+      enable: false, minGB: 1, maxGB: 0, days: 30, inboundId: '',
+      terms: [
+        { months: 1, enable: true, extra: 0 },
+        { months: 3, enable: true, extra: 0 },
+        { months: 6, enable: true, extra: 0 },
+        { months: 12, enable: true, extra: 0 }
+      ]
+    },
+
+    /*
+     * Whether a config's days start when it is paid for or when it is first
+     * used. Unwound is kinder - somebody who buys on Monday and installs on
+     * Friday has not lost four days - but it also means the panel shows no
+     * expiry date at all until the first byte moves, which reads as the time
+     * limit having been ignored. Switch it off and the clock starts at the sale.
+     */
+    startOnFirstUse: true,
 
     /* what the buyer is allowed to decide for themselves rather than be given */
     access: { chooseName: true }
@@ -436,6 +461,48 @@ function customSettings() {
   };
 }
 
+/* a month, as this panel counts one */
+const DAYS_PER_MONTH = 30;
+
+/**
+ * How long a custom config may be bought for, and what each length adds.
+ *
+ * Settings written before this have no terms at all; they get the four the
+ * panel ships with, the first of which costs nothing extra by definition - it
+ * is the volume's own price. One with no months on it is dropped rather than
+ * offered as a button that means nothing.
+ */
+function customTerms() {
+  const raw = (bot().custom || {}).terms;
+  const list = Array.isArray(raw) && raw.length ? raw : defaults().custom.terms;
+  return list
+    .map((t) => ({
+      months: Math.max(1, Math.round(Number(t.months) || 0)),
+      enable: t.enable !== false,
+      // the first month is the base price; nothing is added to it
+      extra: Math.max(0, Math.round(Number(t.extra) || 0))
+    }))
+    .filter((t) => t.months > 0)
+    .sort((a, b) => a.months - b.months);
+}
+
+/** The ones a buyer actually sees. */
+function offeredTerms() {
+  return customTerms().filter((t) => t.enable);
+}
+
+/** What one month of a term adds on top of the volume. The shortest adds nothing. */
+function extraFor(term, all) {
+  const shortest = (all || offeredTerms())[0];
+  if (shortest && term.months === shortest.months) return 0;
+  return term.extra;
+}
+
+/** Whether a config sold now should start its clock now or on first use. */
+function startsOnFirstUse() {
+  return bot().startOnFirstUse !== false;
+}
+
 function pricePerGB() { return Math.max(0, Number(bot().pricePerGB) || 0); }
 
 /** What the buyer gets to decide. Older settings files have none of this. */
@@ -487,34 +554,88 @@ async function startCustom(ctx, renewId) {
   return reply(ctx, [
     '<b>حجم دلخواه</b>',
     `هر گیگابایت ${per.toLocaleString('en-US')} ${escapeHtml(bot().currency || '')}`,
-    `حداقل ${c.minGB} گیگ${c.maxGB ? ` و حداکثر ${c.maxGB} گیگ` : ''} · ${c.days} روز`,
+    `حداقل ${c.minGB} گیگ${c.maxGB ? ` و حداکثر ${c.maxGB} گیگ` : ''}`,
     '',
     'چند گیگابایت می‌خواهید؟ فقط عدد بفرستید.'
   ].join('\n'), backRow());
 }
 
+/*
+ * The volume is settled; now for how long.
+ *
+ * The gigabytes are held rather than turned into a plan straight away, because
+ * what a plan costs is the volume plus whatever the chosen length adds, and
+ * neither number is worth writing down until both are known. Only the lengths
+ * the admin left switched on are offered, and the shortest of them is the base
+ * - it is the volume's own price and adds nothing.
+ */
 async function takeCustomGB(ctx, raw, waiting) {
   const c = customSettings();
-  const per = pricePerGB();
   const renewId = (waiting && waiting.data && waiting.data.renewId) || '';
   const gb = Math.floor(Number(String(raw).replace(/[^\d.]/g, '')));
   if (!Number.isFinite(gb) || gb <= 0) return send(ctx.chatId, 'یک عدد بفرستید، مثلاً 20');
   if (gb < c.minGB) return send(ctx.chatId, `حداقل ${c.minGB} گیگابایت است.`);
   if (c.maxGB && gb > c.maxGB) return send(ctx.chatId, `حداکثر ${c.maxGB} گیگابایت است.`);
 
+  const terms = offeredTerms();
+  // nothing to choose between: keep the old single-length behaviour
+  if (terms.length <= 1) {
+    forget(ctx.userId);
+    const only = terms[0];
+    return makeCustomPlan(ctx, gb, only ? only.months * DAYS_PER_MONTH : c.days, 0, renewId);
+  }
+
+  expect(ctx.userId, 'customTerm', { gb, renewId });
+  const per = pricePerGB();
+  const cur = escapeHtml(bot().currency || '');
+  const rows = terms.map((t) => {
+    const total = gb * per + extraFor(t, terms);
+    return [{ text: `${monthWord(t.months)} — ${total.toLocaleString('en-US')} ${bot().currency || ''}`.trim(),
+      callback_data: `b:term:${t.months}` }];
+  });
+  rows.push(backRow()[0]);
+  return reply(ctx, [
+    `<b>${gb} گیگابایت</b>`,
+    `هر گیگابایت ${per.toLocaleString('en-US')} ${cur}`,
+    '',
+    '🗓 برای چه مدتی می‌خواهید؟'
+  ].join('\n'), rows);
+}
+
+/** "۳ ماهه", in words a buyer reads rather than a number of days. */
+function monthWord(months) {
+  if (months === 1) return '۱ ماهه';
+  const fa = { 2: '۲', 3: '۳', 4: '۴', 5: '۵', 6: '۶', 9: '۹', 12: '۱۲' }[months];
+  return `${fa || months} ماهه`;
+}
+
+/** The length was picked: now there is a price, so there is a plan. */
+async function takeCustomTerm(ctx, months, waiting) {
+  const data = (waiting && waiting.data) || {};
+  const gb = Number(data.gb) || 0;
+  if (!gb) { forget(ctx.userId); return showPlans(ctx); }
+  const terms = offeredTerms();
+  const term = terms.find((t) => t.months === Number(months));
+  if (!term) return null;
   forget(ctx.userId);
-  /*
-   * A custom purchase is an ordinary order with a plan made up on the spot, so
-   * everything downstream - the receipt, the admin's approve button, delivery -
-   * works on it without knowing it was not from the list.
-   */
+  return makeCustomPlan(ctx, gb, term.months * DAYS_PER_MONTH, extraFor(term, terms), data.renewId || '');
+}
+
+/*
+ * A custom purchase is an ordinary order with a plan made up on the spot, so
+ * everything downstream - the receipt, the admin's approve button, delivery -
+ * works on it without knowing it was not from the list.
+ */
+async function makeCustomPlan(ctx, gb, days, extra, renewId) {
+  const c = customSettings();
   const b = bot();
+  const months = Math.max(1, Math.round(days / DAYS_PER_MONTH));
   const plan = {
     id: `custom-${db.id()}`,
-    name: `${gb} گیگابایت`,
+    name: `${gb} گیگابایت · ${monthWord(months)}`,
     gb,
-    days: c.days,
-    price: String(gb * per),
+    days,
+    price: String(gb * pricePerGB() + (Number(extra) || 0)),
     inboundId: c.inboundId || (db.data.inbounds.find((i) => i.enable !== false) || {}).id || '',
     enable: true,
     custom: true
@@ -676,7 +797,10 @@ async function showConfig(ctx, clientId) {
       { text: off ? '🔛 روشن کردن' : '⏸ خاموش کردن', callback_data: `b:power:${id}` },
       { text: '✏️ تغییر نام', callback_data: `b:rename:${id}` }
     ],
-    [{ text: '🔗 لینک جدید', callback_data: `b:newlink:${id}` }],
+    [
+      { text: '🔗 لینک جدید', callback_data: `b:newlink:${id}` },
+      { text: '🗑 حذف کانفیگ', callback_data: `b:del:${id}` }
+    ],
     [{ text: '⬅️ بازگشت', callback_data: 'b:configs:' }]
   ]);
 }
@@ -714,6 +838,69 @@ async function newLink(ctx, clientId) {
     '⚠️ لینک قبلی از این لحظه کار نمی‌کند. این یکی را در برنامه‌تان جایگزین کنید.'
   ].join('\n'));
   return showConfig(ctx, clientId);
+}
+
+/*
+ * Deleting a config, which is the one thing here that cannot be undone.
+ *
+ * So it is asked first, plainly, with what is about to be lost spelled out -
+ * how much of the volume is still unused and how long it still had to run -
+ * and the two answers as buttons rather than a word to type.
+ */
+async function askDelete(ctx, clientId) {
+  const c = myConfig(ctx, clientId);
+  if (!c) return showConfigs(ctx);
+  const used = (c.up || 0) + (c.down || 0);
+  const quota = (c.totalGB || 0) * 1024 ** 3;
+  const id = shortId(c);
+
+  const lines = [
+    '⚠️ <b>حذف کانفیگ</b>',
+    '',
+    `کانفیگ <b>${escapeHtml(c.email)}</b> برای همیشه حذف می‌شود.`
+  ];
+  if (quota && used < quota) lines.push(`• ${bytes(quota - used)} حجم استفاده‌نشده از بین می‌رود`);
+  if (c.expiryTime && c.expiryTime > Date.now()) lines.push(`• ${timeLeft(c)} از اعتبارش باقی مانده`);
+  lines.push('• لینک اشتراکش دیگر کار نمی‌کند', '', 'این کار برگشت‌پذیر نیست. مطمئنید؟');
+
+  return reply(ctx, lines.join('\n'), [
+    [{ text: '✅ بله، حذف کن', callback_data: `b:delyes:${id}` }],
+    [{ text: '❌ خیر، بازگشت', callback_data: `b:cfg:${id}` }]
+  ]);
+}
+
+/**
+ * Gone, not switched off.
+ *
+ * A config left disabled is still a client Xray carries, a row the panel draws
+ * and a tag the address tracker keeps counting. Somebody who has finished with
+ * one - or whose volume has run out - is better served by it being removed,
+ * and so is the server.
+ */
+async function deleteConfig(ctx, clientId) {
+  const c = myConfig(ctx, clientId);
+  if (!c) return showConfigs(ctx);
+  const name = c.email;
+  await removeClient(c.id);
+  if (ctx.answer) ctx.answer('حذف شد');
+  await send(ctx.chatId, `کانفیگ <b>${escapeHtml(name)}</b> حذف شد.`);
+  return showConfigs(ctx);
+}
+
+/**
+ * Take one client out of the panel for good: the row, whatever the address
+ * tracker remembers about it, and its place in the Xray config.
+ */
+async function removeClient(clientId) {
+  const d = db.data;
+  const client = d.clients.find((c) => c.id === clientId);
+  if (!client) return false;
+  const xray = require('./xray');
+  try { require('./online').forget(xray.clientTag(client)); } catch (_) { /* nothing tracked */ }
+  d.clients = d.clients.filter((c) => c.id !== clientId);
+  db.saveNow();
+  await xray.apply();
+  return true;
 }
 
 /** Ask for a new name for a config they already own. */
@@ -1371,11 +1558,12 @@ async function deliverOrder(order) {
       // what the buyer called it, if they were asked and the name is still free
       email: uniqueName(cleanName(order.clientName)) || `tg-${order.userId}-${String(order.id).slice(0, 4)}`,
       totalGB: plan.gb || 0,
-      /* the clock starts when they first use it, not when they paid: a buyer
-         who installs tomorrow has not lost a day of what they bought */
-      startAfterFirstUse: true,
+      /* when the days start is the admin's call: unwound until the config is
+         first used, which is kinder, or from the sale, which is the one that
+         shows an expiry date on the panel the moment it is sold */
+      startAfterFirstUse: startsOnFirstUse(),
       expiryDays: plan.days || 0,
-      expiryTime: 0,
+      expiryTime: startsOnFirstUse() || !plan.days ? 0 : Date.now() + plan.days * 86400000,
       tgId: String(order.userId),
       comment: `${plan.name} - فروش ربات`
     });
@@ -1492,25 +1680,23 @@ async function rejectOrder(ctx, orderId) {
   }
   order.status = 'rejected';
 
+  /*
+   * Removed rather than parked. A rejected order was never paid for, so the
+   * config it produced has no reason to go on existing - and one left switched
+   * off is still a client Xray carries, a row in the panel and a tag the
+   * address tracker keeps counting.
+   */
   let cut = false;
-  if (order.clientId) {
-    const client = db.data.clients.find((c) => c.id === order.clientId);
-    if (client) {
-      client.enable = false;
-      client.blockedReason = REJECTED_NOTICE;
-      cut = true;
-    }
-  }
+  if (order.clientId) cut = await removeClient(order.clientId);
   db.saveNow();
-  if (cut) await require('./xray').apply();
 
   await send(order.userId, [
     'پرداخت شما تایید نشد.',
-    cut ? 'اشتراکتان غیرفعال شد.' : '',
+    cut ? 'کانفیگی که ساخته شده بود حذف شد.' : '',
     'اگر فکر می‌کنید اشتباهی رخ داده با پشتیبانی تماس بگیرید.'
   ].filter(Boolean).join('\n'));
   return send(ctx.chatId, cut
-    ? 'رد شد. کانفیگ خریدار قطع شد و دلیلش روی نام کانفیگ نوشته شد.'
+    ? 'رد شد. کانفیگ خریدار حذف شد.'
     : 'رد شد و به خریدار اطلاع داده شد.');
 }
 
@@ -1636,6 +1822,13 @@ async function act(ctx, action, value) {
     case 'power': return powerConfig(ctx, value);
     case 'rename': return startRename(ctx, value);
     case 'newlink': return newLink(ctx, value);
+    case 'del': return askDelete(ctx, value);
+    case 'delyes': return deleteConfig(ctx, value);
+    case 'term': {
+      const waiting = expected(ctx.userId);
+      if (!waiting || waiting.kind !== 'customTerm') return showPlans(ctx);
+      return takeCustomTerm(ctx, value, waiting);
+    }
     case 'renew': return showPlans(ctx, value);
     case 'trial': return startTrial(ctx);
     case 'custom': {
@@ -1936,7 +2129,7 @@ function resume() {
 
 module.exports = {
   bot, defaults, starterScreens, migrateStarter, migrateUsageButton, start, stop, status, whoAmI, resume,
-  resetTrials, trialsTaken, repairOrphanClients,
+  resetTrials, trialsTaken, repairOrphanClients, customTerms,
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
   /* the entry point for one update: what the polling loop feeds, and what a
      webhook would feed if this ever grows one */
