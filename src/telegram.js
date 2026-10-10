@@ -594,11 +594,15 @@ async function takeCustomGB(ctx, raw, waiting) {
   expect(ctx.userId, 'customTerm', { gb, renewId });
   const per = pricePerGB();
   const cur = escapeHtml(bot().currency || '');
-  const rows = terms.map((t) => {
+  /* two to a row: four lengths stacked made a column of buttons taller than
+     the message that asked the question */
+  const keys = terms.map((t) => {
     const total = gb * per + extraFor(t);
-    return [{ text: `${monthWord(t.months)} — ${total.toLocaleString('en-US')} ${bot().currency || ''}`.trim(),
-      callback_data: `b:term:${t.months}` }];
+    return { text: `${monthWord(t.months)} — ${total.toLocaleString('en-US')} ${bot().currency || ''}`.trim(),
+      callback_data: `b:term:${t.months}` };
   });
+  const rows = [];
+  for (let i = 0; i < keys.length; i += 2) rows.push(keys.slice(i, i + 2));
   rows.push(backRow()[0]);
   return reply(ctx, [
     `<b>${gb} گیگابایت</b>`,

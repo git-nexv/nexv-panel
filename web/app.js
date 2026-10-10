@@ -248,6 +248,41 @@ function ago(ts) {
   return y === 1 ? 'a year ago' : `${y} years ago`;
 }
 
+/*
+ * A number somebody typed, in whatever digits their keyboard produces.
+ *
+ * `<input type="number">` throws away anything it does not recognise, and what
+ * it does not recognise includes Persian digits, Arabic-Indic digits and a
+ * thousands comma - the value simply becomes empty and is read as zero. On a
+ * Persian keyboard that means a price typed as ۱۰۰۰۰۰ was saved as nothing at
+ * all, with the field looking like it had taken it. So money and counts are
+ * text fields that are normalised here instead.
+ */
+function toNumber(raw) {
+  const text = String(raw == null ? '' : raw)
+    .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06F0))   // ۰-۹
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))   // ٠-٩
+    .replace(/[^\d.-]/g, '');                                                // commas, spaces, ریال
+  const n = Number(text);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * A field for a number that accepts the digits of either keyboard. Text, not
+ * number, so nothing is silently dropped on the way in; what it hands back is
+ * always a number.
+ */
+function numField(value, opts = {}) {
+  const input = el('input', {
+    type: 'text', inputmode: 'numeric', autocomplete: 'off',
+    value: value === undefined || value === null ? '' : String(value),
+    placeholder: opts.placeholder || '0'
+  });
+  if (opts.disabled) input.disabled = true;
+  input.addEventListener('input', () => { if (opts.onInput) opts.onInput(toNumber(input.value)); });
+  return input;
+}
+
 function duration(seconds) {
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
@@ -4815,8 +4850,13 @@ async function renderBot(view) {
   formField(setupGrid, 'Brand name', brand, { hint: 'Used wherever {brand} appears' });
   formField(setupGrid, 'Currency', currency);
 
-  const perGB = el('input', { type: 'number', min: '0', value: data.pricePerGB || 0 });
-  perGB.addEventListener('input', () => { draft.pricePerGB = Math.max(0, Number(perGB.value) || 0); });
+  /* set further down, once the Manual plan rows exist: changing the price per
+     gigabyte changes what every length costs, including the ones with no box
+     of their own to type in */
+  let refreshTermSums = () => {};
+  const perGB = numField(data.pricePerGB || 0, {
+    onInput: (n) => { draft.pricePerGB = Math.max(0, n); refreshTermSums(); }
+  });
   formField(setupGrid, 'Price', perGB, {
     hint: 'What one gigabyte costs. Custom-volume buying uses this, and stays off until it is set.'
   });
@@ -5033,14 +5073,25 @@ async function renderBot(view) {
   const termsBox = el('div', { class: 'term-list' });
   const drawTerms = () => {
     termsBox.innerHTML = '';
+    const sums = [];
+    refreshTermSums = () => { for (const f of sums) f(); };
     for (const term of custom.terms.slice().sort((a, b) => a.months - b.months)) {
       // one month is the volume's own price; every other length has a box
       const isBase = term.months <= 1;
-      const price = el('input', {
-        type: 'number', min: '0', value: term.extra ?? 0,
-        placeholder: '0', disabled: isBase ? 'disabled' : null
+      const worked = el('span', { class: 'faint term-sum' });
+      const sayTotal = () => {
+        const per = Number(draft.pricePerGB) || 0;
+        if (!per) { worked.textContent = t('set the price per GB on the Setup tab'); return; }
+        const extra = isBase ? 0 : (Number(term.extra) || 0);
+        const sample = 10;
+        worked.textContent = `${t('10 GB would cost')} ${(sample * per + extra).toLocaleString('en-US')}`;
+      };
+      const price = numField(isBase ? 0 : (term.extra ?? 0), {
+        disabled: isBase,
+        onInput: (n) => { term.extra = Math.max(0, n); refreshTermSums(); }
       });
-      price.addEventListener('input', () => { term.extra = Number(price.value) || 0; });
+      sums.push(sayTotal);
+      sayTotal();
       const toggle = switchFor(term, 'enable', '', true);
       toggle.querySelector('input').addEventListener('change', () => {
         termsBox.querySelectorAll('.term-row').forEach((row, i) => {
@@ -5052,7 +5103,10 @@ async function renderBot(view) {
         el('div', { class: 'term-name', text: term.months === 1 ? '1 month' : `${term.months} months` }),
         el('div', { class: 'term-price' }, [
           price,
-          el('span', { class: 'faint', text: isBase ? 'the volume price on its own' : 'added to the volume price' })
+          el('div', { class: 'term-notes' }, [
+            el('div', { class: 'faint', text: isBase ? 'the volume price on its own' : 'added to the volume price' }),
+            worked
+          ])
         ]),
         toggle
       ]));

@@ -215,6 +215,25 @@ router.post('/account', async (req, res) => {
 /* ------------------------------- the bot -------------------------------- */
 
 /** The bot's own settings, without handing the token back out in full. */
+/*
+ * A number as somebody typed it, whatever digits their keyboard produces.
+ *
+ * Persian and Arabic-Indic digits, and a thousands comma, all read as NaN and
+ * were quietly stored as zero - so a price set on a Persian keyboard was saved
+ * as nothing. Normalised here as well as in the page, so it holds for anything
+ * that talks to this API.
+ */
+function num(raw, fallback) {
+  if (raw === undefined || raw === null || raw === '') return fallback === undefined ? 0 : fallback;
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : (fallback === undefined ? 0 : fallback);
+  const text = String(raw)
+    .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06F0))
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[^\d.-]/g, '');
+  const n = Number(text);
+  return Number.isFinite(n) ? n : (fallback === undefined ? 0 : fallback);
+}
+
 function botView() {
   const b = telegram.bot();
   return {
@@ -275,20 +294,20 @@ router.put('/bot', async (req, res) => {
     b.plans = body.plans.filter((p) => !p.custom).map((p) => ({
       id: p.id || db.id(),
       name: String(p.name || 'Plan').slice(0, 40),
-      gb: Number(p.gb) || 0,
-      days: Number(p.days) || 30,
+      gb: num(p.gb),
+      days: num(p.days, 30) || 30,
       price: String(p.price || '0').slice(0, 20),
       inboundId: p.inboundId || '',
       enable: p.enable !== false
     })).concat(oneOffs);
   }
 
-  if (body.pricePerGB !== undefined) b.pricePerGB = Math.max(0, Number(body.pricePerGB) || 0);
+  if (body.pricePerGB !== undefined) b.pricePerGB = Math.max(0, num(body.pricePerGB));
   if (body.trial && typeof body.trial === 'object') {
     b.trial = {
       enable: body.trial.enable !== false,
-      mb: Math.max(1, Number(body.trial.mb) || 100),
-      days: Math.max(1, Number(body.trial.days) || 1),
+      mb: Math.max(1, num(body.trial.mb, 100)),
+      days: Math.max(1, num(body.trial.days, 1)),
       inboundId: body.trial.inboundId || '',
       oncePerUser: body.trial.oncePerUser !== false
     };
@@ -296,18 +315,18 @@ router.put('/bot', async (req, res) => {
   if (body.custom && typeof body.custom === 'object') {
     b.custom = {
       enable: !!body.custom.enable,
-      minGB: Math.max(1, Number(body.custom.minGB) || 1),
-      maxGB: Math.max(0, Number(body.custom.maxGB) || 0),
-      days: Math.max(1, Number(body.custom.days) || 30),
+      minGB: Math.max(1, num(body.custom.minGB, 1)),
+      maxGB: Math.max(0, num(body.custom.maxGB)),
+      days: Math.max(1, num(body.custom.days, 30)),
       inboundId: body.custom.inboundId || '',
       /* how long it may be bought for, and what each length adds on top of
          the volume. Anything unreadable falls back to what the panel ships. */
       terms: Array.isArray(body.custom.terms) && body.custom.terms.length
         ? body.custom.terms
           .map((t) => ({
-            months: Math.max(1, Math.round(Number(t.months) || 0)),
+            months: Math.max(1, Math.round(num(t.months))),
             enable: t.enable !== false,
-            extra: Math.max(0, Math.round(Number(t.extra) || 0))
+            extra: Math.max(0, Math.round(num(t.extra)))
           }))
           .filter((t) => t.months > 0)
           .sort((a, c) => a.months - c.months)
