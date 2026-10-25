@@ -336,6 +336,17 @@ function escapeHtml(value) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function parseNum(raw, fallback = 0) {
+  if (raw === undefined || raw === null || raw === '') return fallback;
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : fallback;
+  const text = String(raw)
+    .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06F0))
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[^\d.-]/g, '');
+  const n = Number(text);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 /*
  * Step up a unit on what will be printed, not on the raw figure: a gigabyte
  * less 512 bytes is 1023.9995 MB, which a customer is told is "1024 MB".
@@ -578,7 +589,7 @@ async function startCustom(ctx, renewId) {
 async function takeCustomGB(ctx, raw, waiting) {
   const c = customSettings();
   const renewId = (waiting && waiting.data && waiting.data.renewId) || '';
-  const gb = Math.floor(Number(String(raw).replace(/[^\d.]/g, '')));
+  const gb = Math.floor(parseNum(raw, 0));
   if (!Number.isFinite(gb) || gb <= 0) return send(ctx.chatId, 'یک عدد بفرستید، مثلاً 20');
   if (gb < c.minGB) return send(ctx.chatId, `حداقل ${c.minGB} گیگابایت است.`);
   if (c.maxGB && gb > c.maxGB) return send(ctx.chatId, `حداکثر ${c.maxGB} گیگابایت است.`);
@@ -588,7 +599,8 @@ async function takeCustomGB(ctx, raw, waiting) {
   if (terms.length <= 1) {
     forget(ctx.userId);
     const only = terms[0];
-    return makeCustomPlan(ctx, gb, only ? only.months * DAYS_PER_MONTH : c.days, 0, renewId);
+    const days = only ? only.months * DAYS_PER_MONTH : (c.days || 30);
+    return makeCustomPlan(ctx, gb, days, 0, renewId);
   }
 
   expect(ctx.userId, 'customTerm', { gb, renewId });
@@ -628,7 +640,8 @@ async function takeCustomTerm(ctx, months, waiting) {
   const term = terms.find((t) => t.months === Number(months));
   if (!term) return null;
   forget(ctx.userId);
-  return makeCustomPlan(ctx, gb, term.months * DAYS_PER_MONTH, extraFor(term), data.renewId || '');
+  const days = Math.max(1, term.months * DAYS_PER_MONTH);
+  return makeCustomPlan(ctx, gb, days, extraFor(term), data.renewId || '');
 }
 
 /*
@@ -639,12 +652,13 @@ async function takeCustomTerm(ctx, months, waiting) {
 async function makeCustomPlan(ctx, gb, days, extra, renewId) {
   const c = customSettings();
   const b = bot();
-  const months = Math.max(1, Math.round(days / DAYS_PER_MONTH));
+  const finalDays = Math.max(1, Number(days) || Number(c.days) || 30);
+  const months = Math.max(1, Math.round(finalDays / DAYS_PER_MONTH));
   const plan = {
     id: `custom-${db.id()}`,
-    name: `${gb} گیگابایت · ${monthWord(months)}`,
+    name: `${gb} گیگابایت · ${finalDays >= 30 ? monthWord(months) : `${finalDays} روزه`}`,
     gb,
-    days,
+    days: finalDays,
     price: String(gb * pricePerGB() + (Number(extra) || 0)),
     inboundId: c.inboundId || (db.data.inbounds.find((i) => i.enable !== false) || {}).id || '',
     enable: true,
@@ -1142,12 +1156,13 @@ async function takeTrialName(ctx, raw) {
 
   forget(ctx.userId);
   try {
+    const trialDays = Math.max(1, Number(t.days) || 1);
     const client = await require('./routes/api').createClient(inbound, {
       email,
       totalGB: t.mb / 1024,                 // the quota is held in gigabytes
-      startAfterFirstUse: true,
-      expiryDays: t.days,
-      expiryTime: 0,
+      startAfterFirstUse: startsOnFirstUse(),
+      expiryDays: trialDays,
+      expiryTime: startsOnFirstUse() ? 0 : Date.now() + trialDays * 86400000,
       tgId: String(ctx.userId),
       isTrial: true,
       comment: 'کانفیگ تست - ربات'
@@ -1339,12 +1354,19 @@ async function placeOrder(ctx, planId, clientName, renewId) {
   const plan = b.plans.find((p) => p.id === planId);
   if (!plan) return reply(ctx, 'این اشتراک دیگر موجود نیست.', backRow());
 
+  const days = Math.max(1, Number(plan.days) || 30);
+  const gb = Math.max(0, Number(plan.gb) || 0);
+  const inboundId = plan.inboundId || (b.custom && b.custom.inboundId) || ((db.data.inbounds.find((i) => i.enable !== false) || {}).id) || '';
+
   const order = {
     id: db.id(),
     at: Date.now(),
     planId: plan.id,
     planName: plan.name,
     price: plan.price,
+    days,
+    gb,
+    inboundId,
     userId: ctx.userId,
     username: ctx.username || '',
     name: ctx.name || '',
@@ -1539,9 +1561,22 @@ async function cancelOrder(ctx, orderId) {
  */
 async function deliverOrder(order) {
   const b = bot();
-  const plan = b.plans.find((p) => p.id === order.planId);
-  const inbound = db.data.inbounds.find((i) => i.id === (plan && plan.inboundId));
-  if (!plan || !inbound) return { ok: false, error: 'اشتراک یا اینباند آن پیدا نشد' };
+  let plan = b.plans.find((p) => p.id === order.planId);
+  if (!plan) {
+    plan = {
+      id: order.planId,
+      name: order.planName || 'Plan',
+      days: Math.max(1, Number(order.days) || 30),
+      gb: Math.max(0, Number(order.gb) || 0),
+      inboundId: order.inboundId || ''
+    };
+  }
+
+  const days = Math.max(1, Number(order.days) || Number(plan.days) || 30);
+  const gb = Number(order.gb !== undefined ? order.gb : plan.gb) || 0;
+  const inboundId = order.inboundId || (plan && plan.inboundId) || ((db.data.inbounds.find((i) => i.enable !== false) || {}).id);
+  const inbound = db.data.inbounds.find((i) => i.id === inboundId);
+  if (!inbound) return { ok: false, error: 'اینباندی برای این سفارش پیدا نشد' };
 
   /*
    * A top-up lands on the config the buyer was looking at when they pressed
@@ -1555,7 +1590,8 @@ async function deliverOrder(order) {
       && String(c.tgId || '') === String(order.userId));
     if (client) {
       try {
-        return { ok: true, renewed: true, plan, client: await topUp(client, plan) };
+        const renewPlan = Object.assign({}, plan, { days, gb });
+        return { ok: true, renewed: true, plan: renewPlan, client: await topUp(client, renewPlan) };
       } catch (err) {
         return { ok: false, error: err.message };
       }
@@ -1564,16 +1600,15 @@ async function deliverOrder(order) {
   }
 
   try {
+    const startFirstUse = startsOnFirstUse();
+    const expiryTime = startFirstUse ? 0 : (Date.now() + days * 86400000);
     const client = await require('./routes/api').createClient(inbound, {
       // what the buyer called it, if they were asked and the name is still free
       email: uniqueName(cleanName(order.clientName)) || `tg-${order.userId}-${String(order.id).slice(0, 4)}`,
-      totalGB: plan.gb || 0,
-      /* when the days start is the admin's call: unwound until the config is
-         first used, which is kinder, or from the sale, which is the one that
-         shows an expiry date on the panel the moment it is sold */
-      startAfterFirstUse: startsOnFirstUse(),
-      expiryDays: plan.days || 0,
-      expiryTime: startsOnFirstUse() || !plan.days ? 0 : Date.now() + plan.days * 86400000,
+      totalGB: gb,
+      startAfterFirstUse: startFirstUse,
+      expiryDays: days,
+      expiryTime: expiryTime,
       tgId: String(order.userId),
       comment: `${plan.name} - فروش ربات`
     });
@@ -1592,6 +1627,7 @@ async function deliverOrder(order) {
  */
 async function topUp(client, plan) {
   const now = Date.now();
+  const planDays = Math.max(1, Number(plan.days) || 30);
   if (plan.gb) {
     const used = (client.up || 0) + (client.down || 0);
     const hadGB = Number(client.totalGB) || 0;
@@ -1599,16 +1635,19 @@ async function topUp(client, plan) {
     if (hadGB) {
       const leftBytes = Math.max(0, hadGB * 1024 ** 3 - used);
       client.totalGB = (used + leftBytes) / 1024 ** 3 + plan.gb;
+    } else {
+      client.totalGB = plan.gb;
     }
   } else {
     client.totalGB = 0;
   }
-  if (plan.days) {
-    if (client.expiryTime && client.expiryTime > now) client.expiryTime += plan.days * 86400000;
-    else if (!client.expiryTime && client.startAfterFirstUse && !client.startedAt) {
-      client.expiryDays = (Number(client.expiryDays) || 0) + plan.days;
+  if (planDays) {
+    if (client.expiryTime && client.expiryTime > now) {
+      client.expiryTime += planDays * 86400000;
+    } else if (!client.expiryTime && client.startAfterFirstUse && !client.startedAt) {
+      client.expiryDays = (Number(client.expiryDays) || 0) + planDays;
     } else {
-      client.expiryTime = now + plan.days * 86400000;
+      client.expiryTime = now + planDays * 86400000;
     }
   }
   // a top-up is also a reprieve: whatever had switched it off is settled now

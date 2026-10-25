@@ -16,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 
 const LOG_FILE = process.env.NEXV_XRAY_ACCESS_LOG || '/var/log/xray/access.log';
-const DATA_DIR = process.env.NEXV_DATA_DIR || '/etc/nexv/data';
+const DATA_DIR = process.env.NEXV_DATA_DIR || path.join(__dirname, '..', 'data');
 const SITE_FILE = path.join(DATA_DIR, 'sites.json');
 
 const EVERY = 10000;          // how often the tail is read

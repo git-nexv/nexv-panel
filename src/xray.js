@@ -11,10 +11,30 @@ const certs = require('./certs');
 const online = require('./online');
 const membership = require('./membership');
 
+function resolveConfigPath() {
+  if (process.env.NEXV_XRAY_CONFIG) return process.env.NEXV_XRAY_CONFIG;
+  try {
+    fs.mkdirSync('/usr/local/etc/xray', { recursive: true });
+    return '/usr/local/etc/xray/config.json';
+  } catch (_) {
+    return path.join(__dirname, '..', 'data', 'xray', 'config.json');
+  }
+}
+
+function resolveAccessLogPath() {
+  if (process.env.NEXV_XRAY_ACCESS_LOG) return process.env.NEXV_XRAY_ACCESS_LOG;
+  try {
+    fs.mkdirSync('/var/log/xray', { recursive: true });
+    return '/var/log/xray/access.log';
+  } catch (_) {
+    return path.join(__dirname, '..', 'data', 'xray', 'access.log');
+  }
+}
+
 const XRAY_BIN = process.env.NEXV_XRAY_BIN || '/usr/local/bin/xray';
-const XRAY_CONFIG = process.env.NEXV_XRAY_CONFIG || '/usr/local/etc/xray/config.json';
+const XRAY_CONFIG = resolveConfigPath();
 const NEXV_CLI = process.env.NEXV_CLI || '/usr/local/bin/nexv';
-const ACCESS_LOG = process.env.NEXV_XRAY_ACCESS_LOG || '/var/log/xray/access.log';
+const ACCESS_LOG = resolveAccessLogPath();
 const XRAY_SERVICE = process.env.NEXV_XRAY_SERVICE || 'xray';
 const API_PORT = 62789;
 

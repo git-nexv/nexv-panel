@@ -46,8 +46,11 @@ app.use((req, res, next) => {
     if (opts.maxAge) parts.push(`Max-Age=${Math.floor(opts.maxAge / 1000)}`);
     parts.push(`Path=${opts.path || '/'}`);
     if (opts.httpOnly) parts.push('HttpOnly');
-    if (opts.secure) parts.push('Secure');
-    parts.push(`SameSite=${opts.sameSite || 'Lax'}`);
+    const isSecure = opts.secure !== false;
+    if (isSecure) parts.push('Secure');
+    const sameSite = opts.sameSite || (isSecure ? 'None' : 'Lax');
+    parts.push(`SameSite=${sameSite}`);
+    if (String(sameSite).toLowerCase() === 'none') parts.push('Partitioned');
     const prev = res.getHeader('Set-Cookie');
     const list = prev ? [].concat(prev) : [];
     list.push(parts.join('; '));
@@ -91,7 +94,15 @@ function serveSubscription(req, res) {
 
   const clients = db.data.clients.filter((c) => c.subId === subId);
   const totalGB = clients.reduce((a, c) => a + (c.totalGB || 0), 0);
-  const expiry = clients.reduce((a, c) => Math.max(a, c.expiryTime || 0), 0);
+  const clientExpiry = (c) => {
+    if (c.expiryTime && c.expiryTime > 0) return c.expiryTime;
+    if (c.expiryDays && c.expiryDays > 0) {
+      const base = c.startedAt || c.createdAt || Date.now();
+      return base + c.expiryDays * 86400000;
+    }
+    return 0;
+  };
+  const expiry = clients.reduce((a, c) => Math.max(a, clientExpiry(c)), 0);
 
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.setHeader('Profile-Update-Interval', '12');
@@ -135,8 +146,15 @@ async function subscriptionInfo(subId) {
   if (!clients.length) return null;
 
   const used = clients.reduce((a, c) => a + (c.up || 0) + (c.down || 0), 0);
-  const totalGB = clients.reduce((a, c) => a + (c.totalGB || 0), 0);
-  const expiry = clients.reduce((a, c) => Math.max(a, c.expiryTime || 0), 0);
+  const clientExpiry = (c) => {
+    if (c.expiryTime && c.expiryTime > 0) return c.expiryTime;
+    if (c.expiryDays && c.expiryDays > 0) {
+      const base = c.startedAt || c.createdAt || Date.now();
+      return base + c.expiryDays * 86400000;
+    }
+    return 0;
+  };
+  const expiry = clients.reduce((a, c) => Math.max(a, clientExpiry(c)), 0);
   const url = require('./routes/api').subUrl(subId);
 
   const configs = [];
@@ -373,6 +391,9 @@ app.get('/', (req, res) => {
   const base = baseFor(req);
   const user = auth.currentUser(req);
   if (!user || mismatched(req, user)) return res.redirect(`${base}/login`);
+  if (req.query && req.query.token) {
+    res.cookie(auth.COOKIE, req.query.token, auth.cookieOptions(req));
+  }
   sendPage(res, 'index.html', base, req);
 });
 
@@ -423,7 +444,7 @@ async function bootstrap() {
   const d = db.data;
   if (!d.users.length) {
     const username = process.env.NEXV_ADMIN_USER || 'admin';
-    const password = process.env.NEXV_ADMIN_PASS || require('crypto').randomBytes(9).toString('base64url');
+    const password = process.env.NEXV_ADMIN_PASS || 'admin';
     await auth.createUser(username, password);
     console.log('==================================================');
     console.log(' NexV Panel first run — admin account created');
@@ -431,8 +452,8 @@ async function bootstrap() {
     console.log(` password: ${password}`);
     console.log('==================================================');
   }
-  if (!d.settings.webBasePath) {
-    d.settings.webBasePath = `/${require('crypto').randomBytes(9).toString('base64url')}`;
+  if (d.settings.webBasePath === undefined || d.settings.webBasePath === null) {
+    d.settings.webBasePath = process.env.NEXV_BASE_PATH || '';
     db.saveNow();
   }
   try { xray.writeConfig(); } catch (err) { console.error('[xray] cannot write config:', err.message); }
@@ -531,11 +552,11 @@ function createServer(handler, tls) {
 
 if (require.main === module) {
   bootstrap().then(() => {
-    const port = Number(process.env.NEXV_PORT || db.settings.panelPort || 2087);
+    const port = Number(process.env.PORT || process.env.NEXV_PORT || 3000);
     /* the address the panel answers on. Empty means every address, which is
        the only sane default on a box you have just installed on; naming one
        is how you keep the panel off the public interface entirely. */
-    const host = process.env.NEXV_HOST || db.settings.panelListen || '0.0.0.0';
+    const host = process.env.HOST || process.env.NEXV_HOST || db.settings.panelListen || '0.0.0.0';
     const tls = process.env.NEXV_NO_TLS ? null : tlsOptions();
     const scheme = tls ? 'https' : 'http';
 
