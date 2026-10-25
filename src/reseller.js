@@ -18,7 +18,7 @@ const crypto = require('crypto');
 const db = require('./db');
 const auth = require('./auth');
 
-const DATA_DIR = process.env.NEXV_DATA_DIR || '/etc/nexv/data';
+const DATA_DIR = db.DATA_DIR;
 const BOT_DIR = path.join(DATA_DIR, 'bots');
 
 /** What a gigabyte costs when nobody has said otherwise anywhere. */

@@ -7,7 +7,35 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const DATA_DIR = process.env.NEXV_DATA_DIR || path.join(__dirname, '..', 'data');
+function resolveDataDir() {
+  if (process.env.NEXV_DATA_DIR) return process.env.NEXV_DATA_DIR;
+  const sysDir = '/etc/nexv/data';
+  const sysFile = path.join(sysDir, 'db.json');
+  const localDir = path.join(__dirname, '..', 'data');
+  const localFile = path.join(localDir, 'db.json');
+
+  if (fs.existsSync(sysFile)) {
+    return sysDir;
+  }
+  if (fs.existsSync(sysDir)) {
+    if (fs.existsSync(localFile) && !fs.existsSync(sysFile)) {
+      try { fs.copyFileSync(localFile, sysFile); } catch (_) {}
+    }
+    return sysDir;
+  }
+  try {
+    if (process.env.NODE_ENV === 'production' || (process.getuid && process.getuid() === 0)) {
+      fs.mkdirSync(sysDir, { recursive: true, mode: 0o750 });
+      if (fs.existsSync(localFile) && !fs.existsSync(sysFile)) {
+        try { fs.copyFileSync(localFile, sysFile); } catch (_) {}
+      }
+      return sysDir;
+    }
+  } catch (_) {}
+  return localDir;
+}
+
+const DATA_DIR = resolveDataDir();
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 
 const DEFAULTS = () => ({

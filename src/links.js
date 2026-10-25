@@ -253,4 +253,4 @@ function subscriptionFor(subId) {
   return links;
 }
 
-module.exports = { buildLink, subscriptionFor, hostFor, addressesFor, remarkFor, DEFAULT_REMARK, REMARK_TOKENS };
+module.exports = { buildLink, subscriptionFor, hostFor, addressesFor, remarkFor, remarkValues, DEFAULT_REMARK, REMARK_TOKENS };

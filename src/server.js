@@ -46,11 +46,12 @@ app.use((req, res, next) => {
     if (opts.maxAge) parts.push(`Max-Age=${Math.floor(opts.maxAge / 1000)}`);
     parts.push(`Path=${opts.path || '/'}`);
     if (opts.httpOnly) parts.push('HttpOnly');
-    const isSecure = opts.secure !== false;
+    const isHttps = !!(req.secure || req.protocol === 'https' || req.headers?.['x-forwarded-proto'] === 'https');
+    const isSecure = opts.secure !== undefined ? Boolean(opts.secure) : isHttps;
     if (isSecure) parts.push('Secure');
-    const sameSite = opts.sameSite || (isSecure ? 'None' : 'Lax');
+    const sameSite = String(opts.sameSite || (isSecure ? 'None' : 'Lax')).toLowerCase() === 'none' ? 'None' : 'Lax';
     parts.push(`SameSite=${sameSite}`);
-    if (String(sameSite).toLowerCase() === 'none') parts.push('Partitioned');
+    if (isSecure && sameSite === 'None') parts.push('Partitioned');
     const prev = res.getHeader('Set-Cookie');
     const list = prev ? [].concat(prev) : [];
     list.push(parts.join('; '));
@@ -453,7 +454,9 @@ async function bootstrap() {
     console.log('==================================================');
   }
   if (d.settings.webBasePath === undefined || d.settings.webBasePath === null) {
-    d.settings.webBasePath = process.env.NEXV_BASE_PATH || '';
+    d.settings.webBasePath = process.env.NEXV_BASE_PATH !== undefined
+      ? process.env.NEXV_BASE_PATH
+      : (process.env.NODE_ENV === 'production' ? `/${require('crypto').randomBytes(9).toString('base64url')}` : '');
     db.saveNow();
   }
   try { xray.writeConfig(); } catch (err) { console.error('[xray] cannot write config:', err.message); }
@@ -552,7 +555,12 @@ function createServer(handler, tls) {
 
 if (require.main === module) {
   bootstrap().then(() => {
-    const port = Number(process.env.PORT || process.env.NEXV_PORT || 3000);
+    const panelPort = Number(db.settings && db.settings.panelPort) || 2087;
+    const isProduction = process.env.NODE_ENV === 'production';
+    const port = Number(
+      process.env.NEXV_PORT ||
+      (isProduction ? panelPort : (process.env.PORT || panelPort))
+    );
     /* the address the panel answers on. Empty means every address, which is
        the only sane default on a box you have just installed on; naming one
        is how you keep the panel off the public interface entirely. */

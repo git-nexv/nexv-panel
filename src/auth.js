@@ -135,12 +135,13 @@ function currentUser(req) {
 }
 
 function cookieOptions(req) {
+  const isHttps = !!(req && (req.secure || req.protocol === 'https' || req.headers?.['x-forwarded-proto'] === 'https'));
   return {
     httpOnly: true,
-    sameSite: 'none',
+    sameSite: isHttps ? 'none' : 'lax',
     path: '/',
     maxAge: sessionTtl(),
-    secure: true
+    secure: isHttps
   };
 }
 

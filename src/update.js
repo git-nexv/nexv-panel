@@ -12,7 +12,8 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, execFileSync } = require('child_process');
 
-const DATA_DIR = process.env.NEXV_DATA_DIR || path.join(__dirname, '..', 'data');
+const db = require('./db');
+const DATA_DIR = db.DATA_DIR;
 const LOG_FILE = path.join(DATA_DIR, 'update.log');
 const STATE_FILE = path.join(DATA_DIR, 'update.json');
 const CLI = process.env.NEXV_CLI || '/usr/local/bin/nexv';
