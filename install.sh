@@ -11,13 +11,82 @@ INSTALL_DIR="/opt/nexv-panel"
 LEGACY_DIR="/opt/nexv-vpanel"
 DATA_DIR="/etc/nexv/data"
 SERVICE="nexv"
+# why TLS is off, when it is off for a reason worth telling the admin
+CERT_ERROR=""
 
 RED=$'\e[31m'; GREEN=$'\e[32m'; YELLOW=$'\e[33m'; BLUE=$'\e[36m'; BOLD=$'\e[1m'; RESET=$'\e[0m'
 
-info()  { echo "${BLUE}[*]${RESET} $*"; }
-ok()    { echo "${GREEN}[+]${RESET} $*"; }
-warn()  { echo "${YELLOW}[!]${RESET} $*"; }
-fail()  { echo "${RED}[x]${RESET} $*" >&2; exit 1; }
+# ---------------------------------------------------------------------------
+# A clock on every line
+#
+# An install that prints "Downloading Xray-core..." and then says nothing for
+# four minutes looks exactly like an install that has frozen, and the usual
+# answer to that is ctrl-C halfway through - which is how a machine ends up
+# half installed. So every line carries how long the install has been running,
+# and the steps that really do take minutes tick while they work.
+# ---------------------------------------------------------------------------
+START_TS=$(date +%s)
+DIM=$'\e[2m'
+
+elapsed() {
+  local secs=$(( $(date +%s) - START_TS ))
+  printf '%02d:%02d' $(( secs / 60 )) $(( secs % 60 ))
+}
+
+stamp() { printf '%s[%s]%s ' "$DIM" "$(elapsed)" "$RESET"; }
+
+info()  { echo "$(stamp)${BLUE}[*]${RESET} $*"; }
+ok()    { echo "$(stamp)${GREEN}[+]${RESET} $*"; }
+warn()  { echo "$(stamp)${YELLOW}[!]${RESET} $*"; }
+fail()  { echo "$(stamp)${RED}[x]${RESET} $*" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# Run something slow with the clock running
+#
+#   step "Downloading Xray-core" some_command arg...
+#
+# On a terminal the line rewrites itself once a second, so the install is
+# visibly alive. Piped to a file or a log there is nothing to rewrite, so it
+# prints a line every fifteen seconds instead - still progress, still readable
+# afterwards. The command's own exit status is what comes back, so every
+# caller's error handling keeps working unchanged.
+# ---------------------------------------------------------------------------
+# Swallow a command's own chatter without swallowing the ticker with it: a
+# redirect written on the `step` line would silence step's own output too.
+quietly() { "$@" >/dev/null 2>&1; }
+
+step() {
+  local label="$1"; shift
+  local tty=0; [[ -t 1 ]] && tty=1
+  local began; began=$(date +%s)
+
+  # say what is starting before anything else, so a step that fails in its
+  # first second still leaves its name behind
+  if [[ $tty == 1 ]]; then
+    printf '%s%s[*]%s %s... ' "$(stamp)" "$BLUE" "$RESET" "$label"
+  else
+    echo "$(stamp)${BLUE}[*]${RESET} $label..."
+  fi
+
+  "$@" &
+  local pid=$!
+  local n=0
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 1
+    n=$(( n + 1 ))
+    local for_secs=$(( $(date +%s) - began ))
+    local mmss; mmss=$(printf '%02d:%02d' $(( for_secs / 60 )) $(( for_secs % 60 )))
+    if [[ $tty == 1 ]]; then
+      printf '\r\033[K%s%s[*]%s %s... %s%s%s ' "$(stamp)" "$BLUE" "$RESET" "$label" "$DIM" "$mmss" "$RESET"
+    elif (( n % 15 == 0 )); then
+      echo "$(stamp)${BLUE}[*]${RESET} $label... still going (${mmss})"
+    fi
+  done
+  local rc=0
+  wait "$pid" || rc=$?
+  [[ $tty == 1 ]] && printf '\r\033[K'
+  return $rc
+}
 
 banner() {
   cat <<'ART'
@@ -93,6 +162,9 @@ wait_for_apt() {
     fi
     sleep 5
     waited=$((waited + 5))
+    # say so every half minute: five silent minutes is indistinguishable from
+    # a hang, and this is the step people kill the installer during
+    (( waited % 30 == 0 )) && info "  still waiting for apt (${waited}s)..."
     if [[ $waited -ge 300 ]]; then
       warn "apt is still busy after five minutes; trying anyway"
       return 0
@@ -142,13 +214,12 @@ install_packages() {
     return 0
   fi
 
-  info "Installing prerequisites: ${missing[*]}"
   if [[ $PKG == apt ]]; then
     export DEBIAN_FRONTEND=noninteractive
-    apt_do update -qq
-    apt_do install -y -qq "${missing[@]}" >/dev/null
+    step "Refreshing the package lists" apt_do update -qq
+    step "Installing prerequisites: ${missing[*]}" quietly apt_do install -y -qq "${missing[@]}"
   else
-    $PKG install -y -q "${missing[@]}" >/dev/null
+    step "Installing prerequisites: ${missing[*]}" quietly $PKG install -y -q "${missing[@]}"
   fi
   ok "Prerequisites installed"
 }
@@ -201,9 +272,7 @@ install_node() {
     ok "Node.js $(node -v) is already installed"
     return
   fi
-  info "Installing Node.js 20 LTS..."
-
-  if install_node_tarball; then
+  if step "Installing Node.js 20 LTS" install_node_tarball; then
     ok "Node.js $(node -v) installed from nodejs.org"
     return
   fi
@@ -475,7 +544,6 @@ migrate_legacy_dir() {
 }
 
 fetch_panel() {
-  info "Downloading the panel..."
   # the same leash the updater wears: git will otherwise sit on a stalled
   # transfer indefinitely, which is the hang this installer is named for
   local git_guards=(-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60)
@@ -483,21 +551,21 @@ fetch_panel() {
   if [[ -d $INSTALL_DIR/.git ]]; then
     git -C "$INSTALL_DIR" remote set-url origin "$REPO_URL"
     rc=0
-    timeout 600 git "${git_guards[@]}" -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH" -q || rc=$?
+    step "Downloading the panel" timeout 600 git "${git_guards[@]}" -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH" -q || rc=$?
     if [[ $rc -eq 124 ]]; then fail "The repository did not answer within ten minutes."; fi
     if [[ $rc -ne 0 ]]; then fail "Could not fetch $BRANCH from the repository (git exited $rc)"; fi
     git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH" -q
   else
     rm -rf "$INSTALL_DIR"
     rc=0
-    timeout 600 git "${git_guards[@]}" clone --depth 1 -b "$BRANCH" "$REPO_URL" "$INSTALL_DIR" -q || rc=$?
+    step "Downloading the panel" timeout 600 git "${git_guards[@]}" clone --depth 1 -b "$BRANCH" "$REPO_URL" "$INSTALL_DIR" -q || rc=$?
     if [[ $rc -eq 124 ]]; then fail "The repository did not answer within ten minutes."; fi
     if [[ $rc -ne 0 ]]; then fail "Could not clone the repository (git exited $rc)"; fi
   fi
-  info "Installing dependencies..."
   rc=0
-  ( cd "$INSTALL_DIR" && timeout 900 npm install --omit=dev --no-audit --no-fund \
-      --no-progress --fetch-timeout=120000 --fetch-retries=2 --loglevel=error ) || rc=$?
+  step "Installing dependencies" \
+    bash -c 'cd "$1" && timeout 900 npm install --omit=dev --no-audit --no-fund \
+      --no-progress --fetch-timeout=120000 --fetch-retries=2 --loglevel=error' _ "$INSTALL_DIR" || rc=$?
   if [[ $rc -eq 124 ]]; then fail "npm gave up after fifteen minutes - the registry is not answering."; fi
   if [[ $rc -ne 0 ]]; then fail "npm dependencies failed to install (npm exited $rc)"; fi
   mkdir -p "$DATA_DIR"
@@ -535,38 +603,117 @@ ask_config() {
   [[ -z $DOMAIN ]] || WANT_SSL="${WANT_SSL:-Y}"
 }
 
+# ---------------------------------------------------------------------------
+# Why the certificate was refused, in words
+#
+# certbot's own output was thrown at /dev/null and the whole failure came out
+# as one line that said nothing. The panel then quietly served plain HTTP and
+# nobody was told why - "I asked for a domain and got no SSL and no error" is
+# exactly that. Every one of these has a different answer, so they are told
+# apart here rather than lumped together.
+#
+#   $1  the file certbot's output was captured into
+#   $2  the domain
+#
+# Sets CERT_ERROR to a short line fit to store and show in the panel.
+# ---------------------------------------------------------------------------
+explain_cert_failure() {
+  local log="$1" domain="$2" text
+  text="$(cat "$log" 2>/dev/null || true)"
+  CERT_ERROR=""
+
+  if grep -qiE 'too many certificates|rate ?limit|too many failed authoriz' <<<"$text"; then
+    CERT_ERROR="Let's Encrypt is rate-limiting $domain"
+    warn "Let's Encrypt has rate-limited this domain."
+    echo "  It issues at most 5 certificates a week for the same set of names,"
+    echo "  and 5 failed attempts an hour. The wait is the only fix - usually an"
+    echo "  hour, at most a week. Nothing is wrong with your server."
+  elif grep -qiE 'DNS problem|NXDOMAIN|no valid (A|AAAA) records' <<<"$text"; then
+    CERT_ERROR="$domain does not point at this server"
+    warn "$domain has no DNS record pointing here that Let's Encrypt could follow."
+    echo "  Point an A record at this server's IP and wait for it to spread,"
+    echo "  then run: nexv cert $domain"
+  elif grep -qiE 'Connection refused|Timeout during connect|connection timed out' <<<"$text"; then
+    CERT_ERROR="Let's Encrypt could not reach $domain on port 80"
+    warn "Let's Encrypt could not reach this server on port 80."
+    echo "  Something is dropping it: a firewall, a cloud security group, or a"
+    echo "  proxy in front of the domain (an orange cloud in Cloudflare does"
+    echo "  this). Open port 80 from anywhere, or turn the proxy off while the"
+    echo "  certificate is issued, then run: nexv cert $domain"
+  elif grep -qiE 'Address already in use|Could not bind TCP port 80' <<<"$text"; then
+    CERT_ERROR="something else is already using port 80"
+    warn "Port 80 is taken by another program, so the challenge could not be served."
+    echo "  Stop it - usually nginx or apache - and run: nexv cert $domain"
+  elif grep -qiE 'unauthorized|Invalid response from' <<<"$text"; then
+    CERT_ERROR="the challenge for $domain was answered by something else"
+    warn "The challenge was answered by something other than this server."
+    echo "  The domain is probably pointed somewhere else, or sits behind a"
+    echo "  proxy. Check where $domain resolves to, then: nexv cert $domain"
+  else
+    CERT_ERROR="the certificate for $domain could not be issued"
+    warn "The certificate could not be issued."
+  fi
+
+  # and certbot's own words, so there is something to search for
+  if [[ -n $text ]]; then
+    local said
+    said="$(grep -iE 'error|detail|problem|challenge|urn:ietf' <<<"$text" | tail -6)"
+    # a failure nobody has a pattern for is exactly the one where the raw tail
+    # is worth printing, so an empty match falls back to the last few lines
+    [[ -n $said ]] || said="$(tail -6 <<<"$text")"
+    echo "  ---- what certbot said ----"
+    sed 's/^/  /' <<<"$said"
+    echo "  ---------------------------"
+  fi
+  warn "The panel will be served over plain HTTP. Retry any time with: nexv cert $domain"
+}
+
 setup_ssl() {
   [[ -n ${DOMAIN:-} && ${WANT_SSL:-N} =~ ^[Yy]$ ]] || return 0
 
-  info "Installing certbot and requesting a certificate for $DOMAIN..."
   # cron only matters here, for the renewal job, so it is not everyone's problem
   if [[ $PKG == apt ]]; then
-    apt_do install -y -qq certbot cron >/dev/null
+    step "Installing certbot" quietly apt_do install -y -qq certbot cron
   else
-    $PKG install -y -q certbot cronie >/dev/null
+    step "Installing certbot" quietly $PKG install -y -q certbot cronie
   fi
 
   local resolved
   resolved="$(getent hosts "$DOMAIN" | awk '{print $1}' | head -1 || true)"
   if [[ -z $resolved ]]; then
-    warn "$DOMAIN does not resolve to this server yet; skipping the certificate."
-    warn "Point the DNS record here, then run: nexv cert $DOMAIN"
+    CERT_ERROR="$DOMAIN does not resolve yet"
+    warn "$DOMAIN does not resolve to anything yet, so there is no point asking."
+    warn "Point an A record at this server, then run: nexv cert $DOMAIN"
+    warn "The panel will be served over plain HTTP until then."
     return 0
+  fi
+
+  # a domain that resolves somewhere else is the single most common reason the
+  # challenge fails, and it can be said before spending a request on it
+  local mine
+  mine="$(curl -4 -s --max-time 6 https://api.ipify.org 2>/dev/null || true)"
+  if [[ -n $mine && $resolved != "$mine" ]]; then
+    warn "$DOMAIN points at $resolved, but this server answers as $mine."
+    warn "If that is a proxy (Cloudflare's orange cloud), turn it off until the certificate is issued."
   fi
 
   # port 80 must be free for the standalone challenge
   systemctl stop nginx 2>/dev/null || true
-  if certbot certonly --standalone --non-interactive --agree-tos \
-       --register-unsafely-without-email -d "$DOMAIN" >/dev/null 2>&1; then
+  local log="/var/log/nexv-certbot.log"
+  if step "Requesting a certificate for $DOMAIN" \
+       bash -c 'certbot certonly --standalone --non-interactive --agree-tos \
+         --register-unsafely-without-email -d "$1" >"$2" 2>&1' _ "$DOMAIN" "$log"; then
     CERT_FILE="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
     KEY_FILE="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
+    CERT_ERROR=""
     ok "TLS certificate issued"
     # renewal keeps xray/panel picking up the new cert
     cat > /etc/cron.d/nexv-cert-renew <<EOF
 0 3 * * * root certbot renew --quiet --deploy-hook "systemctl restart xray nexv"
 EOF
   else
-    warn "The certificate could not be issued; you can retry later with: nexv cert $DOMAIN"
+    explain_cert_failure "$log" "$DOMAIN"
+    echo "  The full output is in $log"
   fi
 }
 
@@ -574,7 +721,7 @@ seed_settings() {
   info "Writing initial settings..."
   DATA_DIR="$DATA_DIR" \
   PANEL_PORT="$PANEL_PORT" DOMAIN="${DOMAIN:-}" \
-  CERT_FILE="${CERT_FILE:-}" KEY_FILE="${KEY_FILE:-}" \
+  CERT_FILE="${CERT_FILE:-}" KEY_FILE="${KEY_FILE:-}" CERT_ERROR="${CERT_ERROR:-}" \
   node -e '
     const fs = require("fs"), path = require("path");
     const dir = process.env.DATA_DIR;
@@ -588,7 +735,11 @@ seed_settings() {
       keyFile: process.env.KEY_FILE,
       // the panel serves itself over HTTPS with the same certificate
       panelCertFile: process.env.CERT_FILE,
-      panelKeyFile: process.env.KEY_FILE
+      panelKeyFile: process.env.KEY_FILE,
+      /* why there is no certificate, so the panel can say so instead of
+         quietly serving plain HTTP and leaving the admin to guess */
+      certError: process.env.CERT_ERROR || "",
+      certErrorAt: process.env.CERT_ERROR ? Date.now() : 0
     });
     for (const key of ["users","inbounds","clients","outbounds","routing","sessions","traffic","logs"]) {
       if (!Array.isArray(db[key])) db[key] = [];
@@ -674,7 +825,16 @@ summary() {
   echo
   echo "${YELLOW}  The panel only answers on the secret path above."
   echo "  Run 'nexv url' any time to print it again.${RESET}"
-  [[ $scheme == http ]] && echo "${YELLOW}  Served over plain HTTP. Enable HTTPS with: nexv cert <domain>${RESET}"
+  if [[ $scheme == http ]]; then
+    if [[ -n ${CERT_ERROR:-} ]]; then
+      # the one line somebody reads: the install finished, and here is why it
+      # finished without the HTTPS they asked for
+      echo "${YELLOW}  No HTTPS: ${CERT_ERROR}.${RESET}"
+      echo "${YELLOW}  Retry when it is sorted with: nexv cert ${DOMAIN:-<domain>}${RESET}"
+    else
+      echo "${YELLOW}  Served over plain HTTP. Enable HTTPS with: nexv cert <domain>${RESET}"
+    fi
+  fi
   echo
   echo "  Type ${BOLD}nexv${RESET} for the management menu."
   echo "${GREEN}${BOLD}=====================================================${RESET}"

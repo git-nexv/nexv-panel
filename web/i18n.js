@@ -876,6 +876,10 @@ const FA = {
   'The last one did not go through:': 'آخرین ارسال انجام نشد:',
   'Tehran (+3:30)': 'تهران (+۳:۳۰)',
 
+  'No HTTPS': 'بدون HTTPS',
+  'Sort it out, then run this on the server: nexv cert <domain>': 'بعد از رفع مشکل، روی سرور این را بزنید: nexv cert <domain>',
+  'Dismiss': 'بستن',
+
   /* ---- firewall ---- */
   'Firewall': 'فایروال',
   'Which ports the host lets through.': 'سرور کدام پورت‌ها را باز گذاشته است.',

@@ -668,11 +668,41 @@ async function renderResellerDashboard(view) {
   }
 }
 
+/** The "no HTTPS, and here is why" banner, wherever it is wanted. */
+async function drawCertWarning(host) {
+  let s;
+  try { s = await api.get('/settings'); } catch (_) { return; }
+  host.innerHTML = '';
+  if (!s.certError) return;
+  host.append(el('div', { class: 'notice danger', style: 'margin-bottom:16px' }, [
+    el('div', {}, [el('strong', { text: `${t('No HTTPS')}: ` }), s.certError]),
+    el('div', { class: 'row', style: 'margin-top:10px;flex-wrap:wrap' }, [
+      el('span', { class: 'hint', text: 'Sort it out, then run this on the server: nexv cert <domain>' }),
+      el('button', {
+        class: 'btn ghost', text: 'Dismiss',
+        onclick: async () => {
+          try { await api.put('/settings', { certError: '' }); host.innerHTML = ''; } catch (err) { toast(err.message, 'err'); }
+        }
+      })
+    ])
+  ]));
+}
+
 async function renderDashboard(view) {
   if (isReseller()) return renderResellerDashboard(view);
+  /*
+   * Why there is no HTTPS, when there is a reason.
+   *
+   * A domain that was rate-limited or pointed somewhere else failed its
+   * certificate at install time, the panel fell back to plain HTTP, and the
+   * only trace of it scrolled past in the installer. The reason is written
+   * into the settings now, and this is where somebody actually sees it.
+   */
+  const certWarn = el('div');
   const grid = el('div', { class: 'grid stats' });
   const info = el('div', { class: 'grid two', style: 'margin-top:16px' });
-  view.append(grid, info);
+  view.append(certWarn, grid, info);
+  drawCertWarning(certWarn);
 
   const stats = {
     cpu: statCard('CPU', true),
@@ -3919,7 +3949,9 @@ async function renderSettings(view) {
   panels.General.append(el('div', { class: 'card' }, [general, saveRow()]));
   panels.Access.append(el('div', { class: 'card' }, [access, saveRow()]));
   panels.Limits.append(el('div', { class: 'card' }, [limits, saveRow()]));
-  panels.TLS.append(el('div', { class: 'card' }, [tls, saveRow()]));
+  const tlsWarn = el('div');
+  drawCertWarning(tlsWarn);
+  panels.TLS.append(tlsWarn, el('div', { class: 'card' }, [tls, saveRow()]));
   panels.Theme.append(el('div', { class: 'card' }, [skinPicker()]));
   naming.append(saveRow());
 

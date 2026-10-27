@@ -312,6 +312,79 @@ act_settings() {
   '
 }
 
+# ---------------------------------------------------------------------------
+# Why the certificate was refused, in words
+#
+# "Certificate request failed" was the whole of what this used to say, with
+# certbot's own output going nowhere. Every one of these has a different
+# answer and waiting is only right for one of them, so they are told apart.
+#
+#   $1  the file certbot's output was captured into
+#   $2  the domain
+#
+# Sets CERT_ERROR to a short line fit to store and show in the panel.
+# ---------------------------------------------------------------------------
+explain_cert_failure() {
+  local log="$1" domain="$2" text
+  text="$(cat "$log" 2>/dev/null || true)"
+  CERT_ERROR=""
+
+  if grep -qiE 'too many certificates|rate ?limit|too many failed authoriz' <<<"$text"; then
+    CERT_ERROR="Let's Encrypt is rate-limiting $domain"
+    err "Let's Encrypt has rate-limited this domain."
+    echo "  It issues at most 5 certificates a week for the same set of names,"
+    echo "  and 5 failed attempts an hour. The wait is the only fix - usually an"
+    echo "  hour, at most a week. Nothing is wrong with your server."
+  elif grep -qiE 'DNS problem|NXDOMAIN|no valid (A|AAAA) records' <<<"$text"; then
+    CERT_ERROR="$domain does not point at this server"
+    err "$domain has no DNS record pointing here that Let's Encrypt could follow."
+    echo "  Point an A record at this server's IP and wait for it to spread."
+  elif grep -qiE 'Connection refused|Timeout during connect|connection timed out' <<<"$text"; then
+    CERT_ERROR="Let's Encrypt could not reach $domain on port 80"
+    err "Let's Encrypt could not reach this server on port 80."
+    echo "  Something is dropping it: a firewall, a cloud security group, or a"
+    echo "  proxy in front of the domain (an orange cloud in Cloudflare does this)."
+    echo "  Open port 80 from anywhere, or turn the proxy off while it is issued."
+  elif grep -qiE 'Address already in use|Could not bind TCP port 80' <<<"$text"; then
+    CERT_ERROR="something else is already using port 80"
+    err "Port 80 is taken by another program, so the challenge could not be served."
+    echo "  Stop it - usually nginx or apache - and try again."
+  elif grep -qiE 'unauthorized|Invalid response from' <<<"$text"; then
+    CERT_ERROR="the challenge for $domain was answered by something else"
+    err "The challenge was answered by something other than this server."
+    echo "  The domain is probably pointed somewhere else, or sits behind a proxy."
+  else
+    CERT_ERROR="the certificate for $domain could not be issued"
+    err "The certificate could not be issued."
+  fi
+
+  if [[ -n $text ]]; then
+    local said
+    said="$(grep -iE 'error|detail|problem|challenge|urn:ietf' <<<"$text" | tail -6)"
+    # a failure nobody has a pattern for is exactly the one where the raw tail
+    # is worth printing, so an empty match falls back to the last few lines
+    [[ -n $said ]] || said="$(tail -6 <<<"$text")"
+    echo "  ---- what certbot said ----"
+    sed 's/^/  /' <<<"$said"
+    echo "  ---------------------------"
+  fi
+}
+
+# Put the reason where the panel can read it, or clear it once one is issued.
+remember_cert_error() {
+  REASON="${1:-}" DATA_DIR="$DATA_DIR" node -e '
+    const fs = require("fs"), path = require("path");
+    const file = path.join(process.env.DATA_DIR, "db.json");
+    try {
+      const db = JSON.parse(fs.readFileSync(file, "utf8"));
+      db.settings = db.settings || {};
+      db.settings.certError = process.env.REASON || "";
+      db.settings.certErrorAt = process.env.REASON ? Date.now() : 0;
+      fs.writeFileSync(file, JSON.stringify(db, null, 2), { mode: 0o600 });
+    } catch (e) { }
+  ' >/dev/null 2>&1 || true
+}
+
 act_cert() {
   need_root
   local domain="${1:-}"
@@ -322,14 +395,36 @@ act_cert() {
     return 1
   fi
 
+  # a domain that points somewhere else is the usual reason this fails, and it
+  # costs nothing to say so before spending one of the week's five requests
+  local resolved mine
+  resolved="$(getent hosts "$domain" | awk '{print $1}' | head -1 || true)"
+  if [[ -z $resolved ]]; then
+    err "$domain does not resolve to anything yet."
+    echo "  Point an A record at this server and wait for it to spread, then try again."
+    return 1
+  fi
+  mine="$(curl -4 -s --max-time 6 https://api.ipify.org 2>/dev/null || true)"
+  if [[ -n $mine && $resolved != "$mine" ]]; then
+    warn "$domain points at $resolved, but this server answers as $mine."
+    warn "If that is a proxy (Cloudflare's orange cloud), turn it off until the certificate is issued."
+  fi
+
   # port 80 must be free for the standalone challenge
   systemctl stop nginx 2>/dev/null || true
-  certbot certonly --standalone --non-interactive --agree-tos \
-    --register-unsafely-without-email -d "$domain" || { err "Certificate request failed"; return 1; }
+  local log="/var/log/nexv-certbot.log"
+  if ! certbot certonly --standalone --non-interactive --agree-tos \
+       --register-unsafely-without-email -d "$domain" >"$log" 2>&1; then
+    explain_cert_failure "$log" "$domain"
+    echo "  The full output is in $log"
+    remember_cert_error "$CERT_ERROR"
+    return 1
+  fi
 
   local cert="/etc/letsencrypt/live/$domain/fullchain.pem"
   local key="/etc/letsencrypt/live/$domain/privkey.pem"
   [[ -f $cert && -f $key ]] || { err "certbot reported success but $cert is missing"; return 1; }
+  remember_cert_error ""
   ok "Certificate ready:"
   echo "  $cert"
   echo "  $key"

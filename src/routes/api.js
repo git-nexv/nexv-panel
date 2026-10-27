@@ -2189,7 +2189,10 @@ router.put('/settings', async (req, res) => {
     'blockTorrent', 'serverIP', 'trafficResetDay', 'defaultOutbound', 'domainStrategy', 'trackIps',
     'subTitle', 'panelCertFile', 'panelKeyFile', 'httpRedirect', 'remarkTemplate', 'pricePerGB',
     'panelListen', 'panelDomain', 'sessionHours', 'trustedProxies', 'ipLimitAllowlist',
-    'pageSize', 'restartXrayOnAutoDisable', 'expireWarnDays', 'trafficWarnGB'];
+    'pageSize', 'restartXrayOnAutoDisable', 'expireWarnDays', 'trafficWarnGB',
+    // written by the installer and the terminal when a certificate is refused;
+    // the panel only ever clears it
+    'certError'];
   // TLS material is read once when the listener is created
   const restartKeys = ['panelPort', 'panelCertFile', 'panelKeyFile', 'certFile', 'keyFile', 'httpRedirect',
     'panelListen', 'panelDomain'];
