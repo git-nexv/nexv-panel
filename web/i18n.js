@@ -296,6 +296,9 @@ const FA = {
   'Sniffing': 'شناسایی',
   'Remark': 'نام',
   'Listen IP': 'آی‌پی شنود',
+  'Bot connects through': 'ربات از کجا وصل شود',
+  'The server itself (direct)': 'خود همین سرور (مستقیم)',
+  'Leave this on the server itself unless the server cannot reach Telegram. Where it cannot \u2014 an Iranian server, where the bot otherwise never starts \u2014 pick an outbound that can, and the bot goes out through it. Xray must be running for that.': 'تا وقتی سرور به تلگرام دسترسی دارد همین «خود سرور» بماند. جایی که دسترسی ندارد \u2014 مثل سرور ایران که ربات اصلاً بالا نمی‌آید \u2014 یک اوت‌باند که دسترسی دارد انتخاب کنید تا ربات از آن بیرون برود. برای این کار Xray باید روشن باشد.',
   'Telegram username': 'یوزرنیم تلگرام',
   'Telegram ID': 'آیدی تلگرام',
   'Message them': 'پیام دادن',
@@ -1251,6 +1254,12 @@ const OWNERS = {
 const SECURITIES = { none: 'بدون امنیت', tls: 'tls', reality: 'reality' };
 
 const PATTERNS = [
+  [/^there is no outbound called "(.+)"$/, (m) => `اوت‌باندی به نام «${m[1]}» وجود ندارد`],
+  [/^could not reach Telegram through outbound "(.+)": (.+)\. Xray has to be running for the bot to use an outbound\.$/,
+    (m) => `از طریق اوت‌باند «${m[1]}» نشد به تلگرام رسید: ${m[2]}. برای اینکه ربات از اوت‌باند استفاده کند، Xray باید روشن باشد.`],
+  [/^port (\d+) is used by the bot's way out through an outbound; pick another one$/,
+    (m) => `پورت ${m[1]} برای راه خروج ربات از اوت‌باند استفاده می‌شود؛ یکی دیگر انتخاب کنید`],
+
   /* the owner and the security names are short fixed words rather than
      anything the admin typed, so they are worth turning over too */
   [/^port (\d+) is used by (.+); pick another one$/,

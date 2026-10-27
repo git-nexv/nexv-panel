@@ -5685,7 +5685,7 @@ async function renderBot(view) {
       screens: draft.screens, plans: draft.plans, pay: draft.pay, channel: draft.channel,
       pricePerGB: draft.pricePerGB, trial: draft.trial, custom: draft.custom,
       access: draft.access, startOnFirstUse: draft.startOnFirstUse,
-      buttonStyle: draft.buttonStyle, backup: draft.backup
+      buttonStyle: draft.buttonStyle, viaOutbound: draft.viaOutbound, backup: draft.backup
     }, extra || {});
     try {
       await api.put('/bot', payload);
@@ -5754,6 +5754,21 @@ async function renderBot(view) {
   btnStyle.addEventListener('change', () => { draft.buttonStyle = btnStyle.value; });
   formField(setupGrid, 'Button colour', btnStyle, {
     hint: 'The colour of the keys inside the bot. Delete and Cancel stay red whatever this says. Telegram apps older than February 2026 draw them their own way and ignore this.'
+  });
+
+  /*
+   * Which way out the bot's own traffic takes.
+   *
+   * A server in Iran cannot reach Telegram at all, so the bot never starts on
+   * one - while the same server is already selling a way abroad. Picking that
+   * outbound here sends the bot through it too.
+   */
+  draft.viaOutbound = data.viaOutbound || '';
+  const via = selectOf((data.outbounds || [{ tag: '', label: 'The server itself (direct)' }])
+    .map((o) => ({ value: o.tag, label: t(o.label) })), draft.viaOutbound);
+  via.addEventListener('change', () => { draft.viaOutbound = via.value; });
+  formField(setupGrid, 'Bot connects through', via, {
+    hint: 'Leave this on the server itself unless the server cannot reach Telegram. Where it cannot \u2014 an Iranian server, where the bot otherwise never starts \u2014 pick an outbound that can, and the bot goes out through it. Xray must be running for that.'
   });
 
   const clock = switchFor(draft, 'startOnFirstUse', 'Start the days on first use, not at the sale');

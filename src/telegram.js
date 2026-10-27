@@ -9,6 +9,7 @@
  * only walks that structure and talks to Telegram.
  */
 const https = require('https');
+const http = require('http');
 const db = require('./db');
 const membership = require('./membership');
 const paygate = require('./paygate');
@@ -515,18 +516,90 @@ function starterScreens() {
 
 /* ------------------------------ Telegram API ----------------------------- */
 
-function call(method, payload, token) {
+/*
+ * Reaching Telegram from a server that cannot reach Telegram.
+ *
+ * A box in Iran has api.telegram.org filtered, so the bot never starts: it is
+ * not that messages are slow, it is that getMe never answers and nothing comes
+ * up. The same box is usually already selling its way out - an outbound abroad
+ * that its clients use all day - so the bot is sent through that one too.
+ *
+ * Xray carries it. When an outbound is chosen, the config grows a plain HTTP
+ * proxy on the loopback whose every connection is pinned to that outbound, and
+ * the request below is opened through it with a CONNECT rather than straight
+ * out. CONNECT is used in preference to a SOCKS library because it needs
+ * nothing that is not already in Node: the panel installs with no build step
+ * and that is worth keeping.
+ */
+function viaProxy() {
+  const tag = String(bot().viaOutbound || '').trim();
+  return tag && tag !== 'direct' ? tag : '';
+}
+
+/**
+ * A socket already tunnelled to host:port through the local proxy.
+ *
+ * The error says which outbound was being used and that Xray has to be up,
+ * because those are the two things that are ever wrong here and neither is
+ * guessable from "connect ECONNREFUSED 127.0.0.1:62790".
+ */
+function tunnel(host, port) {
+  const tag = viaProxy();
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      host: '127.0.0.1',
+      port: require('./xray').BOT_PROXY_PORT,
+      method: 'CONNECT',
+      path: `${host}:${port}`,
+      timeout: 20000
+    });
+    const fail = (why) => reject(new Error(
+      `could not reach Telegram through outbound "${tag}": ${why}. `
+      + 'Xray has to be running for the bot to use an outbound.'
+    ));
+    req.on('connect', (res, socket) => {
+      if (res.statusCode !== 200) {
+        socket.destroy();
+        return fail(`the proxy answered ${res.statusCode}`);
+      }
+      resolve(socket);
+    });
+    req.on('timeout', () => { req.destroy(); fail('it did not answer in time'); });
+    req.on('error', (err) => fail(err.message));
+    req.end();
+  });
+}
+
+/**
+ * The options every call to Telegram is made with - plus, when an outbound is
+ * chosen, the already-connected socket to run the TLS over.
+ */
+async function apiOptions(extra) {
+  const host = API_HOST;
+  const port = API_PORT ? Number(API_PORT) : 443;
+  const options = Object.assign({ host, port, method: 'POST' }, extra);
+  if (viaProxy()) {
+    const socket = await tunnel(host, port);
+    options.socket = socket;
+    options.agent = false;
+    // the certificate is still checked, against the name we asked for
+    options.servername = host;
+  }
+  return options;
+}
+
+
+
+async function call(method, payload, token) {
   const body = JSON.stringify(payload || {});
   const key = token || bot().token;
+  const options = await apiOptions({
+    path: `/bot${key}/${method}`,
+    headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+    timeout: 40000
+  });
   return new Promise((resolve, reject) => {
-    const req = https.request({
-      host: API_HOST,
-      port: API_PORT ? Number(API_PORT) : 443,
-      path: `/bot${key}/${method}`,
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
-      timeout: 40000
-    }, (res) => {
+    const req = https.request(options, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
@@ -662,7 +735,7 @@ function uploadPhoto(chatId, filename, content, caption, keyboard) {
 }
 
 /** The one multipart request in a module where everything else is JSON. */
-function upload(method, field, contentType, chatId, filename, content, caption, keyboard) {
+async function upload(method, field, contentType, chatId, filename, content, caption, keyboard) {
   const boundary = `----nexv${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
   const part = (name, value) =>
     Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`);
@@ -677,19 +750,17 @@ function upload(method, field, contentType, chatId, filename, content, caption, 
     Buffer.from(`\r\n--${boundary}--\r\n`)
   ]);
 
+  const options = await apiOptions({
+    path: `/bot${bot().token}/${method}`,
+    headers: {
+      'content-type': `multipart/form-data; boundary=${boundary}`,
+      'content-length': body.length
+    },
+    // a big store over a slow link needs longer than a message does
+    timeout: 120000
+  });
   return new Promise((resolve, reject) => {
-    const req = https.request({
-      host: API_HOST,
-      port: API_PORT ? Number(API_PORT) : 443,
-      path: `/bot${bot().token}/${method}`,
-      method: 'POST',
-      headers: {
-        'content-type': `multipart/form-data; boundary=${boundary}`,
-        'content-length': body.length
-      },
-      // a big store over a slow link needs longer than a message does
-      timeout: 120000
-    }, (res) => {
+    const req = https.request(options, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {

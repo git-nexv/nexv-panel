@@ -18,6 +18,17 @@ const NEXV_CLI = process.env.NEXV_CLI || '/usr/local/bin/nexv';
 const ACCESS_LOG = process.env.NEXV_XRAY_ACCESS_LOG || '/var/log/xray/access.log';
 const XRAY_SERVICE = process.env.NEXV_XRAY_SERVICE || 'xray';
 const API_PORT = 62789;
+/*
+ * A local proxy the panel's own Telegram bot speaks through.
+ *
+ * A server in Iran cannot reach api.telegram.org, so a bot running on one
+ * never comes up at all - but the same box already has working outbounds
+ * abroad, because that is what it sells. This inbound is a door onto one of
+ * them: it listens on the loopback only, and a routing rule pins everything
+ * arriving at it to the outbound the admin picked. It exists only while they
+ * have picked one.
+ */
+const BOT_PROXY_PORT = 62790;
 
 /** Inbound protocols the panel can configure. */
 const INBOUND_PROTOCOLS = [
@@ -719,6 +730,22 @@ function portOwner(donor, fallbacks) {
   };
 }
 
+/**
+ * The outbound the bot's own traffic was told to take, or '' for none.
+ *
+ * A tag that no longer names an enabled outbound comes back empty rather than
+ * being written into the config: Xray refuses a rule pointing at an outbound
+ * that is not there, and that would take the whole config down - every client
+ * offline because a bot setting went stale.
+ */
+function botVia(d) {
+  const tag = String(((d.bot || {}).viaOutbound) || '').trim();
+  if (!tag) return '';
+  if (tag === 'direct' || tag === 'blocked') return tag;
+  const out = (d.outbounds || []).find((o) => o.tag === tag && o.enable !== false);
+  return out ? tag : '';
+}
+
 function buildConfig() {
   const d = db.data;
   const inbounds = [
@@ -773,6 +800,17 @@ function buildConfig() {
 
   for (const own of share.owners) inbounds.push(portOwner(own.donor, own.fallbacks));
 
+  const via = botVia(d);
+  if (via) {
+    inbounds.push({
+      tag: 'bot-via',
+      listen: '127.0.0.1',
+      port: BOT_PROXY_PORT,
+      protocol: 'http',
+      settings: { allowTransparent: false }
+    });
+  }
+
   const builtin = [
     { tag: 'direct', protocol: 'freedom', settings: {} },
     { tag: 'blocked', protocol: 'blackhole', settings: {} }
@@ -791,11 +829,14 @@ function buildConfig() {
   if (defaultIdx > 0) outbounds.unshift(outbounds.splice(defaultIdx, 1)[0]);
 
   const rules = [
-    { type: 'field', inboundTag: ['api'], outboundTag: 'api' },
-    // explicit CIDRs rather than geoip:private, so the config never depends
-    // on geoip.dat being present next to the binary
-    { type: 'field', outboundTag: 'blocked', ip: PRIVATE_RANGES }
+    { type: 'field', inboundTag: ['api'], outboundTag: 'api' }
   ];
+  /* above the blocks and the admin's own rules: what arrives on the bot's
+     private door goes where the bot was told, and nowhere else */
+  if (via) rules.push({ type: 'field', inboundTag: ['bot-via'], outboundTag: via });
+  // explicit CIDRs rather than geoip:private, so the config never depends
+  // on geoip.dat being present next to the binary
+  rules.push({ type: 'field', outboundTag: 'blocked', ip: PRIVATE_RANGES });
   for (const rule of (d.routing || [])) {
     if (rule.enable === false) continue;
     const rendered = routingRule(rule);
@@ -1440,7 +1481,7 @@ async function generateReality() {
 
 module.exports = {
   xrayVersion,
-  XRAY_BIN, XRAY_CONFIG, XRAY_SERVICE, API_PORT, handOverConfig,
+  XRAY_BIN, XRAY_CONFIG, XRAY_SERVICE, API_PORT, BOT_PROXY_PORT, botVia, handOverConfig,
   buildConfig, writeConfig, testConfig, apply, serviceStatus, repairCerts, messageOf, isOverIpLimit,
   outboundConfig, outboundStream,
   INBOUND_PROTOCOLS, OUTBOUND_PROTOCOLS, CLIENT_PROTOCOLS, LINK_PROTOCOLS,

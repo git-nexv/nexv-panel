@@ -359,6 +359,14 @@ function botView() {
       { terms: telegram.customTerms() }),
     startOnFirstUse: b.startOnFirstUse === true,
     buttonStyle: b.buttonStyle === undefined ? 'success' : b.buttonStyle,
+    viaOutbound: b.viaOutbound || '',
+    /* what the bot's own traffic may be sent through: the server itself, or
+       any outbound that is switched on */
+    outbounds: [{ tag: '', label: 'The server itself (direct)' }].concat(
+      (db.data.outbounds || [])
+        .filter((o) => o.enable !== false && o.tag)
+        .map((o) => ({ tag: o.tag, label: `${o.tag} \u00b7 ${o.protocol}` }))
+    ),
     access: b.access || telegram.defaults().access,
     backup: telegram.backupStatus(),
     orders: (b.orders || []).slice(0, 60),
@@ -383,12 +391,25 @@ router.get('/bot', (req, res) => res.json(botView()));
 router.put('/bot', async (req, res) => {
   const b = telegram.bot();
   const body = req.body || {};
+  const wasVia = String(b.viaOutbound || '');
   // an empty token field means "leave the one you have"
   if (typeof body.token === 'string' && body.token.trim()) b.token = body.token.trim();
   if (body.token === null) b.token = '';
   if (body.adminId !== undefined) b.adminId = String(body.adminId).trim();
   if (body.brand !== undefined) b.brand = String(body.brand).slice(0, 40);
   if (body.currency !== undefined) b.currency = String(body.currency).slice(0, 16);
+  if (body.viaOutbound !== undefined) {
+    /*
+     * Only a tag that is really there. A rule pointing at an outbound that has
+     * since been deleted makes Xray refuse the whole config, which would take
+     * every client offline over a bot setting.
+     */
+    const want = String(body.viaOutbound || '').trim();
+    const real = want === 'direct' || (db.data.outbounds || [])
+      .some((o) => o.tag === want && o.enable !== false);
+    if (want && !real) return bad(res, `there is no outbound called "${want}"`);
+    b.viaOutbound = want;
+  }
   if (body.buttonStyle !== undefined) {
     // Telegram's own three, or nothing at all for the app's own colours
     const want = String(body.buttonStyle);
@@ -540,6 +561,18 @@ router.put('/bot', async (req, res) => {
     if (body.ai.baseUrl !== undefined) b.ai.baseUrl = String(body.ai.baseUrl).slice(0, 200);
   }
   db.saveNow();
+  /*
+   * The door the bot speaks through lives in Xray's config, so changing which
+   * outbound it takes - or taking it back to direct - means rewriting that
+   * config and reloading. Done after the save, and never allowed to fail the
+   * save: a box with no Xray on it can still set up its bot.
+   */
+  if (body.viaOutbound !== undefined && String(body.viaOutbound || '') !== wasVia) {
+    try { await xray.apply(); } catch (_) { /* reported by the Xray page */ }
+    if (telegram.status().running) {
+      try { await telegram.stop(); await telegram.start(); } catch (_) { /* its own page says why */ }
+    }
+  }
   logEvent('bot', 'bot settings saved');
   res.json(botView());
 });
@@ -1175,7 +1208,8 @@ function reservedPorts() {
     // restart can move the panel back onto the configured one
     { port: Number(process.env.NEXV_PORT || 0), what: 'the panel' },
     { port: Number(s.subPort || 0), what: 'the subscription server' },
-    { port: xray.API_PORT, what: "Xray's own stats API" }
+    { port: xray.API_PORT, what: "Xray's own stats API" },
+    { port: xray.BOT_PROXY_PORT, what: "the bot's way out through an outbound" }
   ].filter((entry) => entry.port > 0);
 }
 
