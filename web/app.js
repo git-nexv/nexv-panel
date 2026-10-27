@@ -2239,7 +2239,11 @@ function inboundForm(existing) {
 
   /* ------------------------------- Basics ------------------------------- */
   const remark = add('Basics', 'Remark', text(v.remark || 'inbound-1'));
-  const port = add('Basics', 'Port', text(v.port || Math.floor(20000 + Math.random() * 40000), { type: 'number' }));
+  const port = add('Basics', 'Port', text(v.port || Math.floor(20000 + Math.random() * 40000), { type: 'number' }), {
+    hint: 'Several inbounds may share one port, 443 included. Give each of them ws, '
+      + 'httpupgrade or xhttp with a path of its own, and the same security, and the '
+      + 'panel sorts the traffic out by path.'
+  });
   const listen = add('Basics', 'Listen IP', text(v.listen || ''), { placeholder: '0.0.0.0', hint: 'Empty listens on every address' });
   const address = add('Basics', 'Connect address', text(v.address || ''), {
     full: true, hint: 'Used in share links. Defaults to the panel domain or server IP.'

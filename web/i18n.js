@@ -297,6 +297,7 @@ const FA = {
   'Remark': 'نام',
   'Listen IP': 'آی‌پی شنود',
   'Empty listens on every address': 'خالی یعنی روی همه آدرس‌ها شنود می‌کند',
+  'Several inbounds may share one port, 443 included. Give each of them ws, httpupgrade or xhttp with a path of its own, and the same security, and the panel sorts the traffic out by path.': 'چند اینباند می‌توانند یک پورت را با هم داشته باشند، از جمله ۴۴۳. به هر کدام ws یا httpupgrade یا xhttp با یک path مخصوص خودش بدهید و امنیت همه را یکسان بگذارید؛ پنل ترافیک را از روی path جدا می‌کند.',
   'Connect address': 'آدرس اتصال',
   'Used in share links. Defaults to the panel domain or server IP.':
     'در لینک‌های اشتراک استفاده می‌شود. پیش‌فرض، دامنه پنل یا آی‌پی سرور است.',
@@ -1237,7 +1238,34 @@ function faSpan(span) {
     .replace(/(\d+)s/g, '$1 ثانیه');
 }
 
+const OWNERS = {
+  'the panel': 'خود پنل',
+  'the subscription server': 'سرور سابسکریپشن',
+  "Xray's own stats API": 'API آمار خود Xray'
+};
+const SECURITIES = { none: 'بدون امنیت', tls: 'tls', reality: 'reality' };
+
 const PATTERNS = [
+  /* the owner and the security names are short fixed words rather than
+     anything the admin typed, so they are worth turning over too */
+  [/^port (\d+) is used by (.+); pick another one$/,
+    (m) => `پورت ${m[1]} دست ${OWNERS[m[2]] || m[2]} است؛ یکی دیگر انتخاب کنید`],
+  [/^port (\d+) is already used by inbound "(.+)"$/,
+    (m) => `پورت ${m[1]} قبلاً اینباند «${m[2]}» گرفته است`],
+  [/^the inbounds sharing port (\d+) must all use the same security \(these use (.+)\); a shared port is wrapped once, for all of them$/,
+    (m) => `اینباندهایی که پورت ${m[1]} را با هم دارند باید امنیت یکسان داشته باشند (این‌ها ${m[2].split(' and ').map((x) => SECURITIES[x] || x).join(' و ')} هستند)؛ یک پورت مشترک یک بار برای همه بسته‌بندی می‌شود`],
+  [/^inbound "(.+)" is (.+), which carries no path to be told apart by; it needs a port of its own rather than (\d+)$/,
+    (m) => `اینباند «${m[1]}» از نوع ${m[2]} است و path‌ی ندارد که از روی آن جدا شود؛ به جای ${m[3]} پورت جدا می‌خواهد`],
+  [/^one of the inbounds on port (\d+) must be VLESS or Trojan to hold the port for the others; nothing else can pass a connection on$/,
+    (m) => `یکی از اینباندهای پورت ${m[1]} باید VLESS یا Trojan باشد تا پورت را برای بقیه نگه دارد؛ بقیه پروتکل‌ها نمی‌توانند اتصال را تحویل بدهند`],
+  [/^inbound "(.+)" uses gRPC, which needs a port of its own; give the others ws, httpupgrade or xhttp to share one$/,
+    (m) => `اینباند «${m[1]}» از gRPC استفاده می‌کند و پورت جدا می‌خواهد؛ برای اشتراک پورت به بقیه ws یا httpupgrade یا xhttp بدهید`],
+  [/^only one inbound on port (\d+) can be plain TCP; "(.+)" needs ws, httpupgrade or xhttp with its own path$/,
+    (m) => `روی پورت ${m[1]} فقط یک اینباند می‌تواند TCP ساده باشد؛ «${m[2]}» به ws یا httpupgrade یا xhttp با path مخصوص خودش نیاز دارد`],
+  [/^inbound "(.+)" needs a path of its own to share port (\d+) \(set one under the transport settings\)$/,
+    (m) => `اینباند «${m[1]}» برای اشتراک پورت ${m[2]} به یک path مخصوص خودش نیاز دارد (در تنظیمات ترنسپورت بگذارید)`],
+  [/^inbounds "(.+)" and "(.+)" both use path (.+) on port (\d+); give each one its own path$/,
+    (m) => `اینباندهای «${m[1]}» و «${m[2]}» هر دو روی پورت ${m[4]} از path ${m[3]} استفاده می‌کنند؛ به هر کدام path جدا بدهید`],
   [/^(\d+) cores?$/, (m) => `${m[1]} هسته`],
   [/^of (\d+) total$/, (m) => `از ${m[1]}`],
   /* Anything below the catch-all "X of Y" further down would never be reached,

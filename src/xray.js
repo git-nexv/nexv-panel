@@ -10,6 +10,7 @@ const db = require('./db');
 const certs = require('./certs');
 const online = require('./online');
 const membership = require('./membership');
+const sharedport = require('./sharedport');
 
 const XRAY_BIN = process.env.NEXV_XRAY_BIN || '/usr/local/bin/xray';
 const XRAY_CONFIG = process.env.NEXV_XRAY_CONFIG || '/usr/local/etc/xray/config.json';
@@ -700,6 +701,24 @@ const PRIVATE_RANGES = [
   '224.0.0.0/4', '240.0.0.0/4', '::1/128', 'fc00::/7', 'fe80::/10'
 ];
 
+/**
+ * A stand-in that owns a shared port when none of the admin's own inbounds
+ * can. It carries the certificate of the inbound it was built from so the
+ * handshake succeeds, and no clients at all, so the only way past it is a
+ * fallback into one of the real inbounds behind it.
+ */
+function portOwner(donor, fallbacks) {
+  const stream = streamSettings(Object.assign({}, donor, { network: 'tcp', alpn: ['http/1.1'] }));
+  return {
+    tag: `share-${donor.listen || '0.0.0.0'}-${donor.port}`,
+    listen: donor.listen || '0.0.0.0',
+    port: Number(donor.port),
+    protocol: 'vless',
+    settings: { clients: [], decryption: 'none', fallbacks },
+    streamSettings: stream
+  };
+}
+
 function buildConfig() {
   const d = db.data;
   const inbounds = [
@@ -712,15 +731,19 @@ function buildConfig() {
     }
   ];
 
-  for (const inb of d.inbounds) {
-    if (inb.enable === false) continue;
-    // an inbound past its own expiry or cap stops listening, like a dead client
-    if (inboundDead(inb)) continue;
+  /* several inbounds may name the same port; one of them owns the listener
+     and the rest are moved onto the loopback behind it */
+  const live = d.inbounds.filter((inb) => inb.enable !== false && !inboundDead(inb));
+  const share = sharedport.plan(live, [API_PORT, Number(d.settings.panelPort || 0),
+    Number(process.env.NEXV_PORT || 0), Number(d.settings.subPort || 0)]);
+
+  for (const inb of live) {
     const clients = membership.clientsOn(d.clients, inb.id);
+    const behind = share.moved.get(inb.id);
     const entry = {
       tag: inb.tag,
-      listen: inb.listen || '0.0.0.0',
-      port: Number(inb.port),
+      listen: behind ? behind.listen : (inb.listen || '0.0.0.0'),
+      port: behind ? behind.port : Number(inb.port),
       protocol: inb.protocol,
       settings: inboundSettings(inb, clients),
       sniffing: {
@@ -733,9 +756,22 @@ function buildConfig() {
       }
     };
     // wireguard and dokodemo-door carry no transport of their own
-    if (inb.protocol !== 'wireguard') entry.streamSettings = streamSettings(inb);
+    if (inb.protocol !== 'wireguard') {
+      /* the owner of the port has already unwrapped TLS, so an inbound behind
+         it reads plain bytes however its own links are written */
+      entry.streamSettings = streamSettings(behind ? Object.assign({}, inb, { security: 'none' }) : inb);
+    }
+    const adopted = share.adopt.get(inb.id);
+    if (adopted && entry.settings) {
+      entry.settings.fallbacks = [...(entry.settings.fallbacks || []), ...adopted];
+      if (entry.streamSettings && entry.streamSettings.tlsSettings) {
+        entry.streamSettings.tlsSettings.alpn = ['http/1.1'];
+      }
+    }
     inbounds.push(entry);
   }
+
+  for (const own of share.owners) inbounds.push(portOwner(own.donor, own.fallbacks));
 
   const builtin = [
     { tag: 'direct', protocol: 'freedom', settings: {} },

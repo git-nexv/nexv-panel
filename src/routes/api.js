@@ -7,6 +7,7 @@ const QRCode = require('qrcode');
 const db = require('../db');
 const auth = require('../auth');
 const xray = require('../xray');
+const sharedport = require('../sharedport');
 const links = require('../links');
 const transfer = require('../transfer');
 const version = require('../version');
@@ -1178,14 +1179,25 @@ function reservedPorts() {
   ].filter((entry) => entry.port > 0);
 }
 
-function portConflict(port, listen, selfId) {
+/**
+ * Whether this inbound may have the port it asks for.
+ *
+ * Sharing a port with another inbound is allowed - that is how several
+ * services live on 443 - but only when the two can be told apart once the
+ * connection arrives, since one of them owns the listener and passes the
+ * rest on by request path. sharedport.problem() holds those rules and the
+ * words that say which setting to change.
+ */
+function portConflict(port, listen, selfId, mine) {
   const taken = reservedPorts().find((entry) => entry.port === Number(port));
   if (taken) return `port ${port} is used by ${taken.what}; pick another one`;
-  const clash = db.data.inbounds.find(
-    (i) => i.id !== selfId && i.port === Number(port) && (i.listen || '0.0.0.0') === (listen || '0.0.0.0')
+  const where = listen || '0.0.0.0';
+  const others = db.data.inbounds.filter(
+    (i) => i.id !== selfId && Number(i.port) === Number(port) && (i.listen || '0.0.0.0') === where
   );
-  if (clash) return `port ${port} is already used by inbound "${clash.remark}"`;
-  return null;
+  if (!others.length) return null;
+  if (!mine) return `port ${port} is already used by inbound "${others[0].remark}"`;
+  return sharedport.problem([...others, mine]) || null;
 }
 
 router.get('/protocols', (req, res) => res.json({
@@ -1475,7 +1487,7 @@ router.post('/inbounds', async (req, res) => {
   const body = req.body || {};
   const inb = normalizeInbound(body, null);
   if (!inb.port || inb.port < 1 || inb.port > 65535) return bad(res, 'port must be between 1 and 65535');
-  const clash = portConflict(inb.port, inb.listen, null);
+  const clash = portConflict(inb.port, inb.listen, null, inb);
   if (clash) return bad(res, clash);
   inb.id = db.id();
   inb.tag = `inbound-${inb.port}-${inb.id.slice(0, 4)}`;
@@ -1513,7 +1525,7 @@ router.put('/inbounds/:id', async (req, res) => {
   const updated = normalizeInbound(req.body || {}, before);
   updated.id = before.id;
   updated.tag = before.tag;
-  const clash = portConflict(updated.port, updated.listen, updated.id);
+  const clash = portConflict(updated.port, updated.listen, updated.id, updated);
   if (clash) return bad(res, clash);
   /* the same rules as on create: xray would refuse the whole config over one of
      these, and its own message names none of them in words anybody can act on */
@@ -1734,7 +1746,7 @@ router.post('/inbounds/import', async (req, res) => {
   if (!inbound.port || inbound.port < 1 || inbound.port > 65535) {
     return bad(res, 'there is no usable port in that text');
   }
-  const clash = portConflict(inbound.port, inbound.listen, null);
+  const clash = portConflict(inbound.port, inbound.listen, null, inbound);
   if (clash) return bad(res, clash);
 
   /*

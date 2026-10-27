@@ -265,24 +265,40 @@ function buildLink(inb, client, where, nameOverride) {
 }
 
 /** All links for one subscription id, as plain text (clients expect base64 of this). */
-/**
- * The info line for one client, as a link an app will accept.
+/*
+ * Where the info line points, which is deliberately nowhere.
  *
- * It is a real entry built from a real inbound - the first one this client
- * can actually use - with nothing changed but its name. That is deliberate:
- * a made-up address would show up in the app as a server that never
- * connects, and somebody will tap it. This one works if they do.
+ * 192.0.2.0/24 is TEST-NET-1: an address block the standards set aside for
+ * documentation and examples, which no router on the internet carries. A
+ * connection to it cannot succeed and cannot be made to succeed, which is the
+ * whole point - the line is there to be read, not tapped, and an app that
+ * tests it should report nothing rather than a ping.
+ *
+ * It used to borrow a real inbound's address, so it answered, carried a
+ * working config and turned up in the app's latency test as just another
+ * server. A row that exists to say "25 days left" should not be racing the
+ * real ones to be picked.
+ *
+ * The id is all zeroes for the same reason: nothing of the buyer's belongs in
+ * an entry that is never going to carry their traffic.
+ */
+const INFO_HOST = '192.0.2.1';
+const INFO_PORT = 1;
+const INFO_ID = '00000000-0000-0000-0000-000000000000';
+
+/**
+ * The info line for one client: a link every app will parse and none can use.
+ *
+ * Built from nothing rather than from an inbound, so it neither occupies a
+ * port nor depends on one being there.
  */
 function infoLinkFor(client, inbounds) {
   const template = db.settings.infoTemplate || DEFAULT_INFO;
-  for (const inb of inbounds) {
-    if (inb.enable === false) continue;
-    const where = addressesFor(inb)[0];
-    if (!where) continue;
-    const link = buildLink(inb, client, where, remarkFor(inb, client, template));
-    if (link) return link;
-  }
-  return '';
+  const inb = (inbounds || []).find((i) => i.enable !== false) || {};
+  const name = remarkFor(inb, client, template);
+  if (!name) return '';
+  const params = qs({ encryption: 'none', security: 'none', type: 'tcp' });
+  return `vless://${INFO_ID}@${INFO_HOST}:${INFO_PORT}?${params}#${encodeURIComponent(name)}`;
 }
 
 /** Is the info line switched on? */
