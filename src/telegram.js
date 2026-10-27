@@ -12,6 +12,7 @@ const https = require('https');
 const db = require('./db');
 const membership = require('./membership');
 const paygate = require('./paygate');
+const links = require('./links');
 
 /* A mirror can be set when api.telegram.org itself is filtered on the server. */
 const [API_HOST, API_PORT] = String(process.env.NEXV_TG_API || 'api.telegram.org').split(':');
@@ -129,6 +130,37 @@ function migrateUsageButton() {
    */
   if (!hasAction(b.screens, 'trial')) {
     if (addToStart(b.screens, { label: '🎁 کانفیگ تست', action: 'trial' })) touched = true;
+  }
+
+  if (touched) db.saveNow();
+  return touched;
+}
+
+/**
+ * The guide, on a bot that was set up before there was one.
+ *
+ * Every one of these questions - which app, where do I paste this - arrives
+ * after the sale and the answer never changes, so a menu without it is a menu
+ * that sends them to support instead. The screens are added if they are not
+ * there and the button is put on the start menu; a screen the admin has since
+ * edited is left exactly as they left it.
+ */
+function migrateHelp() {
+  const b = bot();
+  const starter = starterScreens();
+  let touched = false;
+
+  for (const key of ['help', 'help-android', 'help-ios', 'help-tv']) {
+    if ((b.screens || []).some((screen) => screen.key === key)) continue;
+    const fresh = starter.find((screen) => screen.key === key);
+    if (fresh) { b.screens.push(JSON.parse(JSON.stringify(fresh))); touched = true; }
+  }
+
+  /* a button that opens the guide, however the admin has rearranged the menu */
+  const offersHelp = (b.screens || []).some((screen) => (screen.buttons || [])
+    .some((row) => row.some((x) => x.action === 'screen' && x.value === 'help')));
+  if (!offersHelp) {
+    if (addToStart(b.screens, { label: '❓ راهنما', action: 'screen', value: 'help' })) touched = true;
   }
 
   if (touched) db.saveNow();
@@ -253,6 +285,99 @@ function defaults() {
 }
 
 /** What a brand-new bot says before anyone has edited it. */
+/* -------------------------------- the guide ------------------------------- */
+/*
+ * What to install and what to do with the link, per device.
+ *
+ * Written out rather than left to support, because every one of these
+ * questions arrives after the sale and the answer is always the same. One app
+ * leads on each device - the one that gives the fewest people trouble - and
+ * the others are there for when it does.
+ */
+const HELP_TEXT = [
+  '<b>راهنمای اتصال</b>',
+  '',
+  'دستگاهتان را انتخاب کنید تا بگویم کدام برنامه را نصب کنید و چطور وصل شوید.',
+  '',
+  '🔗 <b>لینک اشتراک چیست؟</b>',
+  'همان خطی که بعد از خرید برایتان فرستادیم و با <code>https://</code> شروع می‌شود.',
+  'آن را در برنامه به‌عنوان <b>Subscription</b> اضافه می‌کنید و برنامه خودش همه‌ی سرورها را می‌گیرد.',
+  'اگر سرورها عوض شوند، فقط کافی است داخل برنامه آپدیت بزنید — لینک همان می‌ماند.',
+  '',
+  '⚙️ <b>کانفیگ مستقیم چیست؟</b>',
+  'خطی که با <code>vless://</code> یا <code>vmess://</code> شروع می‌شود و فقط <b>یک</b> سرور است.',
+  'وقتی به کارتان می‌آید که برنامه‌تان ساب قبول نکند. در برنامه دنبال «افزودن از کلیپ‌بورد» بگردید.',
+  '',
+  'همیشه اول ساب را امتحان کنید؛ کانفیگ مستقیم فقط جایگزین است.'
+].join('\n');
+
+const HELP_ANDROID = [
+  '<b>📱 اندروید</b>',
+  '',
+  '<b>۱) V2Box</b> — پیشنهاد اول',
+  '۱. از Google Play برنامه <b>V2Box</b> را نصب کنید.',
+  '۲. لینک اشتراک را کپی کنید.',
+  '۳. در برنامه به تب <b>Configs</b> بروید.',
+  '۴. بالا سمت راست <b>+</b> را بزنید و <b>Add Subscription</b> را انتخاب کنید.',
+  '۵. لینک را در کادر URL بچسبانید، یک اسم دلخواه بگذارید و <b>SAVE</b> بزنید.',
+  '۶. روی سروری که آمد بزنید تا تیک بخورد، بعد به تب <b>Home</b> بروید و دکمه‌ی وسط را بزنید.',
+  '',
+  '<b>۲) v2rayNG</b> — اگر V2Box مشکل داشت',
+  '۱. برنامه <b>v2rayNG</b> را نصب کنید.',
+  '۲. <b>+</b> بالای صفحه ← <b>Import config from clipboard</b> برای کانفیگ مستقیم،',
+  '   یا <b>+</b> ← <b>Subscription group</b> برای لینک ساب.',
+  '۳. از منوی سه‌خط ← <b>Subscription group update</b> بزنید تا سرورها بیایند.',
+  '۴. یک سرور را انتخاب و دکمه‌ی پایین راست (V) را بزنید.',
+  '',
+  '<b>۳) Happ</b> — ساده‌ترین',
+  '۱. برنامه <b>Happ</b> را نصب کنید.',
+  '۲. لینک اشتراک را کپی کنید؛ برنامه را باز کنید و <b>+</b> را بزنید.',
+  '۳. لینک را بچسبانید و وصل شوید.',
+  '',
+  '⚠️ اولین بار اندروید اجازه‌ی VPN می‌خواهد — <b>OK</b> را بزنید.'
+].join('\n');
+
+const HELP_IOS = [
+  '<b>🍎 آیفون و آیپد</b>',
+  '',
+  '<b>۱) V2Box</b> — پیشنهاد اول',
+  '۱. از App Store برنامه <b>V2Box - V2ray Client</b> را نصب کنید.',
+  '۲. لینک اشتراک را کپی کنید.',
+  '۳. در برنامه به تب <b>Configs</b> بروید.',
+  '۴. بالا سمت راست <b>+</b> ← <b>Add Subscription</b>.',
+  '۵. لینک را بچسبانید، یک اسم بگذارید و <b>SAVE</b> بزنید.',
+  '۶. روی سرور بزنید تا تیک بخورد، بعد تب <b>Home</b> و دکمه‌ی وسط.',
+  '',
+  '<b>۲) Streisand</b> — اگر V2Box مشکل داشت',
+  '۱. برنامه <b>Streisand</b> را نصب کنید.',
+  '۲. بالا سمت راست <b>+</b> ← <b>افزودن از کلیپ‌بورد</b> (لینک را از قبل کپی کنید).',
+  '۳. از بالا <b>Subscription</b> را آپدیت کنید و یک سرور را انتخاب کنید.',
+  '۴. دکمه‌ی اتصال را بزنید.',
+  '',
+  '<b>۳) Happ</b> — ساده‌ترین',
+  '۱. برنامه <b>Happ</b> را نصب کنید.',
+  '۲. لینک را کپی کنید، <b>+</b> را بزنید و بچسبانید.',
+  '',
+  '⚠️ اولین بار آیفون می‌پرسد VPN اضافه شود — <b>Allow</b> و بعد رمز/Face ID.',
+  'اگر برنامه در App Store ایران پیدا نشد، اکانت App Store را روی کشور دیگری بگذارید.'
+].join('\n');
+
+const HELP_TV = [
+  '<b>📺 تلویزیون (اندروید تی‌وی)</b>',
+  '',
+  '<b>Happ</b> — روی تلویزیون از همه راحت‌تر است.',
+  '',
+  '۱. در تلویزیون وارد <b>Google Play</b> شوید و <b>Happ</b> را نصب کنید.',
+  '   اگر نبود، فایل APK آن را با <b>Downloader</b> نصب کنید.',
+  '۲. برنامه را باز کنید و <b>+</b> را بزنید.',
+  '۳. تایپ لینک با ریموت سخت است — دو راه ساده‌تر:',
+  '   • گزینه‌ی <b>Scan QR</b> را بزنید و کیو‌آری که در همین چت فرستادیم را جلوی دوربین بگیرید؛',
+  '   • یا برنامه‌ی <b>Remote</b> گوگل روی گوشی را به تلویزیون وصل کنید و با کیبورد گوشی بچسبانید.',
+  '۴. سرور را انتخاب و وصل شوید.',
+  '',
+  '⚠️ تلویزیون باید به همان اینترنتی وصل باشد که گوشی‌تان کار می‌کند.'
+].join('\n');
+
 function starterScreens() {
   return [
     {
@@ -262,8 +387,37 @@ function starterScreens() {
       buttons: [
         [{ label: '🛒 خرید اشتراک', action: 'plans' }],
         [{ label: '🔑 کانفیگ‌های من', action: 'configs' }, { label: '🎁 کانفیگ تست', action: 'trial' }],
-        [{ label: '💬 پشتیبانی', action: 'support' }]
+        [{ label: '❓ راهنما', action: 'screen', value: 'help' }, { label: '💬 پشتیبانی', action: 'support' }]
       ]
+    },
+    {
+      key: 'help',
+      title: 'راهنما',
+      text: HELP_TEXT,
+      buttons: [
+        [{ label: '📱 اندروید', action: 'screen', value: 'help-android' },
+          { label: '🍎 آیفون', action: 'screen', value: 'help-ios' }],
+        [{ label: '📺 تلویزیون', action: 'screen', value: 'help-tv' }],
+        [{ label: '⬅️ بازگشت', action: 'screen', value: 'start' }]
+      ]
+    },
+    {
+      key: 'help-android',
+      title: 'راهنمای اندروید',
+      text: HELP_ANDROID,
+      buttons: [[{ label: '⬅️ بازگشت', action: 'screen', value: 'help' }]]
+    },
+    {
+      key: 'help-ios',
+      title: 'راهنمای آیفون',
+      text: HELP_IOS,
+      buttons: [[{ label: '⬅️ بازگشت', action: 'screen', value: 'help' }]]
+    },
+    {
+      key: 'help-tv',
+      title: 'راهنمای تلویزیون',
+      text: HELP_TV,
+      buttons: [[{ label: '⬅️ بازگشت', action: 'screen', value: 'help' }]]
     },
     {
       key: 'support',
@@ -357,13 +511,33 @@ function sendDocument(chatId, fileId, caption, keyboard) {
  * means multipart/form-data, which is the one request here that is not JSON.
  */
 function uploadDocument(chatId, filename, content, caption) {
+  return upload('sendDocument', 'document', 'application/json',
+    chatId, filename, content, caption);
+}
+
+/**
+ * A picture the panel drew, with a caption and keys under it.
+ *
+ * A QR code has never been anywhere near Telegram, so like a backup it has to
+ * be uploaded rather than named by file_id.
+ */
+function uploadPhoto(chatId, filename, content, caption, keyboard) {
+  return upload('sendPhoto', 'photo', 'image/png',
+    chatId, filename, content, caption, keyboard);
+}
+
+/** The one multipart request in a module where everything else is JSON. */
+function upload(method, field, contentType, chatId, filename, content, caption, keyboard) {
   const boundary = `----nexv${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+  const part = (name, value) =>
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`);
   const body = Buffer.concat([
-    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n${chatId}\r\n`),
-    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="caption"\r\n\r\n${caption || ''}\r\n`),
-    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="parse_mode"\r\n\r\nHTML\r\n`),
-    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="document"; filename="${filename}"\r\n`
-      + 'Content-Type: application/json\r\n\r\n'),
+    part('chat_id', chatId),
+    part('caption', caption || ''),
+    part('parse_mode', 'HTML'),
+    ...(keyboard ? [part('reply_markup', JSON.stringify({ inline_keyboard: keyboard }))] : []),
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${field}"; filename="${filename}"\r\n`
+      + `Content-Type: ${contentType}\r\n\r\n`),
     Buffer.isBuffer(content) ? content : Buffer.from(String(content), 'utf8'),
     Buffer.from(`\r\n--${boundary}--\r\n`)
   ]);
@@ -372,7 +546,7 @@ function uploadDocument(chatId, filename, content, caption) {
     const req = https.request({
       host: API_HOST,
       port: API_PORT ? Number(API_PORT) : 443,
-      path: `/bot${bot().token}/sendDocument`,
+      path: `/bot${bot().token}/${method}`,
       method: 'POST',
       headers: {
         'content-type': `multipart/form-data; boundary=${boundary}`,
@@ -1232,15 +1406,9 @@ async function takeTrialName(ctx, raw) {
     });
     markTrialTaken(ctx.userId);
     const url = require('./routes/api').subUrl(client.subId);
-    return send(ctx.chatId, [
+    return sendConfig(ctx.chatId, client,
       '<b>کانفیگ تست شما آماده شد ✅</b>',
-      `${escapeHtml(email)} · ${t.mb} مگابایت · ${t.days} روز`,
-      '',
-      'لینک اشتراک:',
-      `<code>${escapeHtml(url)}</code>`,
-      '',
-      'این لینک را در برنامه‌تان به عنوان Subscription اضافه کنید.'
-    ].join('\n'), backRow());
+      `${t.mb} مگابایت · ${t.days} روز`);
   } catch (err) {
     return send(ctx.chatId, `ساخت کانفیگ تست ممکن نشد: ${escapeHtml(err.message)}`, backRow());
   }
@@ -1563,6 +1731,10 @@ async function showGateway(ctx, order, lines) {
   order.payAt = Date.now();
   db.saveNow();
 
+  /* and from here it is watched closely, so a buyer who pays gets their
+     config within seconds rather than on the next sweep */
+  watchOrder(order.id);
+
   /* straight to the gateway's payment page, unless the shop has asked to go
      through the gateway's own Telegram bot instead */
   const url = paygate.payUrlOf(link);
@@ -1654,15 +1826,8 @@ async function settleGateway(order, how) {
   order.clientId = handed.client.id;
   db.saveNow();
 
-  await send(order.chatId || order.userId, [
-    '<b>پرداخت شما تایید شد ✅</b>',
-    `${escapeHtml(order.planName)}`,
-    '',
-    'لینک اشتراک:',
-    `<code>${escapeHtml(handed.url)}</code>`,
-    '',
-    'این لینک را در برنامه‌تان به‌عنوان Subscription اضافه کنید.'
-  ].join('\n'), backRow());
+  await sendConfig(order.chatId || order.userId, handed.client,
+    '<b>پرداخت شما تایید شد ✅</b>', escapeHtml(order.planName));
 
   await tellAdmin([
     '<b>فروش آنلاین</b>',
@@ -1674,6 +1839,83 @@ async function settleGateway(order, how) {
   ].join('\n'));
 
   return { ok: true, delivered: true };
+}
+
+/**
+ * Hand a config over the way somebody actually uses it.
+ *
+ * A link in a message is a link to be copied, and on a phone that is a long
+ * press, a drag of two handles and a paste into the right box. The QR beside
+ * it is one scan. Both go out, because the QR is useless on the device the
+ * message is being read on and the text is what gets pasted there.
+ *
+ * The subscription is what leads. A subscription keeps working when an
+ * inbound is replaced and carries every way in at once; a single config link
+ * is one server that can stop working on its own. The config links go
+ * underneath for anyone whose app will not take a subscription.
+ */
+async function sendConfig(chatId, client, title, extra) {
+  const api = require('./routes/api');
+  const url = api.subUrl(client.subId);
+
+  const lines = [
+    title,
+    `<b>${escapeHtml(client.email)}</b>`,
+    ''
+  ];
+  if (extra) lines.push(extra, '');
+  lines.push(
+    '🔗  <b>لینک اشتراک</b>',
+    `<code>${escapeHtml(url)}</code>`,
+    '',
+    'این لینک را در برنامه‌تان به‌عنوان <b>Subscription</b> اضافه کنید — بهترین راه، چون با تغییر سرورها خودش به‌روز می‌شود.'
+  );
+
+  /* the single links, for an app that will not take a subscription. Kept to a
+     few: a message Telegram refuses for length is a config nobody received */
+  const direct = directLinks(client).slice(0, 4);
+  if (direct.length) {
+    lines.push('', '⚙️  <b>کانفیگ مستقیم</b>');
+    for (const one of direct) lines.push(`<code>${escapeHtml(one)}</code>`);
+  }
+  lines.push('', '❓ اگر بلد نیستید، از منوی اصلی <b>راهنما</b> را بزنید.');
+
+  const text = lines.join('\n');
+  const keys = [[{ text: '❓ راهنمای اتصال', callback_data: 'b:screen:help' }], ...backRow()];
+
+  /*
+   * The picture carries the message when it can - one bubble, not two - and
+   * Telegram caps a caption at 1024 characters, so a long one falls back to
+   * the QR on its own followed by the text.
+   */
+  try {
+    const png = await qrPng(url);
+    if (png && text.length <= 1000) return await uploadPhoto(chatId, 'sub.png', png, text, keys);
+    if (png) await uploadPhoto(chatId, 'sub.png', png, '🔗 لینک اشتراک شما');
+  } catch (err) {
+    if (process.env.NEXV_TG_DEBUG) console.error('[bot] qr:', err.message);
+  }
+  return send(chatId, text, keys);
+}
+
+/** The QR for a subscription, as PNG bytes. */
+async function qrPng(text) {
+  const QRCode = require('qrcode');
+  return QRCode.toBuffer(String(text), { margin: 1, width: 440, errorCorrectionLevel: 'M' });
+}
+
+/** Every single-server link this client has, newest inbound first. */
+function directLinks(client) {
+  const d = db.data;
+  const out = [];
+  for (const inb of membership.inboundsOf(client, d.inbounds)) {
+    if (inb.enable === false) continue;
+    for (const where of links.addressesFor(inb)) {
+      const one = links.buildLink(inb, client, where);
+      if (one) out.push(one);
+    }
+  }
+  return out;
 }
 
 /** The buyer pressing "I have paid". */
@@ -1725,6 +1967,55 @@ async function warnAdminAboutGateway(reason) {
     '',
     'تا رفع مشکل، خریدارها روش‌های دیگر را می‌بینند.'
   ].join('\n'));
+}
+
+/*
+ * The minutes right after somebody is sent to pay.
+ *
+ * The sweep every three minutes is the safety net, and three minutes is a
+ * long time to sit looking at a screen that says nothing after paying. So an
+ * order that has just been handed a payment link is asked about often while
+ * the buyer is likely to still be on the page - every five seconds at first,
+ * easing off - and the watch stops the moment it is settled, or after a few
+ * minutes when the sweep takes back over.
+ *
+ * It costs nothing when nobody is buying: there is no timer at all unless an
+ * order is actually waiting, and one order has one watcher however many times
+ * the buyer reopens the screen.
+ */
+const watching = new Map();
+const WATCH_STEPS = [5, 5, 5, 5, 10, 10, 10, 15, 15, 20, 30, 30, 45, 60, 60];
+
+function watchOrder(orderId) {
+  if (watching.has(orderId)) return;
+  let step = 0;
+
+  const look = async () => {
+    const order = (bot().orders || []).find((o) => o.id === orderId);
+    const done = !order
+      || order.status === 'delivered' || order.status === 'approved'
+      || order.status === 'cancelled' || order.status === 'rejected';
+    if (done || step >= WATCH_STEPS.length || !runtime.running) {
+      watching.delete(orderId);
+      return;
+    }
+    try { await settleGateway(order, 'watch'); } catch (_) { /* the next tick */ }
+
+    /* settled on that pass? then there is nothing left to watch */
+    const after = (bot().orders || []).find((o) => o.id === orderId);
+    if (!after || after.status === 'delivered' || after.status === 'approved') {
+      watching.delete(orderId);
+      return;
+    }
+    const wait = WATCH_STEPS[step++] * 1000;
+    const timer = setTimeout(look, wait);
+    if (typeof timer.unref === 'function') timer.unref();
+    watching.set(orderId, timer);
+  };
+
+  const first = setTimeout(look, WATCH_STEPS[step++] * 1000);
+  if (typeof first.unref === 'function') first.unref();
+  watching.set(orderId, first);
 }
 
 /*
@@ -1799,16 +2090,9 @@ async function takeReceipt(ctx, message) {
     order.status = 'delivered';
     order.clientId = handed.client.id;
     db.saveNow();
-    await send(ctx.chatId, [
+    await sendConfig(ctx.chatId, handed.client,
       '<b>اشتراک شما آماده است ✅</b>',
-      `${escapeHtml(order.planName)}`,
-      '',
-      'لینک اشتراک:',
-      `<code>${escapeHtml(handed.url)}</code>`,
-      '',
-      'این لینک را در برنامه‌تان به‌عنوان Subscription اضافه کنید.',
-      'رسید شما در حال بررسی است؛ در صورت تایید نشدن، اشتراک قطع می‌شود.'
-    ].join('\n'), backRow());
+      `${escapeHtml(order.planName)}\nرسید شما در حال بررسی است؛ در صورت تایید نشدن، اشتراک قطع می‌شود.`);
   } else {
     order.status = 'pending';
     order.error = handed.error;
@@ -2013,15 +2297,9 @@ async function approveOrder(ctx, orderId) {
   order.clientId = handed.client.id;
   db.saveNow();
 
-  await send(order.userId, [
+  await sendConfig(order.chatId || order.userId, handed.client,
     '<b>اشتراک شما آماده شد ✅</b>',
-    `${escapeHtml(handed.plan.name)} · ${handed.plan.gb ? `${handed.plan.gb} گیگ` : 'نامحدود'} · ${handed.plan.days} روز`,
-    '',
-    'لینک اشتراک:',
-    `<code>${escapeHtml(handed.url)}</code>`,
-    '',
-    'این لینک را در برنامه‌تان به عنوان Subscription اضافه کنید و هر وقت لازم شد آن را به‌روز کنید.'
-  ].join('\n'));
+    `${escapeHtml(handed.plan.name)} · ${handed.plan.gb ? `${handed.plan.gb} گیگ` : 'نامحدود'} · ${handed.plan.days} روز`);
   return send(ctx.chatId, `تایید شد. کلاینت ${escapeHtml(handed.client.email)} ساخته و برای خریدار ارسال شد.`);
 }
 
@@ -2432,6 +2710,7 @@ async function start() {
   /* also here, not only on a panel restart: somebody whose menu lost a button
      should get it back by pressing Start, which is the obvious thing to try */
   migrateUsageButton();
+  migrateHelp();
   runtime.me = await whoAmI(b.token);
   runtime.stopping = false;
   runtime.running = true;
@@ -2563,6 +2842,7 @@ function resume() {
   const b = bot();
   migrateStarter();
   migrateUsageButton();
+  migrateHelp();
   if (b.enabled && b.token) start().catch((err) => { runtime.error = err.message; });
 }
 
@@ -2729,7 +3009,7 @@ function nextBackupAt() {
 }
 
 module.exports = {
-  bot, defaults, starterScreens, migrateStarter, migrateUsageButton, start, stop, status, whoAmI, resume,
+  bot, defaults, starterScreens, migrateStarter, migrateUsageButton, migrateHelp, start, stop, status, whoAmI, resume,
   resetTrials, trialsTaken, repairOrphanClients, dateUndatedClients, customTerms,
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
   sendBackup, backupStatus, backupSettings, backupTimes, watchBackups, minutesOf, nextBackupAt, backupTick,
