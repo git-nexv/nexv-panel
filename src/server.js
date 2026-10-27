@@ -397,7 +397,24 @@ async function sendPage(res, file, base, req) {
    */
   if (file === 'index.html') {
     try {
-      const payload = await require('./routes/api').bootPayload(req);
+      /*
+       * It is a shortcut, and a shortcut is never allowed to become the long
+       * way round. If gathering it takes more than a moment the page goes out
+       * without it and the browser asks for /boot itself, exactly as it does
+       * on a reload - a second of waiting is the most this can ever cost, and
+       * the panel still opens if it costs that.
+       *
+       * This guard is here because the first version of it did hold the page:
+       * the payload called the update check, which waited on a fetch to
+       * GitHub that a filtered server can never complete, so signing in sat
+       * there until the sign-in page gave up and said the panel had not
+       * loaded. That particular call does not touch the network any more, and
+       * this makes sure the next one that does cannot do the same damage.
+       */
+      const payload = await Promise.race([
+        require('./routes/api').bootPayload(req),
+        new Promise((resolve) => setTimeout(() => resolve(null), 1000))
+      ]);
       if (payload) {
         html = html.replace('</head>',
           `<script>window.__NEXV_BOOT__=${JSON.stringify(payload).replace(/</g, '\\u003c')};</script>\n</head>`);

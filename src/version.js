@@ -70,6 +70,7 @@ function fetchLatest() {
  */
 function refresh() {
   if (inFlight) return inFlight;
+  triedAt = Date.now();
   inFlight = fetchLatest().then((latest) => {
     // a failed reach keeps the last known answer rather than forgetting it
     if (latest) cache = { at: Date.now(), latest };
@@ -79,15 +80,39 @@ function refresh() {
   return inFlight;
 }
 
+/*
+ * When we last went looking, whether or not it worked.
+ *
+ * `cache.at` only moves on success, so on a server that cannot reach GitHub it
+ * stays at zero for ever - and anything keyed off "is the cache empty?" asks
+ * again every single time. This is what stops that.
+ */
+let triedAt = 0;
+
 async function check(force = false) {
-  const age = Date.now() - cache.at;
-  if (force || !cache.latest) {
-    // nothing to show yet, or somebody asked for the truth right now
+  /*
+   * Only a person clicking the key is allowed to wait for the network.
+   *
+   * This used to await whenever nothing was cached, which on a filtered
+   * server is *always*: the fetch cannot succeed, a failure is never cached,
+   * so every call paid the full curl timeout. Harmless while the only caller
+   * was /api/version, fired after the page had already drawn - and then the
+   * first paint's own call was folded into it, and every panel load behind a
+   * filter began by waiting the better part of ten seconds for an answer that
+   * was never going to come. The file says it at the top: a read never waits
+   * on the network. It does not any more.
+   */
+  if (force) {
     await refresh();
-  } else if (age > INTERVAL_MS) {
+  } else if (Date.now() - Math.max(cache.at, triedAt) > INTERVAL_MS) {
     // hand back what we have and freshen it behind the answer
     refresh();
   }
+  return report(cache.latest);
+}
+
+/** The cached answer, now, with nothing attempted at all. */
+function peek() {
   return report(cache.latest);
 }
 
@@ -111,4 +136,4 @@ function watch() {
   return timer;
 }
 
-module.exports = { check, isNewer, current, watch, refresh };
+module.exports = { check, peek, isNewer, current, watch, refresh };

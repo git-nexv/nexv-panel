@@ -891,10 +891,13 @@ async function bootPayload(req) {
   // the page route has not been through the api router's middleware
   if (req.reseller === undefined) req.reseller = resellers.forUser(auth.currentUser(req));
 
-  const [status, ver] = await Promise.all([
-    captured(statusView, req).catch(() => null),
-    version.check(false).catch(() => null)
-  ]);
+  /*
+   * Nothing here may touch the network. This payload is written into the
+   * panel page itself, so anything slow in it is a page that does not arrive -
+   * and on a filtered server the version check was exactly that.
+   */
+  const status = await captured(statusView, req).catch(() => null);
+  const ver = version.peek();
 
   const ready = update.available();
   return {
