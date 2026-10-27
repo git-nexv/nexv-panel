@@ -117,6 +117,22 @@ function readable(bytes) {
   return `${print(value, i)} ${UNITS[i]}`;
 }
 
+/**
+ * Has this config run out, and on which of the two counts?
+ *
+ * The same two tests Xray is given when it decides whether to carry a client
+ * at all, so what the buyer reads and what the server does cannot disagree.
+ */
+function outOfRoad(client) {
+  const expiry = Number(client.expiryTime || 0);
+  if (expiry > 0 && expiry < Date.now()) return '⛔️ اعتبار تمام شد';
+
+  const quota = (client.totalGB || 0) * 1024 ** 3;
+  if (quota > 0 && (client.up || 0) + (client.down || 0) >= quota) return '⛔️ حجم تمام شد';
+
+  return '';
+}
+
 /** The values every token can take for one client on one inbound. */
 function remarkValues(inb, client) {
   const used = (client.up || 0) + (client.down || 0);
@@ -156,6 +172,18 @@ function remarkFor(inb, client, template) {
    * the panel can put in front of somebody whose app is still pointed at us.
    */
   if (client.blockedReason) return String(client.blockedReason);
+
+  /*
+   * A config that has run out says so, in the one place the buyer is looking.
+   *
+   * Xray stops carrying it the moment it expires, so it does not connect - but
+   * the entry stays in their app under its old name, and a server that simply
+   * fails with no reason given is indistinguishable from a panel whose time
+   * limits do not work. Dropping it from the subscription would be worse: the
+   * list would quietly empty itself and say even less.
+   */
+  const over = outOfRoad(client);
+  if (over) return over;
 
   const tpl = template !== undefined && template !== null && template !== ''
     ? String(template)

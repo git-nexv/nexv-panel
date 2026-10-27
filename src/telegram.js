@@ -1461,9 +1461,17 @@ async function takeTrialName(ctx, raw) {
     const client = await require('./routes/api').createClient(inbound, {
       email,
       totalGB: t.mb / 1024,                 // the quota is held in gigabytes
-      startAfterFirstUse: true,
+      /*
+       * The same rule a sale gets, and not a rule of its own.
+       *
+       * This said "wait for first use" outright, whatever the panel was set
+       * to - so a test config came out with no expiry date at all and ran
+       * until somebody noticed. The days start at the sale by default, which
+       * is what every other config here does.
+       */
+      startAfterFirstUse: startsOnFirstUse(),
       expiryDays: t.days,
-      expiryTime: 0,
+      expiryTime: startsOnFirstUse() || !t.days ? 0 : Date.now() + t.days * 86400000,
       tgId: String(ctx.userId),
       isTrial: true,
       comment: 'کانفیگ تست - ربات'

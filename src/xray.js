@@ -1258,13 +1258,44 @@ function noteOverIpLimit(c) {
  */
 function startClockIfUsed(c, now, d) {
   if (!c.startAfterFirstUse || c.expiryTime || !(c.expiryDays > 0)) return false;
-  if (((c.up || 0) + (c.down || 0)) <= 0) return false;
+
+  const used = ((c.up || 0) + (c.down || 0)) > 0;
+
+  /*
+   * Two ways a waiting config gets its deadline, and the second one is why
+   * this is not simply "has it moved any traffic yet".
+   *
+   * Waiting for first use is a setting, and a config made while it was on
+   * keeps waiting after it is turned off - for ever, because nothing else
+   * ever gave it a date. That is most of "the time limit is still not
+   * applied": the panel was set to start at the sale, and configs made
+   * earlier sat there with no expiry at all.
+   *
+   * And a config only ever hears about its own traffic through the stats
+   * poll. On a box where that poll cannot reach Xray - no systemd, the API
+   * port shut, the client on an inbound Xray never carried - it reads zero
+   * for ever, and a "30 day" service runs until somebody notices by hand.
+   * So a config that has sat unused longer than the term it was sold for
+   * starts counting anyway. Nobody is cheated: they get their whole term,
+   * it simply cannot be postponed indefinitely.
+   */
+  const waitingIsOff = !(db.data.bot && db.data.bot.startOnFirstUse === true);
+  const since = Number(c.createdAt || 0);
+  const grace = Math.max(c.expiryDays, 7) * 86400000;
+  const satTooLong = since > 0 && now - since > grace;
+
+  if (!used && !waitingIsOff && !satTooLong) return false;
+
   c.expiryTime = now + c.expiryDays * 86400000;
   c.startedAt = c.startedAt || now;
   d.logs.unshift({
     at: now,
     type: 'client',
-    message: `${c.email} was used for the first time - its ${c.expiryDays} days start now`
+    message: used
+      ? `${c.email} was used for the first time - its ${c.expiryDays} days start now`
+      : (waitingIsOff
+        ? `${c.email} had no expiry date - its ${c.expiryDays} days start now`
+        : `${c.email} was never used - its ${c.expiryDays} days start now rather than never`)
   });
   if (d.logs.length > 500) d.logs.length = 500;
   return true;
