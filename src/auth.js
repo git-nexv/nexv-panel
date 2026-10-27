@@ -87,8 +87,7 @@ async function setPassword(userId, password) {
 }
 
 async function login(username, password, ip) {
-  const raw = String(username).trim();
-  const user = db.data.users.find((u) => u.username === raw || u.username.toLowerCase() === raw.toLowerCase());
+  const user = db.data.users.find((u) => u.username === String(username).trim());
   // compare against a dummy hash when the user is unknown so timing does not leak existence
   const hash = user ? user.password : '$2a$10$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidi';
   const ok = await bcrypt.compare(String(password), hash);
@@ -116,17 +115,7 @@ function logout(req) {
 }
 
 function currentUser(req) {
-  let token = parseCookies(req)[COOKIE];
-  if (!token && req.query && req.query.token) {
-    token = req.query.token;
-  }
-  if (!token && req.headers) {
-    if (req.headers['x-nexv-token']) token = req.headers['x-nexv-token'];
-    else if (req.headers.authorization) {
-      const m = /^Bearer\s+(.+)$/i.exec(req.headers.authorization);
-      if (m) token = m[1];
-    }
-  }
+  const token = parseCookies(req)[COOKIE];
   const sid = unsign(token || '');
   if (!sid) return null;
   const session = db.data.sessions.find((s) => s.id === sid);
@@ -135,13 +124,12 @@ function currentUser(req) {
 }
 
 function cookieOptions(req) {
-  const isHttps = !!(req && (req.secure || req.protocol === 'https' || req.headers?.['x-forwarded-proto'] === 'https'));
   return {
     httpOnly: true,
-    sameSite: isHttps ? 'none' : 'lax',
+    sameSite: 'lax',
     path: '/',
     maxAge: sessionTtl(),
-    secure: isHttps
+    secure: req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https'
   };
 }
 

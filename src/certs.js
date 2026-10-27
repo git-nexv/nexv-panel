@@ -21,17 +21,7 @@
 const fs = require('fs');
 const path = require('path');
 
-function resolveCertStore() {
-  if (process.env.NEXV_CERT_STORE) return process.env.NEXV_CERT_STORE;
-  try {
-    fs.mkdirSync('/usr/local/etc/xray/certs', { recursive: true });
-    return '/usr/local/etc/xray/certs';
-  } catch (_) {
-    return path.join(__dirname, '..', 'data', 'certs');
-  }
-}
-
-const STORE = resolveCertStore();
+const STORE = process.env.NEXV_CERT_STORE || '/usr/local/etc/xray/certs';
 
 /* Every pair the config has asked for, so renewals can be picked up later. */
 const tracked = new Map();

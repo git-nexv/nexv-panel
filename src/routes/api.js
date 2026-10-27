@@ -74,7 +74,7 @@ router.post('/login', async (req, res) => {
     db.saveNow();
   }
   logEvent('auth', `login: ${result.user.username} from ${ip}`);
-  res.json({ ok: true, token: result.token, user: { username: result.user.username, role: result.user.role } });
+  res.json({ ok: true, user: { username: result.user.username, role: result.user.role } });
 });
 
 /**

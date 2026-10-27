@@ -1,12 +1,10 @@
 {
   "name": "nexv-panel",
-  "version": "3.59.1",
+  "version": "3.58.0",
   "description": "NexV Panel - a complete Xray-core management panel with a modern UI",
   "main": "src/server.js",
   "type": "commonjs",
   "scripts": {
-    "dev": "PORT=3000 node src/server.js",
-    "build": "node -e \"console.log('Build complete')\"",
     "start": "node src/server.js"
   },
   "engines": {

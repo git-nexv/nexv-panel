@@ -110,13 +110,12 @@ function readable(bytes) {
 function remarkValues(inb, client) {
   const used = (client.up || 0) + (client.down || 0);
   const quota = (client.totalGB || 0) * 1024 ** 3;
-  const rawExpiry = Number(client.expiryTime || 0);
-  const effectiveExpiry = rawExpiry || (client.expiryDays ? ((client.startedAt || client.createdAt || Date.now()) + client.expiryDays * 86400000) : 0);
-  const daysLeft = effectiveExpiry ? Math.ceil((effectiveExpiry - Date.now()) / 86400000) : 0;
+  const expiry = Number(client.expiryTime || 0);
+  const daysLeft = expiry ? Math.ceil((expiry - Date.now()) / 86400000) : 0;
 
   /* bought but not started: it has its full run ahead of it, and saying the
      infinity sign there would be a promise the panel is not making */
-  const waiting = !rawExpiry && client.startAfterFirstUse && (client.expiryDays || 0) > 0;
+  const waiting = !expiry && client.startAfterFirstUse && (client.expiryDays || 0) > 0;
 
   return {
     inbound: inb.remark || inb.tag || '',
@@ -125,8 +124,8 @@ function remarkValues(inb, client) {
     quota: quota ? readable(quota) : INFINITY,
     usage: quota ? `${readable(used)} / ${readable(quota)}` : readable(used),
     left: quota ? readable(Math.max(0, quota - used)) : INFINITY,
-    days: effectiveExpiry ? (daysLeft > 0 ? String(daysLeft) : '0') : (waiting ? String(client.expiryDays) : INFINITY),
-    expiry: effectiveExpiry ? new Date(effectiveExpiry).toISOString().slice(0, 10) : INFINITY,
+    days: expiry ? (daysLeft > 0 ? String(daysLeft) : '0') : (waiting ? String(client.expiryDays) : INFINITY),
+    expiry: expiry ? new Date(expiry).toISOString().slice(0, 10) : INFINITY,
     protocol: inb.protocol || '',
     port: String(inb.port || ''),
     host: hostFor(inb),
@@ -253,4 +252,4 @@ function subscriptionFor(subId) {
   return links;
 }
 
-module.exports = { buildLink, subscriptionFor, hostFor, addressesFor, remarkFor, remarkValues, DEFAULT_REMARK, REMARK_TOKENS };
+module.exports = { buildLink, subscriptionFor, hostFor, addressesFor, remarkFor, DEFAULT_REMARK, REMARK_TOKENS };

@@ -5,19 +5,6 @@
    Every request and redirect is built from it, so nothing depends on how the
    current URL happens to be spelled. */
 const BASE = window.__NEXV_BASE__ || './';
-
-(function () {
-  try {
-    const params = new URLSearchParams(location.search);
-    const token = params.get('token');
-    if (token) {
-      localStorage.setItem('nexv_token', token);
-      params.delete('token');
-      const cleanUrl = location.pathname + (params.toString() ? '?' + params.toString() : '') + location.hash;
-      history.replaceState(null, '', cleanUrl);
-    }
-  } catch (_) {}
-})();
 /*
  * Two budgets, because the two kinds of request are nothing alike.
  *
@@ -58,14 +45,9 @@ const api = {
     const budget = opts.timeout
       || (method === 'GET' ? REQUEST_TIMEOUT : WRITE_TIMEOUT);
     const timer = setTimeout(() => abort.abort(), budget);
-    const headers = body ? { 'Content-Type': 'application/json' } : {};
-    try {
-      const token = localStorage.getItem('nexv_token');
-      if (token) headers['x-nexv-token'] = token;
-    } catch (_) {}
     const send = () => fetch(`${BASE}api${path}`, {
       method,
-      headers,
+      headers: body ? { 'Content-Type': 'application/json' } : {},
       body: body ? JSON.stringify(body) : undefined,
       signal: abort.signal
     });
@@ -4961,12 +4943,8 @@ async function renderBot(view) {
       };
       formField(grid, 'Name', bind('name', el('input', { value: plan.name || '' })));
       formField(grid, 'Price', bind('price', el('input', { value: plan.price || '' })));
-      formField(grid, 'Quota (GB)', numField(plan.gb ?? 0, {
-        onInput: (n) => { plan.gb = Math.max(0, n); }
-      }), { hint: '0 means unlimited' });
-      formField(grid, 'Days', numField(plan.days ?? 30, {
-        onInput: (n) => { plan.days = Math.max(1, n); }
-      }));
+      formField(grid, 'Quota (GB)', bind('gb', el('input', { type: 'number', min: '0', value: plan.gb || 0 }), Number), { hint: '0 means unlimited' });
+      formField(grid, 'Days', bind('days', el('input', { type: 'number', min: '1', value: plan.days || 30 }), Number));
       const inbound = selectOf(inbounds.map((i) => ({ value: i.id, label: `${i.remark} (${i.protocol}:${i.port})` })), plan.inboundId);
       inbound.addEventListener('change', () => { plan.inboundId = inbound.value; });
       formField(grid, 'Sold from inbound', inbound, { full: true, hint: 'The client is created on this inbound when you approve an order' });
@@ -5018,12 +4996,8 @@ async function renderBot(view) {
 
   const trial = draft.trial = draft.trial || { enable: true, mb: 100, days: 1, inboundId: '', oncePerUser: true };
   const trialGrid = el('div', { class: 'form-grid' });
-  formField(trialGrid, 'Quota (MB)', numField(trial.mb ?? 100, {
-    onInput: (n) => { trial.mb = Math.max(1, n); }
-  }));
-  formField(trialGrid, 'Days', numField(trial.days ?? 1, {
-    onInput: (n) => { trial.days = Math.max(1, n); }
-  }));
+  formField(trialGrid, 'Quota (MB)', bindTo(trial, 'mb', el('input', { type: 'number', min: '1', value: trial.mb ?? 100 }), Number));
+  formField(trialGrid, 'Days', bindTo(trial, 'days', el('input', { type: 'number', min: '1', value: trial.days ?? 1 }), Number));
   formField(trialGrid, 'Made on inbound', inboundPicker(trial, 'inboundId'), { full: true });
   trialGrid.append(el('div', { class: 'field full' }, [switchFor(trial, 'oncePerUser', 'One per Telegram account', true)]));
 
@@ -5080,15 +5054,12 @@ async function renderBot(view) {
     custom.terms = [1, 3, 6, 12].map((months) => ({ months, enable: true, extra: 0 }));
   }
   const customGrid = el('div', { class: 'form-grid' });
-  formField(customGrid, 'Minimum (GB)', numField(custom.minGB ?? 1, {
-    onInput: (n) => { custom.minGB = Math.max(1, n); }
-  }), { hint: 'The smallest amount somebody may buy' });
-  formField(customGrid, 'Maximum (GB)', numField(custom.maxGB ?? 0, {
-    onInput: (n) => { custom.maxGB = Math.max(0, n); }
-  }), { hint: '0 means no ceiling' });
-  formField(customGrid, 'Default duration (days)', numField(custom.days ?? 30, {
-    onInput: (n) => { custom.days = Math.max(1, n); }
-  }), { hint: 'Base duration when custom terms are not specified' });
+  formField(customGrid, 'Minimum (GB)', bindTo(custom, 'minGB', el('input', { type: 'number', min: '1', value: custom.minGB ?? 1 }), Number), {
+    hint: 'The smallest amount somebody may buy'
+  });
+  formField(customGrid, 'Maximum (GB)', bindTo(custom, 'maxGB', el('input', { type: 'number', min: '0', value: custom.maxGB ?? 0 }), Number), {
+    hint: '0 means no ceiling'
+  });
   formField(customGrid, 'Sold from inbound', inboundPicker(custom, 'inboundId'), { full: true });
 
   /*

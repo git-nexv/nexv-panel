@@ -4,9 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Sign in | NexV Panel</title>
-<meta name="description" content="A complete Xray-core management panel with a modern UI">
-<meta property="og:title" content="Sign in | NexV Panel">
-<meta property="og:description" content="A complete Xray-core management panel with a modern UI">
 <!-- The app's own mark, at the sizes each platform actually asks for. The
      paths are relative so they resolve under the panel's secret base path and
      under a reseller's slug without either being written down here. -->
@@ -234,13 +231,10 @@ form.addEventListener('submit', async (event) => {
   }
 
   submitBtn.textContent = 'Opening panel…';
-  const target = data.token ? `${BASE}?token=${encodeURIComponent(data.token)}` : BASE;
-  if (data.token) {
-    try { localStorage.setItem('nexv_token', data.token); } catch (_) {}
-  }
+  // if the panel page itself never loads, say so instead of spinning forever
   const stuck = setTimeout(() => fail('Signed in, but the panel page did not load. Check "nexv logs" on the server.'), 15000);
   window.addEventListener('pagehide', () => clearTimeout(stuck));
-  location.href = target;
+  location.href = BASE;
 });
 </script>
 </body>
