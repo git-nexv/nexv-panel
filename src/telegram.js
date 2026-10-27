@@ -489,12 +489,23 @@ async function whoAmI(token) {
  */
 const DESTRUCTIVE = /^b:(cancel|del|delyes|no|power)\b/;
 
+/*
+ * The keys that get the colour, and they are few.
+ *
+ * Buying - the menu entry and each plan behind it - and going back. Colouring
+ * every key was worse than colouring none: when everything is green nothing
+ * stands out, and the one key the shop actually wants pressed looks like all
+ * the others. These two earn it; the rest are left the colour the app draws.
+ */
+const COLOURED = /^b:(plans|buy)\b/;
+const BACK_ARROW = /^\s*⬅️/;
+
 /**
  * Paint the keyboard.
  *
  * One place, so every message the bot sends is coloured the same way without
  * each caller remembering to. A button that already names its own style keeps
- * it, and a shop that wants the app's own colours sets the style to nothing.
+ * it, and a shop that wants no colour at all sets the style to nothing.
  */
 function styled(keyboard) {
   const want = bot().buttonStyle;
@@ -502,8 +513,17 @@ function styled(keyboard) {
   return keyboard.map((row) => (Array.isArray(row) ? row.map((button) => {
     if (!button || button.style) return button;
     const data = String(button.callback_data || '');
+
+    // anything that undoes or refuses is red whatever the shop chose
     if (DESTRUCTIVE.test(data)) return Object.assign({}, button, { style: 'danger' });
-    return want ? Object.assign({}, button, { style: want }) : button;
+    if (!want) return button;
+
+    /* back is matched on the arrow rather than the action: every back key
+       carries it, and the same action behind a different label - the guide's
+       own entry on the start menu - is not one */
+    const isBack = BACK_ARROW.test(String(button.text || ''));
+    if (COLOURED.test(data) || isBack) return Object.assign({}, button, { style: want });
+    return button;
   }) : row));
 }
 
