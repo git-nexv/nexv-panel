@@ -1550,10 +1550,9 @@ async function showGateway(ctx, order, lines) {
   order.payAt = Date.now();
   db.saveNow();
 
-  /* the in-Telegram page when the gateway offers one: it keeps the buyer in
-     the app they are already in, and it is where the gateway shows them the
-     card-to-card option alongside the online one */
-  const url = link.botUrl || link.url;
+  /* straight to the gateway's payment page, unless the shop has asked to go
+     through the gateway's own Telegram bot instead */
+  const url = paygate.payUrlOf(link);
   lines.push(
     `${escapeHtml(paygate.settings().label || '🌐 پرداخت آنلاین')}`,
     '',

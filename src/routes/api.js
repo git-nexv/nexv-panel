@@ -299,6 +299,7 @@ function payView(b) {
   pay.gateway = {
     enable: !!g.enable,
     label: g.label || '',
+    openIn: g.openIn === 'telegram' ? 'telegram' : 'page',
     callbackUrl: g.callbackUrl || '',
     webhookUrl: g.webhookUrl || '',
     multiplier: Number(g.multiplier) || 10,
@@ -469,6 +470,7 @@ router.put('/bot', async (req, res) => {
       const g = Object.assign(paygate.blank(), pay.gateway || {});
       if (want.enable !== undefined) g.enable = !!want.enable;
       if (want.label !== undefined) g.label = String(want.label).slice(0, 40);
+      if (want.openIn !== undefined) g.openIn = want.openIn === 'telegram' ? 'telegram' : 'page';
       // an empty key field means "keep the one you have"; null means forget it
       if (typeof want.apiKey === 'string' && want.apiKey.trim()) g.apiKey = want.apiKey.trim();
       if (want.apiKey === null) g.apiKey = '';

@@ -55,6 +55,17 @@ function blank() {
   return {
     enable: false,
     label: '🌐 پرداخت آنلاین',
+    /*
+     * Where the pay button takes the buyer.
+     *
+     * 'page' is the gateway's payment page itself, which is the short way:
+     * one tap and they are choosing how to pay. 'telegram' is the gateway's
+     * own Telegram bot, which keeps them in the app but adds a bot, a message
+     * and a page in front of the same choice - four taps to reach what the
+     * first one reaches in one. The short way is the default; the other is
+     * there because staying inside Telegram is worth those taps to some shops.
+     */
+    openIn: 'page',
     apiKey: '',
     callbackUrl: '',
     /*
@@ -463,5 +474,18 @@ function newSecret() {
 module.exports = {
   settings, blank, ready, blockedReason,
   createLink, verify, look,
-  checkSignature, newSecret, amountFor, orderRef, startPayload, callbackFor
+  checkSignature, newSecret, amountFor, orderRef, startPayload, callbackFor, payUrlOf
 };
+
+/**
+ * Which of the two addresses the gateway handed back to send the buyer to.
+ *
+ * Falls through either way: a gateway with no Telegram page of its own still
+ * has a payment page, and a shop that asked for the Telegram one must not end
+ * up with no button at all because this gateway does not offer it.
+ */
+function payUrlOf(link) {
+  const g = settings();
+  if (g.openIn === 'telegram') return link.botUrl || link.url;
+  return link.url || link.botUrl;
+}

@@ -803,6 +803,19 @@ function gatewayCard(draft, bind, toggleOf, redraw) {
     value: g.label || '', placeholder: '🌐 پرداخت آنلاین'
   })), { hint: 'What the buyer sees on the button in the bot' });
 
+  /* the short way or the scenic one. Going through the gateway's own Telegram
+     bot keeps the buyer in the app, but it is a bot, a message and a page in
+     front of the same choice the payment page opens on straight away */
+  const openIn = selectOf([
+    { value: 'page', label: t('Straight to the payment page') },
+    { value: 'telegram', label: t('Through the gateway’s Telegram bot') }
+  ], g.openIn || 'page');
+  openIn.addEventListener('change', () => { g.openIn = openIn.value; });
+  grid.append(el('div', { class: 'field' }, [
+    el('label', { text: 'The pay button opens' }), openIn,
+    el('div', { class: 'hint', text: 'The payment page is one tap from the bot to choosing how to pay. The gateway’s own Telegram bot keeps the buyer inside Telegram, but puts a bot, a message and a page in front of that same choice.' })
+  ]));
+
   const factor = numField(g.multiplier ?? 10, { placeholder: '10' });
   factor.addEventListener('input', () => { g.multiplier = toNumber(factor.value); });
   grid.append(el('div', { class: 'field' }, [
