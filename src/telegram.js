@@ -2139,6 +2139,36 @@ async function settleGateway(order, how) {
  * is one server that can stop working on its own. The config links go
  * underneath for anyone whose app will not take a subscription.
  */
+/*
+ * A block that arrives folded up and opens when it is tapped.
+ *
+ * A vless:// line is longer than a phone screen and there may be four of
+ * them, so the message that mattered - the name, the subscription link, what
+ * to do with it - was pushed off the top by a wall of characters nobody reads
+ * and everybody scrolls past. Telegram folds a long quote by default and
+ * opens it on a tap, which is exactly the shape this wants: out of the way
+ * until it is wanted, and all there when it is.
+ *
+ * `expandable` is the attribute Telegram's own documentation names for it.
+ */
+function collapsed(lines) {
+  return `<blockquote expandable>${lines.join('\n')}</blockquote>`;
+}
+
+/* the same message with the folding taken out, for the retry below */
+function unfolded(text) {
+  return text.replace(/<blockquote expandable>/g, '').replace(/<\/blockquote>/g, '');
+}
+
+/*
+ * What Telegram counts towards a caption's 1024 characters is the text a
+ * person sees, not the markup around it - so measuring the markup made long
+ * messages fall out of the picture and into a second bubble for no reason.
+ */
+function visibleLength(text) {
+  return text.replace(/<[^>]+>/g, '').length;
+}
+
 async function sendConfig(chatId, client, title, extra) {
   const api = require('./routes/api');
   const url = api.subUrl(client.subId);
@@ -2160,8 +2190,8 @@ async function sendConfig(chatId, client, title, extra) {
      few: a message Telegram refuses for length is a config nobody received */
   const direct = directLinks(client).slice(0, 4);
   if (direct.length) {
-    lines.push('', '⚙️  <b>کانفیگ مستقیم</b>');
-    for (const one of direct) lines.push(`<code>${escapeHtml(one)}</code>`);
+    lines.push('', '⚙️  <b>کانفیگ مستقیم</b> — برای دیدن، روی کادر زیر بزنید');
+    lines.push(collapsed(direct.map((one) => `<code>${escapeHtml(one)}</code>`)));
   }
   lines.push('', '❓ اگر بلد نیستید، از منوی اصلی <b>راهنما</b> را بزنید.');
 
@@ -2173,14 +2203,34 @@ async function sendConfig(chatId, client, title, extra) {
    * Telegram caps a caption at 1024 characters, so a long one falls back to
    * the QR on its own followed by the text.
    */
+  /*
+   * Never let the folding be the reason a config does not arrive. It is worth
+   * a retry rather than a refusal: a buyer who has paid and received nothing
+   * is a different kind of problem from a message that looks bulky.
+   */
+  const deliver = async (body, withQr) => {
+    if (withQr) {
+      try {
+        const png = await qrPng(url);
+        if (png && visibleLength(body) <= 1000) return await uploadPhoto(chatId, 'sub.png', png, body, keys);
+        if (png) await uploadPhoto(chatId, 'sub.png', png, '🔗 لینک اشتراک شما');
+      } catch (err) {
+        if (process.env.NEXV_TG_DEBUG) console.error('[bot] qr:', err.message);
+      }
+    }
+    return send(chatId, body, keys);
+  };
+
   try {
-    const png = await qrPng(url);
-    if (png && text.length <= 1000) return await uploadPhoto(chatId, 'sub.png', png, text, keys);
-    if (png) await uploadPhoto(chatId, 'sub.png', png, '🔗 لینک اشتراک شما');
+    return await deliver(text, true);
   } catch (err) {
-    if (process.env.NEXV_TG_DEBUG) console.error('[bot] qr:', err.message);
+    const flat = unfolded(text);
+    if (flat === text) throw err;
+    /* the picture may already be there from the attempt that failed, so the
+       retry is the words alone rather than a second QR of the same link */
+    runtime.error = err.message;
+    return deliver(flat, false);
   }
-  return send(chatId, text, keys);
 }
 
 /** The QR for a subscription, as PNG bytes. */
