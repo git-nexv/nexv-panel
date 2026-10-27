@@ -299,6 +299,7 @@ const FA = {
   'Bot connects through': 'ربات از کجا وصل شود',
   'The server itself (direct)': 'خود همین سرور (مستقیم)',
   'Leave this on the server itself unless the server cannot reach Telegram. Where it cannot \u2014 an Iranian server, where the bot otherwise never starts \u2014 pick an outbound that can, and the bot goes out through it. Xray must be running for that.': 'تا وقتی سرور به تلگرام دسترسی دارد همین «خود سرور» بماند. جایی که دسترسی ندارد \u2014 مثل سرور ایران که ربات اصلاً بالا نمی‌آید \u2014 یک اوت‌باند که دسترسی دارد انتخاب کنید تا ربات از آن بیرون برود. برای این کار Xray باید روشن باشد.',
+  'The bot asks the buyer for a name, then makes the config and sends the link. It goes on every inbound that is switched on, the same as a sale, so there is nothing to pick here. When the days start follows the setting on the Setup tab.': 'ربات از خریدار یک اسم می‌پرسد، بعد کانفیگ را می‌سازد و لینک را می‌فرستد. مثل یک فروش عادی روی همه‌ی اینباندهای فعال ساخته می‌شود، پس اینجا چیزی برای انتخاب نیست. اینکه روزها از کی شروع شوند از تنظیم تب Setup پیروی می‌کند.',
   'Telegram username': 'یوزرنیم تلگرام',
   'Telegram ID': 'آیدی تلگرام',
   'Message them': 'پیام دادن',

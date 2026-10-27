@@ -5653,7 +5653,9 @@ async function renderResellerBot(view) {
 async function renderBot(view) {
   if (isReseller()) return renderResellerBot(view);
   const data = await api.get('/bot');
-  const inbounds = await api.get('/inbounds');
+  /* the inbound list used to be fetched here for the two pickers that have
+     since gone: the trial and a custom sale both go on every inbound that is
+     switched on, so there is nothing left on this page to choose between */
   const draft = {
     brand: data.brand,
     currency: data.currency,
@@ -5907,17 +5909,10 @@ async function renderBot(view) {
     box.addEventListener('change', () => { obj[field] = box.checked; });
     return el('label', { class: 'switch' }, [box, el('span', { class: 'track' }), el('span', { class: 'muted', text: label })]);
   }
-  const inboundPicker = (obj, field) => {
-    const sel = selectOf(inbounds.map((i) => ({ value: i.id, label: `${i.remark} (${i.protocol}:${i.port})` })), obj[field]);
-    sel.addEventListener('change', () => { obj[field] = sel.value; });
-    return sel;
-  };
-
   const trial = draft.trial = draft.trial || { enable: true, mb: 100, days: 1, inboundId: '', oncePerUser: true };
   const trialGrid = el('div', { class: 'form-grid' });
   formField(trialGrid, 'Quota (MB)', bindTo(trial, 'mb', el('input', { type: 'number', min: '1', value: trial.mb ?? 100 }), Number));
   formField(trialGrid, 'Days', bindTo(trial, 'days', el('input', { type: 'number', min: '1', value: trial.days ?? 1 }), Number));
-  formField(trialGrid, 'Made on inbound', inboundPicker(trial, 'inboundId'), { full: true });
   trialGrid.append(el('div', { class: 'field full' }, [switchFor(trial, 'oncePerUser', 'One per Telegram account', true)]));
 
   panels['Test config'].append(el('div', { class: 'card' }, [
@@ -5925,7 +5920,7 @@ async function renderBot(view) {
       el('strong', { text: '🎁 Test config' }), switchFor(trial, 'enable', 'Offer it', true)
     ]),
     trialGrid,
-    el('div', { class: 'hint', text: 'The bot asks the buyer for a name, then makes the config and sends the link. The clock starts on first use, not when they ask.' }),
+    el('div', { class: 'hint', text: 'The bot asks the buyer for a name, then makes the config and sends the link. It goes on every inbound that is switched on, the same as a sale, so there is nothing to pick here. When the days start follows the setting on the Setup tab.' }),
     el('div', { class: 'row', style: 'margin-top:12px' }, [
       el('button', { class: 'btn primary', text: 'Save', onclick: () => save() })
     ])
@@ -5979,7 +5974,6 @@ async function renderBot(view) {
   formField(customGrid, 'Maximum (GB)', bindTo(custom, 'maxGB', el('input', { type: 'number', min: '0', value: custom.maxGB ?? 0 }), Number), {
     hint: '0 means no ceiling'
   });
-  formField(customGrid, 'Sold from inbound', inboundPicker(custom, 'inboundId'), { full: true });
 
   /*
    * How long they may buy it for.

@@ -1517,9 +1517,9 @@ async function startTrial(ctx) {
   const t = trialSettings();
   if (!t.enable) return reply(ctx, 'کانفیگ تست فعلاً ارائه نمی‌شود.', backRow());
 
-  const inbound = db.data.inbounds.find((i) => i.id === t.inboundId)
-    || db.data.inbounds.find((i) => i.enable !== false);
-  if (!inbound) return reply(ctx, 'هنوز اینباندی برای کانفیگ تست تنظیم نشده است.', backRow());
+  if (!sellingInbounds().length) {
+    return reply(ctx, 'هنوز اینباند فعالی برای کانفیگ تست وجود ندارد.', backRow());
+  }
 
   if (t.oncePerUser && hasTakenTrial(ctx.userId)) {
     // the record outlives the config, so there may be nothing left to show them
@@ -1620,9 +1620,12 @@ async function takeTrialName(ctx, raw) {
   const wanted = cleanName(raw);
   if (!wanted) return send(ctx.chatId, 'یک اسم بفرستید.');
 
-  const inbound = db.data.inbounds.find((i) => i.id === t.inboundId)
-    || db.data.inbounds.find((i) => i.enable !== false);
-  if (!inbound) { forget(ctx.userId); return send(ctx.chatId, 'اینباندی برای کانفیگ تست تنظیم نشده است.'); }
+  /* every inbound that is switched on, the same as a sale gets: one inbound
+     is one thing that can be blocked, and the taster is what decides whether
+     anybody buys at all */
+  const selling = sellingInbounds();
+  if (!selling.length) { forget(ctx.userId); return send(ctx.chatId, 'هیچ اینباند فعالی برای کانفیگ تست وجود ندارد.'); }
+  const inbound = selling[0];
 
   // a name already in use would be refused outright, so it is made unique here
   const email = uniqueName(wanted);
@@ -1631,6 +1634,7 @@ async function takeTrialName(ctx, raw) {
   try {
     const client = await require('./routes/api').createClient(inbound, {
       email,
+      inboundIds: selling.map((i) => i.id),
       totalGB: t.mb / 1024,                 // the quota is held in gigabytes
       /*
        * The same rule a sale gets, and not a rule of its own.
