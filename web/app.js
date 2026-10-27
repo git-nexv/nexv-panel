@@ -825,8 +825,19 @@ function gatewayCard(draft, bind, toggleOf, redraw) {
 
   /* ---- what can be done with it ---- */
   const secretLine = el('div', { class: 'hint', style: 'margin-top:4px' }, [
-    g.hasWebhookSecret ? t('A webhook key is set.') : t('No webhook key yet.')
+    g.webhookReady ? t('The webhook is on.')
+      : g.hasWebhookSecret ? t('A webhook key is set, but the gateway is not sending yet.')
+        : t('No webhook — the buyer’s button and the regular check deliver the config.')
   ]);
+
+  /* the gateway turned the webhook down and the panel carried on without it:
+     worth saying, because the admin set it up expecting it to be used */
+  if (g.webhookNote) {
+    body.append(el('div', { class: 'notice warn', style: 'margin-top:12px' }, [
+      el('div', {}, [t('The gateway refused the webhook address, so payments are being made without it:')]),
+      el('div', { class: 'hint', style: 'margin-top:6px' }, [g.webhookNote])
+    ]));
+  }
 
   body.append(el('div', { class: 'row', style: 'margin-top:14px;flex-wrap:wrap' }, [
     el('button', {
@@ -848,23 +859,8 @@ function gatewayCard(draft, bind, toggleOf, redraw) {
       }
     }),
     el('button', {
-      class: 'btn', text: g.hasWebhookSecret ? 'Make a new webhook key' : 'Make a webhook key',
-      onclick: async () => {
-        try {
-          const out = await api.post('/bot/gateway/secret', {});
-          g.hasWebhookSecret = true;
-          secretLine.textContent = t('A webhook key is set.');
-          modal({
-            title: t('Your webhook key'),
-            subtitle: t('Copy it into the gateway’s panel now — it is not shown again.'),
-            body: el('div', {}, [
-              el('div', { class: 'link-box', text: out.secret }),
-              el('div', { class: 'hint', style: 'margin-top:10px' }, [`${t('Webhook address')}: ${out.webhookUrl || '/pay/webhook'}`])
-            ]),
-            width: 640
-          });
-        } catch (err) { toast(err.message, 'err'); }
-      }
+      class: 'btn', text: g.hasWebhookSecret ? 'Change the webhook key' : 'Set up the webhook',
+      onclick: () => webhookDialog(g, secretLine)
     }),
     importRow(g, redraw, true),
     el('button', {
@@ -889,6 +885,84 @@ function gatewayCard(draft, bind, toggleOf, redraw) {
   body.append(secretLine);
 
   return card;
+}
+
+/**
+ * Setting up the signed webhook, which is the gateway's to switch on.
+ *
+ * The first version of this made a key here and handed it over, which is
+ * backwards for any gateway that issues its own: we would check signatures
+ * against a key nobody else held. Worse, having a key made the panel start
+ * sending the gateway a webhook address - and a gateway with no webhook key
+ * of its own refuses the whole payment over it, so every sale failed with
+ * WEBHOOK_NOT_CONFIGURED until the switch below was turned off again.
+ *
+ * So: paste the key the gateway showed you, and say whether it is actually
+ * set up there. Until it is, the address is never offered with a payment.
+ */
+function webhookDialog(g, secretLine) {
+  const key = el('input', {
+    type: 'password', autocomplete: 'off',
+    placeholder: g.hasWebhookSecret ? t('leave empty to keep the one you have') : t('paste the key from the gateway')
+  });
+  const ready = el('input', { type: 'checkbox' });
+  ready.checked = !!g.webhookReady;
+
+  modal({
+    title: t('The signed webhook'),
+    subtitle: t('Optional. It lets the gateway tell the panel the moment a payment lands.'),
+    width: 640,
+    body: el('div', { class: 'col', style: 'gap:14px' }, [
+      el('ol', { style: 'margin:0;padding-inline-start:20px;line-height:1.9;font-size:13px' }, [
+        el('li', {}, [t('In the gateway’s own panel, open the gateway’s settings and make a webhook key. It is shown once.')]),
+        el('li', {}, [`${t('Register this address there')}: `, el('code', { text: g.webhookUrl || '/pay/webhook' })]),
+        el('li', {}, [t('Paste that key here and tick the box.')])
+      ]),
+      el('div', { class: 'field' }, [el('label', { text: t('Webhook key from the gateway') }), key]),
+      el('label', { class: 'switch' }, [ready, el('span', { class: 'track' }),
+        el('span', { class: 'muted', text: t('The gateway is set up to send webhooks') })]),
+      el('div', { class: 'hint' }, [
+        t('Leave this off until it really is. A gateway handed an address it has no key for refuses the payment itself, and the buyer sees nothing but an error.')
+      ]),
+      el('div', { class: 'hint' }, [
+        t('Without a webhook everything still works — the buyer’s own button and a check every few minutes both deliver the config.')
+      ])
+    ]),
+    actions: [{
+      label: t('Save'), kind: 'primary',
+      onClick: async (close) => {
+        try {
+          const out = await api.post('/bot/gateway/secret', {
+            secret: key.value.trim(),
+            ready: ready.checked
+          });
+          g.hasWebhookSecret = true;
+          g.webhookReady = !!out.ready;
+          if (secretLine) {
+            secretLine.textContent = out.ready
+              ? t('The webhook is on.')
+              : t('A webhook key is set, but the gateway is not sending yet.');
+          }
+          close();
+          /* a key we generated is the one case worth showing back, because
+             the admin has to carry it to the gateway */
+          if (out.secret) {
+            modal({
+              title: t('Your webhook key'),
+              subtitle: t('Copy it into the gateway’s panel now — it is not shown again.'),
+              body: el('div', {}, [
+                el('div', { class: 'link-box', text: out.secret }),
+                el('div', { class: 'hint', style: 'margin-top:10px' }, [`${t('Webhook address')}: ${out.webhookUrl || '/pay/webhook'}`])
+              ]),
+              width: 640
+            });
+          } else {
+            toast(t('Webhook saved'));
+          }
+        } catch (err) { toast(err.message, 'err'); }
+      }
+    }]
+  });
 }
 
 /** The key, or the button, that takes an OpenAPI file in. */

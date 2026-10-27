@@ -57,7 +57,20 @@ function blank() {
     label: '🌐 پرداخت آنلاین',
     apiKey: '',
     callbackUrl: '',
+    /*
+     * The key the gateway signs its webhooks with.
+     *
+     * The gateway's key, not ours. It is made in the gateway's own panel and
+     * shown once, and we store it to check the signature on what arrives -
+     * inventing one here and hoping the gateway uses it was the mistake that
+     * made every payment fail with WEBHOOK_NOT_CONFIGURED.
+     */
     webhookSecret: '',
+    /* and whether the gateway has actually been set up to send one. Until the
+       admin says so, the address is not offered to it at all: a gateway handed
+       a webhook address it has no key for refuses the whole payment. */
+    webhookReady: false,
+    webhookNote: '',
     /* where the gateway should send the signed result. Empty until the panel
        has a domain to be reached on, which is the usual state of a fresh
        install - and the bot asks the gateway itself in that case. */
@@ -154,6 +167,23 @@ function errorText(res) {
     return `${said} — این مربوط به حساب شما نزد درگاه است، نه به پنل؛ با پشتیبانی درگاه تماس بگیرید.`;
   }
   return said;
+}
+
+/**
+ * Did the gateway refuse the webhook, rather than the payment?
+ *
+ * Told apart by the gateway's own code where it gives one, and by its words
+ * otherwise - because the answer decides whether the buyer gets a payment
+ * link or an apology, and only one of those is right for a feature nobody
+ * asked them about.
+ */
+function webhookRefused(res) {
+  const err = (res.body || {}).error || {};
+  const code = String(err.code || '');
+  if (/WEBHOOK/i.test(code)) return true;
+  const fields = [].concat(err.fields || [], err.field || []);
+  if (fields.some((f) => /webhook/i.test(String(f)))) return true;
+  return /webhook/i.test(String(err.message || ''));
 }
 
 /** The address of one operation in the profile, with the token filled in. */
@@ -268,12 +298,36 @@ async function createLink(order) {
   body[field.orderId] = orderRef(order);
   if (field.callback) body[field.callback] = callbackFor(g, order);
   if (field.description && order.planName) body[field.description] = String(order.planName).slice(0, 200);
-  /* only when the admin has a webhook key: a gateway that is told where to
-     send one without having been given a key refuses the whole request */
-  if (field.webhook && g.webhookSecret && g.webhookUrl) body[field.webhook] = g.webhookUrl;
+  /*
+   * The webhook address rides along only when the gateway has been set up for
+   * one at its end - `webhookReady` is the admin saying so after registering
+   * the key there. It is not enough that we hold a key: the gateway refuses
+   * the entire payment if it is handed an address it has no key for.
+   */
+  const wantWebhook = !!(field.webhook && g.webhookReady && g.webhookSecret && g.webhookUrl);
+  if (wantWebhook) body[field.webhook] = g.webhookUrl;
 
-  const res = await request(profile.create.method || 'POST',
+  let res = await request(profile.create.method || 'POST',
     urlFor(profile, profile.create), body, authHeaders(g));
+
+  /*
+   * A sale must never fail over something optional.
+   *
+   * The webhook is a convenience - it tells us a payment landed without
+   * waiting for the buyer to come back - and the buyer's own button and the
+   * sweep both work without it. So a gateway that rejects the *webhook*
+   * rather than the payment gets asked again with the address left off,
+   * rather than the customer being told the gateway is unavailable. The
+   * admin is told once, through lastError, that their webhook is not set up.
+   */
+  if (res.status >= 400 && wantWebhook && webhookRefused(res)) {
+    delete body[field.webhook];
+    g.webhookReady = false;
+    g.webhookNote = errorText(res);
+    db.saveNow();
+    res = await request(profile.create.method || 'POST',
+      urlFor(profile, profile.create), body, authHeaders(g));
+  }
 
   if (res.status >= 400) {
     g.lastError = errorText(res);

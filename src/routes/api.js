@@ -309,6 +309,8 @@ function payView(b) {
        the gateway's own panel shows, without the key itself ever coming back */
     keyLength: String(g.apiKey || '').length,
     hasWebhookSecret: !!g.webhookSecret,
+    webhookReady: !!g.webhookReady,
+    webhookNote: g.webhookNote || '',
     lastError: g.lastError || '',
     lastOkAt: Number(g.lastOkAt) || 0,
     profile: g.profile ? summariseProfile(g.profile) : null,
@@ -619,11 +621,38 @@ function suggestedWebhook() {
  */
 router.post('/bot/gateway/secret', (req, res) => {
   const g = paygate.settings();
-  g.webhookSecret = paygate.newSecret();
+  const given = String((req.body || {}).secret || '').trim();
+
+  /*
+   * The gateway's key, pasted - or one made here when the gateway lets you
+   * choose it.
+   *
+   * It generated one unconditionally before, which is wrong for any gateway
+   * that makes its own: we would have been checking signatures against a key
+   * nobody else had, and - worse - the panel then started handing the gateway
+   * a webhook address it had no key for, which made it refuse every payment
+   * outright. Pasting is the normal path now; generating is the exception.
+   */
+  if (given) {
+    if (given.length < 16) return bad(res, 'that key looks too short to be the gateway’s');
+    g.webhookSecret = given;
+  } else {
+    g.webhookSecret = paygate.newSecret();
+  }
   if (!g.webhookUrl) g.webhookUrl = suggestedWebhook();
+  /* set up at the gateway's end as well - which only the admin can know, and
+     which is what decides whether the address is offered with a payment */
+  g.webhookReady = !!(req.body || {}).ready && !!g.webhookSecret && !!g.webhookUrl;
+  g.webhookNote = '';
   db.saveNow();
-  logEvent('bot', 'a new payment webhook key was generated');
-  res.json({ ok: true, secret: g.webhookSecret, webhookUrl: g.webhookUrl });
+  logEvent('bot', given ? 'the payment webhook key was set' : 'a payment webhook key was generated');
+  res.json({
+    ok: true,
+    // only a key we made is worth showing back; a pasted one they already have
+    secret: given ? '' : g.webhookSecret,
+    webhookUrl: g.webhookUrl,
+    ready: g.webhookReady
+  });
 });
 
 /**
