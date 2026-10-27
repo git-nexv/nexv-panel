@@ -5360,7 +5360,9 @@ async function renderBot(view) {
   const perGB = numField(data.pricePerGB || 0, {
     onInput: (n) => { draft.pricePerGB = Math.max(0, n); refreshTermSums(); }
   });
-  formField(setupGrid, 'Price', perGB, {
+  /* "Price" on its own is what a plan costs, which is on another tab entirely;
+     this one is per gigabyte and the label has to say so */
+  formField(setupGrid, 'Price per GB', perGB, {
     hint: 'What one gigabyte costs. Custom-volume buying uses this, and stays off until it is set.'
   });
 
@@ -5377,21 +5379,37 @@ async function renderBot(view) {
     el('div', { class: 'hint', text: 'Off (the default): the days start the moment it is sold, so a 60-day service expires 60 days from the sale and the date is on the panel straight away. On: the config shows "Not started" until the buyer first uses it — kinder to them, but it has no expiry date at all until they do, and none if they never do.' })
   ]));
 
+  /*
+   * Start, or stop - and which of the two it is kept in a variable.
+   *
+   * It used to be read back out of the key's own label, with
+   * `textContent.includes('Stop')`. That label is translated, so on a Persian
+   * panel it reads "توقف ربات", the test was false every time, and pressing
+   * Stop called start instead - which, on a bot already running, returns its
+   * status and changes nothing. The key simply did nothing, for ever, and the
+   * only way out was the terminal. The label was also written back in English
+   * afterwards, so a Persian panel ended up with an English key on it.
+   */
+  let botRunning = !!data.status.running;
+  const paintStartBtn = () => {
+    startBtn.innerHTML = tHtml(`${icon('power')} ${botRunning ? 'Stop the bot' : 'Start the bot'}`);
+    hydrateIcons(startBtn);
+  };
   const startBtn = el('button', {
-    class: 'btn primary', html: `${icon('power')} ${data.status.running ? 'Stop the bot' : 'Start the bot'}`,
+    class: 'btn primary',
     onclick: async () => {
       startBtn.disabled = true;
       try {
-        const running = startBtn.textContent.includes('Stop');
-        const status = await api.post(running ? '/bot/stop' : '/bot/start', {});
+        const status = await api.post(botRunning ? '/bot/stop' : '/bot/start', {});
+        botRunning = !!status.running;
         paintStatus(status);
-        startBtn.innerHTML = `${icon('power')} ${status.running ? 'Stop the bot' : 'Start the bot'}`;
-        hydrateIcons(startBtn);
-        toast(status.running ? 'The bot is listening' : 'The bot is stopped');
+        paintStartBtn();
+        toast(botRunning ? 'The bot is listening' : 'The bot is stopped');
       } catch (err) { toast(err.message, 'err'); }
       startBtn.disabled = false;
     }
   });
+  paintStartBtn();
 
   panels.Setup.append(el('div', { class: 'card' }, [
     el('div', { class: 'between', style: 'margin-bottom:14px' }, [
@@ -5750,7 +5768,7 @@ async function renderBot(view) {
   hydrateIcons(panels.Backup);
 
   /* ---- Payment ---- */
-  const payBox = el('div');
+  const payBox = el('div', { class: 'stack' });
   const drawPay = () => {
     payBox.innerHTML = '';
     const card = draft.pay.card = draft.pay.card || {};

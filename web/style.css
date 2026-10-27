@@ -789,6 +789,18 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
 .form-grid .full { grid-column: 1 / -1; }
 
+/*
+ * Cards, one under the next, with air between them.
+ *
+ * A card carries no margin of its own, because nearly everywhere they live in
+ * a `.grid` and its gap does the spacing. The few places that stack several
+ * into a plain div got no gap at all and the boxes sat welded together - the
+ * Payment tab, with its three methods, worst of all. The ad-hoc
+ * `style="margin-top:16px"` that had appeared on a card here and there was
+ * the same bug being patched one card at a time.
+ */
+.stack { display: grid; gap: 16px; align-content: start; }
+
 @keyframes fade { from { opacity: 0; } }
 @keyframes pop { from { opacity: 0; transform: translateY(14px) scale(.98); } }
 

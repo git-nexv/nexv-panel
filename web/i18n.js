@@ -603,6 +603,9 @@ const FA = {
   'Test the token': 'تست توکن',
   'Start the bot': 'راه‌اندازی ربات',
   'Stop the bot': 'توقف ربات',
+  'Price per GB': 'قیمت هر گیگ',
+  'The bot is listening': 'ربات روشن شد',
+  'The bot is stopped': 'ربات متوقف شد',
   'Send /start to your bot from the admin account once, so the panel learns where to send orders.':
     'یک بار از حساب ادمین ‎/start را به ربات بفرستید تا پنل بفهمد سفارش‌ها را کجا بفرستد.',
   'Open a screen': 'باز کردن یک صفحه',
@@ -1172,6 +1175,10 @@ const PATTERNS = [
     (m) => `«${m[1]}» شناسه‌ی کوتاه معتبری برای REALITY نیست — باید تعداد زوجی رقم هگز (0-9 و a-f) و حداکثر ۱۶ کاراکتر باشد`],
   [/^Price per GB is (.+), set on the Setup tab\.$/,
     (m) => `قیمت هر گیگ ${m[1]} است و در تب Setup تنظیم می‌شود.`],
+  /* the bot's status chip. "Running" alone had an entry, but the chip almost
+     never says that - it says "Running as @yourbot", which matched nothing and
+     stayed English on a Persian panel */
+  [/^Running as @(.+)$/, (m) => `در حال اجرا با @${m[1]}`],
   [/^(\d+) people have taken a test config$/, (m) => `${m[1]} نفر کانفیگ تست گرفته‌اند`],
   [/^(\d+) people can take one again$/, (m) => `${m[1]} نفر می‌توانند دوباره بگیرند`],
   /*
