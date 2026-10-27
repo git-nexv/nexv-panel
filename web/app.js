@@ -2078,10 +2078,14 @@ function inboundForm(existing) {
           }
         };
         try {
-          if (existing) await api.put(`/inbounds/${existing.id}`, payload);
-          else await api.post('/inbounds', payload);
+          const saved = existing
+            ? await api.put(`/inbounds/${existing.id}`, payload)
+            : await api.post('/inbounds', payload);
           close();
-          toast('Inbound saved');
+          /* a port the firewall would not open is worth saying out loud: the
+             inbound reads Enabled either way and nothing could reach it */
+          if (saved && saved.firewall) toast(`Inbound saved, but ${saved.firewall}`, 'err');
+          else toast('Inbound saved');
           render();
         } catch (err) {
           toast(err.message, 'err');
@@ -3655,7 +3659,7 @@ async function routingForm(existing, tags, inbounds) {
  * now, the way the Bot page is laid out, so nothing has to be scrolled past to
  * reach something else.
  */
-const SETTINGS_TABS = ['General', 'Access', 'Limits', 'Config names', 'TLS', 'Theme', 'Backup', 'Account', 'Logs'];
+const SETTINGS_TABS = ['General', 'Access', 'Limits', 'Config names', 'TLS', 'Firewall', 'Theme', 'Backup', 'Account', 'Logs'];
 
 async function renderSettings(view) {
   /* a reseller has no panel settings to speak of - the leader holds all of
@@ -3992,9 +3996,136 @@ async function renderSettings(view) {
     })
   ]));
 
+  /* ---- Firewall ---- */
+  renderFirewall(panels.Firewall);
+
   /* ---- Account and Logs: the pages they already were ---- */
   await renderAccount(panels.Account);
   await renderLogs(panels.Logs);
+}
+
+/**
+ * The host firewall, which the panel could not see or touch at all until now.
+ *
+ * Two things were wrong and both of them were silent. An inbound created in
+ * the panel listened on a port the firewall was dropping, so the inbound read
+ * Enabled and no client could connect; and there was no way to open a port by
+ * hand short of ssh. So this page says which ports an enabled inbound needs,
+ * which of them are actually open, and lets one be opened or closed outright.
+ */
+function renderFirewall(panel) {
+  const head = el('div', { class: 'between', style: 'margin-bottom:12px' });
+  const state = el('span', { class: 'chip', text: '…' });
+  const body = el('div', {});
+  const card = el('div', { class: 'card' }, [head, body]);
+  panel.append(card);
+
+  head.append(el('div', {}, [
+    el('div', { style: 'font-weight:700;font-size:14px' }, ['Firewall']),
+    el('div', { class: 'muted', text: 'Which ports the host lets through.' })
+  ]), state);
+
+  const portInput = numField('', { placeholder: '8443' });
+  const protoSel = selectOf([
+    { value: 'tcp', label: 'TCP' },
+    { value: 'udp', label: 'UDP' },
+    { value: 'both', label: 'TCP and UDP' }
+  ], 'tcp');
+
+  let busy = false;
+  const draw = (info) => {
+    body.innerHTML = '';
+    if (!info) {
+      body.append(el('div', { class: 'hint', text: 'Could not read the firewall.' }));
+      return;
+    }
+    state.className = info.running ? 'chip ok' : 'chip';
+    state.textContent = info.running ? info.firewall : 'not running';
+
+    if (!info.running) {
+      body.append(el('div', { class: 'hint', style: 'margin-bottom:12px' }, [
+        'No firewall is running on this server, so every port is already reachable from outside and there is nothing here to open. Install and enable ufw if you would rather only the ports below were.'
+      ]));
+    }
+
+    /* the point of the page: a port an inbound needs that is being dropped */
+    if ((info.shut || []).length) {
+      body.append(el('div', { class: 'notice danger', style: 'margin-bottom:12px' }, [
+        el('div', { text: 'These ports are closed, so nothing can reach them:' }),
+        el('div', { class: 'row', style: 'margin-top:8px;flex-wrap:wrap' },
+          info.shut.map((n) => el('span', { class: 'chip danger', text: `${n.port} — ${t(n.what)}` }))),
+        el('div', { class: 'row', style: 'margin-top:10px' }, [
+          el('button', {
+            class: 'btn primary', text: 'Open all of them',
+            onclick: () => act(() => api.post('/firewall/sync', {}), 'Ports opened')
+          })
+        ])
+      ]));
+    } else if (info.running) {
+      body.append(el('div', { class: 'notice ok', style: 'margin-bottom:12px' }, [
+        'Every port the panel and its inbounds need is open.'
+      ]));
+    }
+
+    const openList = el('div', { class: 'row', style: 'flex-wrap:wrap;gap:8px' });
+    if ((info.open || []).length) {
+      for (const port of info.open) {
+        const wanted = (info.needed || []).find((n) => n.port === port);
+        /* "the panel", "subscriptions" are the panel's own words and have a
+           translation; an inbound's remark is the admin's and does not */
+        openList.append(el('span', { class: `chip ${wanted ? 'ok' : ''}`, text: wanted ? `${port} — ${t(wanted.what)}` : String(port) }));
+      }
+    } else {
+      openList.append(el('span', { class: 'muted', text: info.running ? 'Nothing is open.' : '—' }));
+    }
+
+    body.append(el('div', { class: 'field full' }, [
+      el('label', { text: 'Open now' }), openList
+    ]));
+
+    const row = el('div', { class: 'row', style: 'margin-top:14px;flex-wrap:wrap;align-items:flex-end;gap:10px' }, [
+      el('div', { class: 'field', style: 'margin:0;min-width:120px' }, [el('label', { text: 'Port' }), portInput]),
+      el('div', { class: 'field', style: 'margin:0;min-width:150px' }, [el('label', { text: 'Protocol' }), protoSel]),
+      el('button', {
+        class: 'btn primary', text: 'Open',
+        onclick: () => {
+          const port = toNumber(portInput.value);
+          if (!port) return toast('Type a port number first', 'err');
+          act(() => api.post('/firewall/allow', { port, proto: protoSel.value }), `${t('Port opened')} · ${port}`);
+        }
+      }),
+      el('button', {
+        class: 'btn danger', text: 'Close',
+        onclick: () => {
+          const port = toNumber(portInput.value);
+          if (!port) return toast('Type a port number first', 'err');
+          act(() => api.post('/firewall/deny', { port, proto: protoSel.value }), `${t('Port closed')} · ${port}`);
+        }
+      }),
+      el('button', {
+        class: 'btn ghost', text: 'Refresh',
+        onclick: () => load()
+      })
+    ]);
+    body.append(row);
+    hydrateIcons(body);
+  };
+
+  /* every action answers with the new state, so the page never needs a reload */
+  const act = async (fn, done) => {
+    if (busy) return;
+    busy = true;
+    try {
+      draw(await fn());
+      toast(done);
+    } catch (err) { toast(err.message, 'err'); }
+    busy = false;
+  };
+
+  const load = async () => {
+    try { draw(await api.get('/firewall')); } catch (_) { draw(null); }
+  };
+  load();
 }
 
 /* ------------------------------ page: admins ----------------------------- */

@@ -529,6 +529,36 @@ button, input, select, textarea { font: inherit; color: inherit; }
 /* a note under a control. It was only ever styled inside a .field, so the
    same class used anywhere else came out as full-size body text */
 .hint { font-size: 11.5px; color: var(--faint); line-height: 1.5; }
+
+/*
+ * A line the reader is meant to act on, not skim past - a port the firewall is
+ * dropping, a certificate that could not be issued. Tinted from the status
+ * colour rather than given one of its own, so it stays right in every theme.
+ */
+.notice {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: calc(var(--radius) - 4px);
+  padding: 12px 14px;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.notice.ok {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 34%, transparent);
+  background: color-mix(in srgb, var(--ok) 11%, transparent);
+}
+.notice.warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 34%, transparent);
+  background: color-mix(in srgb, var(--warn) 11%, transparent);
+}
+.notice.danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 34%, transparent);
+  background: color-mix(in srgb, var(--danger) 11%, transparent);
+}
+.notice .chip { color: inherit; }
 input, select, textarea {
   width: 100%;
   padding: 10px 12px;

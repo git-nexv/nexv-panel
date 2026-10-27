@@ -21,6 +21,7 @@ const probe = require('../probe');
 const botai = require('../botai');
 const system = require('../system');
 const membership = require('../membership');
+const firewall = require('../firewall');
 
 const router = express.Router();
 
@@ -664,6 +665,77 @@ router.get('/protocols', (req, res) => res.json({
   withLinks: xray.LINK_PROTOCOLS
 }));
 
+/* ------------------------------- firewall ------------------------------- */
+
+/**
+ * One line about the firewall, for whoever just saved an inbound.
+ *
+ * Silence when there is nothing to say: no firewall running, or the port is
+ * open and that is that. The admin only needs words when a port they are now
+ * relying on could not be opened.
+ */
+function firewallNote(fw, port) {
+  if (!fw || fw.skipped || fw.ok) return '';
+  const mine = (fw.failed || []).find((f) => f.port === port) || (fw.failed || [])[0];
+  if (!mine) return '';
+  return `could not open port ${mine.port} in the firewall: ${mine.reason}`;
+}
+
+/**
+ * What is open, what ought to be, and what is not.
+ *
+ * `shut` is the whole point of the page: a port an enabled inbound is
+ * listening on that the firewall is dropping. That used to be invisible.
+ */
+router.get('/firewall', async (req, res) => {
+  try {
+    res.json(await firewall.status(db));
+  } catch (err) {
+    bad(res, err.message || 'could not read the firewall');
+  }
+});
+
+/** Open a port by hand. The thing the panel could not do at all before. */
+router.post('/firewall/allow', async (req, res) => {
+  const body = req.body || {};
+  const port = num(body.port);
+  const proto = ['tcp', 'udp', 'both'].includes(body.proto) ? body.proto : 'tcp';
+  if (!port || port < 1 || port > 65535) return bad(res, 'port must be between 1 and 65535');
+  const out = await firewall.allow(port, proto);
+  if (!out.ok) return bad(res, out.reason || 'the firewall refused');
+  if (!out.skipped) logEvent('firewall', `opened port ${port}/${proto}`);
+  res.json(Object.assign({ ok: true }, out, await firewall.status(db)));
+});
+
+/** And close one again. */
+router.post('/firewall/deny', async (req, res) => {
+  const body = req.body || {};
+  const port = num(body.port);
+  const proto = ['tcp', 'udp', 'both'].includes(body.proto) ? body.proto : 'both';
+  if (!port || port < 1 || port > 65535) return bad(res, 'port must be between 1 and 65535');
+  /*
+   * Refuse to shut the door the admin is standing in. Closing the panel's own
+   * port from the panel locks everybody out of it, and the mistake is not
+   * recoverable from anywhere but the server's console.
+   */
+  const panelPort = num(db.settings.panelPort) || 2087;
+  if (port === panelPort) return bad(res, 'that is the port the panel itself answers on');
+  const out = await firewall.deny(port, proto);
+  if (!out.ok) return bad(res, out.reason || 'the firewall refused');
+  if (!out.skipped) logEvent('firewall', `closed port ${port}/${proto}`);
+  res.json(Object.assign({ ok: true }, out, await firewall.status(db)));
+});
+
+/** Open everything the panel needs, in one go. */
+router.post('/firewall/sync', async (req, res) => {
+  firewall.forget();
+  const out = await firewall.sync(db);
+  if (out.opened && out.opened.length) {
+    logEvent('firewall', `opened ${out.opened.join(', ')}`);
+  }
+  res.json(Object.assign({}, out, await firewall.status(db)));
+});
+
 /* ------------------------------- inbounds ------------------------------- */
 
 /** Accept a list either as an array or as a comma-separated string. */
@@ -892,7 +964,15 @@ router.post('/inbounds', async (req, res) => {
     return bad(res, applied.error);
   }
   logEvent('inbound', `created ${inb.protocol} inbound on port ${inb.port}`);
-  res.json(inb);
+  /*
+   * And open the port. Xray is listening on it either way, but a host with ufw
+   * on drops everything that arrives for a port nobody allowed - which looked,
+   * from the panel, like a perfectly healthy inbound that no client could
+   * reach. Reported back rather than thrown: an inbound that exists and works
+   * from inside the box is not a failed create.
+   */
+  const fw = await firewall.sync(db).catch(() => null);
+  res.json(Object.assign({}, inb, { firewall: firewallNote(fw, inb.port) }));
 });
 
 router.put('/inbounds/:id', async (req, res) => {
@@ -919,7 +999,9 @@ router.put('/inbounds/:id', async (req, res) => {
     return bad(res, applied.error);
   }
   logEvent('inbound', `updated inbound ${updated.remark}`);
-  res.json(updated);
+  // the port may have moved; the new one has to be opened too
+  const fw = await firewall.sync(db).catch(() => null);
+  res.json(Object.assign({}, updated, { firewall: firewallNote(fw, updated.port) }));
 });
 
 router.delete('/inbounds/:id', async (req, res) => {
@@ -1027,6 +1109,7 @@ router.post('/inbounds/:id/toggle', async (req, res) => {
   inb.enable = inb.enable === false;
   db.saveNow();
   await xray.apply();
+  if (inb.enable !== false) await firewall.sync(db).catch(() => null);
   res.json(inb);
 });
 
@@ -1162,9 +1245,11 @@ router.post('/inbounds/import', async (req, res) => {
     return bad(res, applied.error);
   }
   logEvent('inbound', `imported ${inbound.protocol} inbound on port ${inbound.port} with ${stored.length} client(s)`);
+  const fw = await firewall.sync(db).catch(() => null);
   res.json({
     ok: true,
     inbound,
+    firewall: firewallNote(fw, inbound.port),
     clients: stored.length,
     replaced: collisions.length,
     // worth saying out loud: their address was not one this machine can bind
@@ -2091,6 +2176,12 @@ router.put('/settings', async (req, res) => {
   db.saveNow();
   const webBasePath = s.webBasePath || '';
   await xray.apply();
+  /*
+   * A new panel port or subscription port is no use behind a closed firewall,
+   * and the restart that follows would leave the admin locked out of the thing
+   * they just moved. Open it before the restart, not after.
+   */
+  await firewall.sync(db).catch(() => null);
   logEvent('settings', 'panel settings updated');
   res.json({ ok: true, restartNeeded, webBasePath });
 });

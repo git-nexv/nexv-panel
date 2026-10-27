@@ -461,6 +461,19 @@ async function bootstrap() {
   require('./telegram').dateUndatedClients()
     .then((r) => { if (r && r.dated) console.log(`[bot] gave ${r.dated} config(s) an expiry date`); })
     .catch((err) => console.error('[bot] could not date sold configs:', err.message));
+  /*
+   * Every port the panel needs, opened once on the way up. Inbounds created
+   * before the panel knew how to do this have been listening behind a closed
+   * firewall ever since, and nothing on any page said so.
+   */
+  require('./firewall').sync(require('./db'))
+    .then((r) => {
+      if (!r || r.skipped) return;
+      if (r.opened && r.opened.length) console.log(`[firewall] opened ${r.opened.join(', ')}`);
+      for (const f of (r.failed || [])) console.warn(`[firewall] could not open ${f.port}: ${f.reason}`);
+    })
+    .catch((err) => console.error('[firewall] could not be checked:', err.message));
+
   // and from here on xray gets itself picked up when it falls over
   try { require('./watchdog').start(); } catch (err) { console.error('[watchdog] could not start:', err.message); }
 
