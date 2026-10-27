@@ -855,6 +855,27 @@ const FA = {
   'TLS': 'TLS',
   'Backup': 'پشتیبان',
 
+  'Manual plan': 'پلن دستی',
+  'Access user': 'اختیارات کاربر',
+
+  /* ---- the bot's own backup ---- */
+  '💾 Send the panel backup to your chat': '💾 پشتیبان پنل را به چت خودت بفرست',
+  'On a schedule': 'به‌صورت زمان‌بندی‌شده',
+  'A backup that only exists on this server goes down with it. At each of the times below the bot sends you the whole panel as a .json file — inbounds, clients, plans, the bot\u2019s own settings — in the chat you already have on your phone. Restore it from Settings → Backup.': 'پشتیبانی که فقط روی همین سرور باشد، با خود سرور از بین می‌رود. در هر یک از ساعت‌های زیر، ربات کل پنل را به شکل یک فایل json برایتان می‌فرستد — این‌باندها، کانفیگ‌ها، پلن‌ها و تنظیمات خود ربات — در همان چتی که روی گوشی‌تان دارید. برگرداندنش از تنظیمات ← پشتیبان.',
+  'Nobody is linked as the admin yet, so there is nowhere to send it. Press Start in the bot from your own Telegram account first.': 'هنوز کسی به‌عنوان ادمین وصل نشده، پس جایی برای فرستادن نیست. اول از اکانت تلگرام خودتان در ربات Start را بزنید.',
+  'The bot is not running, and the schedule only runs while it does. Start it on the Setup tab.': 'ربات روشن نیست، و زمان‌بندی فقط وقتی ربات روشن باشد کار می‌کند. از تب راه‌اندازی روشنش کنید.',
+  'Your time zone': 'ساعت محلی شما',
+  'The times below are read in this zone, not the server\u2019s.': 'ساعت‌های زیر بر اساس همین منطقه خوانده می‌شوند، نه ساعت سرور.',
+  'Times of day': 'ساعت‌های ارسال',
+  'Add a time': 'افزودن ساعت',
+  'Remove': 'حذف',
+  'Send one now': 'همین حالا یکی بفرست',
+  'Backup sent to your chat': 'پشتیبان به چت شما فرستاده شد',
+  'Last sent': 'آخرین ارسال',
+  'Nothing has been sent yet.': 'هنوز چیزی فرستاده نشده.',
+  'The last one did not go through:': 'آخرین ارسال انجام نشد:',
+  'Tehran (+3:30)': 'تهران (+۳:۳۰)',
+
   /* ---- firewall ---- */
   'Firewall': 'فایروال',
   'Which ports the host lets through.': 'سرور کدام پورت‌ها را باز گذاشته است.',

@@ -22,6 +22,7 @@ const botai = require('../botai');
 const system = require('../system');
 const membership = require('../membership');
 const firewall = require('../firewall');
+const backup = require('../backup');
 
 const router = express.Router();
 
@@ -255,6 +256,7 @@ function botView() {
       { terms: telegram.customTerms() }),
     startOnFirstUse: b.startOnFirstUse === true,
     access: b.access || telegram.defaults().access,
+    backup: telegram.backupStatus(),
     orders: (b.orders || []).slice(0, 60),
     pay: b.pay || telegram.defaults().pay,
     payWays: telegram.payWays(),
@@ -370,6 +372,30 @@ router.put('/bot', async (req, res) => {
     if (body.channel.link !== undefined) c.link = String(body.channel.link).trim().slice(0, 200);
     if (body.channel.text !== undefined) c.text = String(body.channel.text).slice(0, 1000);
   }
+  if (body.backup && typeof body.backup === 'object') {
+    const bk = telegram.backupSettings();
+    if (body.backup.enable !== undefined) bk.enable = !!body.backup.enable;
+    if (body.backup.tzOffset !== undefined) {
+      // -720..+840 covers every real zone, and nothing else is a zone
+      const off = num(body.backup.tzOffset);
+      if (off >= -720 && off <= 840) bk.tzOffset = off;
+    }
+    if (Array.isArray(body.backup.times)) {
+      /* keep only what is actually a time of day - a row left blank in the
+         panel is a row the admin has not filled in yet, not an error */
+      const seen = new Set();
+      bk.times = body.backup.times
+        .map((t) => String(t).trim())
+        .filter((t) => telegram.minutesOf(t) >= 0)
+        .map((t) => {
+          const m = telegram.minutesOf(t);
+          return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+        })
+        .filter((t) => !seen.has(t) && seen.add(t))
+        .sort()
+        .slice(0, 12);
+    }
+  }
   if (body.ai && typeof body.ai === 'object') {
     b.ai = b.ai || {};
     if (typeof body.ai.apiKey === 'string' && body.ai.apiKey.trim()) b.ai.apiKey = body.ai.apiKey.trim();
@@ -381,6 +407,21 @@ router.put('/bot', async (req, res) => {
   db.saveNow();
   logEvent('bot', 'bot settings saved');
   res.json(botView());
+});
+
+/**
+ * Send a backup through the bot right now.
+ *
+ * The same file the schedule sends, so the admin can prove the whole path
+ * works - token, admin chat, upload - without waiting until three in the
+ * morning to find out it does not.
+ */
+router.post('/bot/backup/send', async (req, res) => {
+  try {
+    const out = await telegram.sendBackup('دستی از پنل');
+    logEvent('bot', 'a backup was sent to the admin chat');
+    res.json(Object.assign({ ok: true }, out, { backup: telegram.backupStatus() }));
+  } catch (err) { bad(res, err.message); }
 });
 
 /** Does this token belong to a real bot? Answers without starting anything. */
@@ -2391,12 +2432,10 @@ router.post('/xray/:action', async (req, res) => {
 /* --------------------------- backup / restore --------------------------- */
 
 router.get('/backup', (req, res) => {
-  const dump = JSON.parse(JSON.stringify(db.data));
-  delete dump.settings.sessionSecret;
-  dump.sessions = [];
-  res.setHeader('Content-Disposition', `attachment; filename="nexv-backup-${Date.now()}.json"`);
+  // the same bytes the bot sends, so the two can never drift apart
+  res.setHeader('Content-Disposition', `attachment; filename="${backup.filename()}"`);
   res.setHeader('Content-Type', 'application/json');
-  res.send(JSON.stringify(dump, null, 2));
+  res.send(backup.text());
 });
 
 router.post('/restore', async (req, res) => {

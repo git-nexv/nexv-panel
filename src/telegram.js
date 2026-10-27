@@ -223,7 +223,28 @@ function defaults() {
     startOnFirstUse: false,
 
     /* what the buyer is allowed to decide for themselves rather than be given */
-    access: { chooseName: true }
+    access: { chooseName: true },
+
+    /*
+     * The panel's own backup, sent to the admin's chat.
+     *
+     * A backup that only exists on the server it is a backup of is not a
+     * backup - it goes down with the machine. Telegram is the one place the
+     * admin already has, on a phone, off this server, so the file goes there.
+     *
+     * `times` are wall-clock times of day in the admin's own day, which is
+     * what `tzOffset` is for: a server set to UTC would otherwise send the
+     * "three in the morning" backup at half past six in the evening in Tehran.
+     * Tehran is the default because that is who asked for this.
+     */
+    backup: {
+      enable: false,
+      times: ['03:00'],
+      tzOffset: 210,
+      lastKey: '',
+      lastAt: 0,
+      lastError: ''
+    }
   };
 }
 
@@ -322,6 +343,54 @@ function sendDocument(chatId, fileId, caption, keyboard) {
     parse_mode: 'HTML',
     reply_markup: keyboard ? { inline_keyboard: keyboard } : undefined
   }).catch((err) => { runtime.error = err.message; });
+}
+
+/**
+ * Send a file the panel made, rather than one Telegram already holds.
+ *
+ * `sendDocument` above takes a file_id - a file Telegram has seen before. A
+ * backup has never been anywhere, so it has to be uploaded, and uploading
+ * means multipart/form-data, which is the one request here that is not JSON.
+ */
+function uploadDocument(chatId, filename, content, caption) {
+  const boundary = `----nexv${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n${chatId}\r\n`),
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="caption"\r\n\r\n${caption || ''}\r\n`),
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="parse_mode"\r\n\r\nHTML\r\n`),
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="document"; filename="${filename}"\r\n`
+      + 'Content-Type: application/json\r\n\r\n'),
+    Buffer.isBuffer(content) ? content : Buffer.from(String(content), 'utf8'),
+    Buffer.from(`\r\n--${boundary}--\r\n`)
+  ]);
+
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      host: API_HOST,
+      port: API_PORT ? Number(API_PORT) : 443,
+      path: `/bot${bot().token}/sendDocument`,
+      method: 'POST',
+      headers: {
+        'content-type': `multipart/form-data; boundary=${boundary}`,
+        'content-length': body.length
+      },
+      // a big store over a slow link needs longer than a message does
+      timeout: 120000
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        let parsed;
+        try { parsed = JSON.parse(data); } catch (_) { return reject(new Error('Telegram sent something that is not JSON')); }
+        if (!parsed.ok) return reject(new Error(parsed.description || 'Telegram refused the file'));
+        runtime.sent++;
+        resolve(parsed.result);
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('Telegram did not answer in time')));
+    req.on('error', reject);
+    req.end(body);
+  });
 }
 
 function edit(chatId, messageId, text, keyboard) {
@@ -2061,6 +2130,8 @@ async function start() {
   b.enabled = true;
   db.saveNow();
   loop();
+  // and from here the scheduled backup has something to send through
+  watchBackups();
   return status();
 }
 
@@ -2183,10 +2254,173 @@ function resume() {
   if (b.enabled && b.token) start().catch((err) => { runtime.error = err.message; });
 }
 
+/* ------------------------------- backups --------------------------------- */
+
+const backup = require('./backup');
+
+/** The backup settings, with the defaults filled in. */
+function backupSettings() {
+  const b = bot();
+  if (!b.backup || typeof b.backup !== 'object') b.backup = defaults().backup;
+  const s = b.backup;
+  if (!Array.isArray(s.times)) s.times = [];
+  if (!Number.isFinite(Number(s.tzOffset))) s.tzOffset = 210;
+  return s;
+}
+
+/**
+ * "03:00" -> 180 minutes past midnight, or -1 when it is not a time.
+ *
+ * Persian and Arabic digits come back as digits first. A keyboard set to
+ * Persian types ۰۳:۰۰, which looks like a time to the person who typed it and
+ * like nothing at all to a regular expression.
+ */
+function minutesOf(raw) {
+  const text = String(raw === undefined || raw === null ? '' : raw)
+    .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06F0))
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660));
+  const m = /^\s*(\d{1,2})\s*[:.]\s*(\d{1,2})\s*$/.exec(text);
+  if (!m) return -1;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h < 0 || h > 23 || min < 0 || min > 59) return -1;
+  return h * 60 + min;
+}
+
+/** The times the admin set, cleaned up and in order, with no repeats. */
+function backupTimes() {
+  const seen = new Set();
+  return backupSettings().times
+    .map((t) => minutesOf(t))
+    .filter((n) => n >= 0 && !seen.has(n) && seen.add(n))
+    .sort((a, b) => a - b);
+}
+
+/**
+ * Where in the admin's own day it is now.
+ *
+ * Everything about a schedule is in their day, not the server's: a box set to
+ * UTC would otherwise send the 3am backup in the middle of their evening.
+ */
+function localNow(at) {
+  const s = backupSettings();
+  const shifted = new Date((at || Date.now()) + Number(s.tzOffset || 0) * 60000);
+  return {
+    minutes: shifted.getUTCHours() * 60 + shifted.getUTCMinutes(),
+    day: `${shifted.getUTCFullYear()}-${backup.pad(shifted.getUTCMonth() + 1)}-${backup.pad(shifted.getUTCDate())}`
+  };
+}
+
+/**
+ * Take a backup and send it to the admin's chat.
+ *
+ * The caption carries what is in the file, because a stream of identical
+ * documents in a chat is one nobody checks: a backup that suddenly holds no
+ * clients is worth noticing before it is the only one left.
+ */
+async function sendBackup(reason) {
+  const chat = adminChat();
+  if (!chat) throw new Error('no admin chat is linked, so there is nowhere to send it');
+  if (!bot().token) throw new Error('set the bot token first');
+
+  const at = Date.now();
+  const s = backupSettings();
+  const counts = backup.summary();
+  const caption = [
+    `<b>${escapeHtml(bot().brand || 'NexV')}</b> — پشتیبان پنل`,
+    `${counts.inbounds} این‌باند · ${counts.clients} کانفیگ · ${counts.plans} پلن`,
+    reason ? `<i>${escapeHtml(reason)}</i>` : ''
+  ].filter(Boolean).join('\n');
+
+  await uploadDocument(chat, backup.filename(at, s.tzOffset), backup.text(), caption);
+  s.lastAt = at;
+  s.lastError = '';
+  db.saveNow();
+  return { ok: true, at, counts };
+}
+
+/*
+ * One timer for the whole thing, checked once a minute.
+ *
+ * A missed minute - the panel restarting across one, a check that ran long -
+ * must not mean a skipped backup, so a slot counts as due for the hour that
+ * follows it and `lastKey` is what stops it being sent twice. The key is the
+ * admin's own day and the slot, so moving the clock or the offset cannot
+ * replay a backup that already went.
+ */
+let backupTimer = null;
+const SLOT_GRACE = 60;        // minutes a missed slot is still worth sending
+
+async function backupTick() {
+  try {
+    const s = backupSettings();
+    if (!s.enable || !runtime.running) return;
+    const times = backupTimes();
+    if (!times.length) return;
+
+    const now = localNow();
+    // the latest slot that has come round today and is still within its grace
+    let due = -1;
+    for (const t of times) {
+      if (now.minutes >= t && now.minutes - t <= SLOT_GRACE) due = t;
+    }
+    if (due < 0) return;
+
+    const key = `${now.day}@${due}`;
+    if (s.lastKey === key) return;
+    s.lastKey = key;
+    db.saveNow();
+
+    await sendBackup('پشتیبان خودکار');
+  } catch (err) {
+    const s = backupSettings();
+    s.lastError = err.message;
+    db.saveNow();
+    if (process.env.NEXV_TG_DEBUG) console.error('[bot] backup:', err);
+  }
+}
+
+function watchBackups() {
+  if (backupTimer) return backupTimer;
+  backupTimer = setInterval(backupTick, 60000);
+  if (typeof backupTimer.unref === 'function') backupTimer.unref();
+  return backupTimer;
+}
+
+/** What the Bot page shows about backups. */
+function backupStatus() {
+  const s = backupSettings();
+  return {
+    enable: !!s.enable,
+    times: s.times.slice(),
+    tzOffset: Number(s.tzOffset) || 0,
+    lastAt: Number(s.lastAt) || 0,
+    lastError: s.lastError || '',
+    chatLinked: !!adminChat(),
+    // the schedule only runs while the bot does, which is worth saying on the
+    // page rather than leaving as a backup that quietly never arrives
+    botRunning: !!runtime.running,
+    nextAt: nextBackupAt()
+  };
+}
+
+/** When the next one goes, as a timestamp, or 0 when none is scheduled. */
+function nextBackupAt() {
+  const s = backupSettings();
+  const times = backupTimes();
+  if (!s.enable || !times.length) return 0;
+  const now = Date.now();
+  const here = localNow(now);
+  const next = times.find((t) => t > here.minutes);
+  const minutesAway = next === undefined ? (24 * 60 - here.minutes) + times[0] : next - here.minutes;
+  return now + minutesAway * 60000;
+}
+
 module.exports = {
   bot, defaults, starterScreens, migrateStarter, migrateUsageButton, start, stop, status, whoAmI, resume,
   resetTrials, trialsTaken, repairOrphanClients, dateUndatedClients, customTerms,
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
+  sendBackup, backupStatus, backupSettings, backupTimes, watchBackups, minutesOf, nextBackupAt, backupTick,
   /* the entry point for one update: what the polling loop feeds, and what a
      webhook would feed if this ever grows one */
   handle

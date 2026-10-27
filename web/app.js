@@ -4935,7 +4935,7 @@ async function renderBot(view) {
    * untouched: they are still loaded, still saved, and still what the bot
    * shows; there is just no longer a tab for rewriting them.
    */
-  const { wrap, panels } = tabbed(['Setup', 'Plans', 'Test config', 'Manual plan', 'Access user', 'Payment', 'Channel', 'Orders', 'AI']);
+  const { wrap, panels } = tabbed(['Setup', 'Plans', 'Test config', 'Manual plan', 'Access user', 'Payment', 'Backup', 'Channel', 'Orders', 'AI']);
   for (const panel of Object.values(panels)) panel.className = 'tab-panel';
   view.append(wrap);
 
@@ -4944,7 +4944,8 @@ async function renderBot(view) {
       brand: draft.brand, currency: draft.currency, adminId: draft.adminId,
       screens: draft.screens, plans: draft.plans, pay: draft.pay, channel: draft.channel,
       pricePerGB: draft.pricePerGB, trial: draft.trial, custom: draft.custom,
-      access: draft.access, startOnFirstUse: draft.startOnFirstUse
+      access: draft.access, startOnFirstUse: draft.startOnFirstUse,
+      backup: draft.backup
     }, extra || {});
     try {
       await api.put('/bot', payload);
@@ -5276,6 +5277,106 @@ async function renderBot(view) {
     ])
   ]));
   hydrateIcons(panels['Access user']);
+
+  /* ---- Backup: the panel, sent to the admin's own chat ---- */
+  const backup = draft.backup = Object.assign(
+    { enable: false, times: ['03:00'], tzOffset: 210 }, data.backup || {}
+  );
+  backup.times = Array.isArray(backup.times) && backup.times.length ? backup.times.slice() : ['03:00'];
+
+  const timesBox = el('div', { class: 'col', style: 'gap:8px' });
+  const drawTimes = () => {
+    timesBox.innerHTML = '';
+    backup.times.forEach((value, i) => {
+      const field = el('input', { type: 'time', value, style: 'max-width:160px' });
+      field.addEventListener('input', () => { backup.times[i] = field.value; });
+      timesBox.append(el('div', { class: 'row', style: 'gap:8px;align-items:center' }, [
+        field,
+        el('button', {
+          class: 'btn ghost', text: 'Remove',
+          onclick: () => { backup.times.splice(i, 1); if (!backup.times.length) backup.times.push('03:00'); drawTimes(); }
+        })
+      ]));
+    });
+    timesBox.append(el('div', { class: 'row', style: 'margin-top:4px' }, [
+      el('button', {
+        class: 'btn', text: 'Add a time',
+        // twelve is more than anybody wants and the server stops there too
+        onclick: () => { if (backup.times.length < 12) { backup.times.push('03:00'); drawTimes(); } }
+      })
+    ]));
+  };
+  drawTimes();
+
+  /*
+   * The offset, not a zone name. A list of four hundred zones to scroll is
+   * worse than a number, and the only thing the schedule needs is how far the
+   * admin's clock is from the server's.
+   */
+  const zones = [
+    { value: '210', label: 'Tehran (+3:30)' },
+    { value: '0', label: 'UTC' },
+    { value: '240', label: 'Dubai (+4:00)' },
+    { value: '180', label: 'Moscow, Istanbul (+3:00)' },
+    { value: '330', label: 'India (+5:30)' },
+    { value: '120', label: 'Berlin, Paris in summer (+2:00)' },
+    { value: '60', label: 'Berlin, Paris in winter (+1:00)' },
+    { value: '-300', label: 'New York in winter (-5:00)' }
+  ];
+  if (!zones.some((z) => Number(z.value) === Number(backup.tzOffset))) {
+    zones.unshift({ value: String(backup.tzOffset), label: `${backup.tzOffset} minutes from UTC` });
+  }
+  const zoneSel = selectOf(zones, String(backup.tzOffset));
+  zoneSel.addEventListener('change', () => { backup.tzOffset = Number(zoneSel.value); });
+
+  const lastLine = el('div', { class: 'hint' });
+  const paintLast = (info) => {
+    if (!info) return;
+    if (info.lastError) {
+      lastLine.className = 'hint';
+      lastLine.textContent = `${t('The last one did not go through:')} ${info.lastError}`;
+      return;
+    }
+    lastLine.className = 'hint';
+    lastLine.textContent = info.lastAt
+      ? `${t('Last sent')}: ${fmtDate(info.lastAt)}`
+      : t('Nothing has been sent yet.');
+  };
+  paintLast(data.backup);
+
+  panels.Backup.append(el('div', { class: 'card' }, [
+    el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+      el('strong', { text: '💾 Send the panel backup to your chat' }),
+      switchFor(backup, 'enable', 'On a schedule')
+    ]),
+    el('div', { class: 'hint', style: 'margin-bottom:14px', text: 'A backup that only exists on this server goes down with it. At each of the times below the bot sends you the whole panel as a .json file — inbounds, clients, plans, the bot’s own settings — in the chat you already have on your phone. Restore it from Settings → Backup.' }),
+    data.backup && data.backup.botRunning ? null : el('div', { class: 'notice warn', style: 'margin-bottom:14px' }, [
+      'The bot is not running, and the schedule only runs while it does. Start it on the Setup tab.'
+    ]),
+    data.backup && data.backup.chatLinked ? null : el('div', { class: 'notice warn', style: 'margin-bottom:14px' }, [
+      'Nobody is linked as the admin yet, so there is nowhere to send it. Press Start in the bot from your own Telegram account first.'
+    ]),
+    el('div', { class: 'form-grid' }, [
+      el('div', { class: 'field' }, [el('label', { text: 'Your time zone' }), zoneSel,
+        el('div', { class: 'hint', text: 'The times below are read in this zone, not the server’s.' })]),
+      el('div', { class: 'field' }, [el('label', { text: 'Times of day' }), timesBox])
+    ]),
+    lastLine,
+    el('div', { class: 'row', style: 'margin-top:12px' }, [
+      el('button', { class: 'btn primary', text: 'Save', onclick: () => save() }),
+      el('button', {
+        class: 'btn', text: 'Send one now',
+        onclick: async () => {
+          try {
+            const out = await api.post('/bot/backup/send', {});
+            paintLast(out.backup);
+            toast('Backup sent to your chat');
+          } catch (err) { toast(err.message, 'err'); }
+        }
+      })
+    ])
+  ]));
+  hydrateIcons(panels.Backup);
 
   /* ---- Payment ---- */
   const payBox = el('div');
