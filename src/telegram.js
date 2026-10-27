@@ -157,6 +157,39 @@ function migrateHelp() {
   }
 
   /*
+   * The keys that pick a device, on a guide that has lost them.
+   *
+   * A guide screen that already existed was left exactly as it was, which is
+   * right for the wording - those are the admin's words - but not for the way
+   * out of it. A bot whose help screen carried only a back key showed its
+   * buyers "choose your device" above no devices to choose, and nothing ever
+   * put them back, because the screen existed and so was skipped. Each device
+   * key is checked for on its own and added above the back row if it is gone;
+   * one the admin has deliberately rearranged is already there, so this does
+   * nothing to it.
+   */
+  const help = (b.screens || []).find((screen) => screen.key === 'help');
+  if (help) {
+    if (help.text === OLD_HELP_TEXT) { help.text = HELP_TEXT; touched = true; }
+    help.buttons = help.buttons || [];
+    const links = (value) => help.buttons
+      .some((row) => row.some((x) => x.action === 'screen' && x.value === value));
+    const missing = [
+      { label: '📱 اندروید', action: 'screen', value: 'help-android' },
+      { label: '🍎 آیفون', action: 'screen', value: 'help-ios' },
+      { label: '📺 تلویزیون', action: 'screen', value: 'help-tv' }
+    ].filter((x) => !links(x.value));
+    if (missing.length) {
+      const backAt = help.buttons.findIndex((row) => row.some((x) => x.value === 'start'));
+      const rows = [];
+      // two to a row, the way the rest of this menu is laid out
+      for (let i = 0; i < missing.length; i += 2) rows.push(missing.slice(i, i + 2));
+      help.buttons.splice(backAt >= 0 ? backAt : help.buttons.length, 0, ...rows);
+      touched = true;
+    }
+  }
+
+  /*
    * A button that opens the guide, however the admin has rearranged the menu.
    *
    * Only the start screen counts. Looking at every screen found the "back"
@@ -313,7 +346,10 @@ function defaults() {
  * leads on each device - the one that gives the fewest people trouble - and
  * the others are there for when it does.
  */
-const HELP_TEXT = [
+/* the guide's front page used to carry the whole subscription explanation, with
+   the device keys below all of it; while a bot still has those exact words,
+   give it the short page instead - an admin who rewrote it is left alone */
+const OLD_HELP_TEXT = [
   '<b>راهنمای اتصال</b>',
   '',
   'دستگاهتان را انتخاب کنید تا بگویم کدام برنامه را نصب کنید و چطور وصل شوید.',
@@ -330,8 +366,34 @@ const HELP_TEXT = [
   'همیشه اول ساب را امتحان کنید؛ کانفیگ مستقیم فقط جایگزین است.'
 ].join('\n');
 
+const HELP_TEXT = [
+  '<b>راهنمای اتصال</b>',
+  '',
+  'دستگاهتان را انتخاب کنید 👇'
+].join('\n');
+
+/*
+ * What a subscription link is, on top of each device's page.
+ *
+ * This used to be the whole front page of the guide, so the buyer met three
+ * paragraphs about links before being told which app to install - and the
+ * device keys sat under all of it. The question is only ever asked while
+ * following the steps, so it is answered where the steps are: each page now
+ * stands on its own and the front page is one line and three keys.
+ */
+const HELP_LINKS = [
+  '🔗 <b>لینک اشتراک</b> همان خطی است که بعد از خرید برایتان فرستادیم و با <code>https://</code> شروع می‌شود.',
+  'آن را به‌عنوان <b>Subscription</b> اضافه می‌کنید و برنامه خودش همه‌ی سرورها را می‌گیرد.',
+  '',
+  '⚙️ <b>کانفیگ مستقیم</b> خطی است که با <code>vless://</code> شروع می‌شود و فقط یک سرور است؛ فقط وقتی لازم است که برنامه ساب قبول نکند.',
+  '',
+  '━━━━━━━━━━'
+].join('\n');
+
 const HELP_ANDROID = [
   '<b>📱 اندروید</b>',
+  '',
+  HELP_LINKS,
   '',
   '<b>۱) V2Box</b> — پیشنهاد اول',
   '۱. از Google Play برنامه <b>V2Box</b> را نصب کنید.',
@@ -359,6 +421,8 @@ const HELP_ANDROID = [
 const HELP_IOS = [
   '<b>🍎 آیفون و آیپد</b>',
   '',
+  HELP_LINKS,
+  '',
   '<b>۱) V2Box</b> — پیشنهاد اول',
   '۱. از App Store برنامه <b>V2Box - V2ray Client</b> را نصب کنید.',
   '۲. لینک اشتراک را کپی کنید.',
@@ -383,6 +447,8 @@ const HELP_IOS = [
 
 const HELP_TV = [
   '<b>📺 تلویزیون (اندروید تی‌وی)</b>',
+  '',
+  HELP_LINKS,
   '',
   '<b>Happ</b> — روی تلویزیون از همه راحت‌تر است.',
   '',
