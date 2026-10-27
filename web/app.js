@@ -3684,6 +3684,27 @@ function clientForm(existing) {
   const comment = el('input', { value: v.comment || '' });
 
   /*
+   * Who this config belongs to on Telegram.
+   *
+   * The bot has always recorded the buyer's numeric id, because that is what
+   * it needs to deliver a config - but a number is not something the admin can
+   * open a chat with, so it was never shown. Both are here now: the @name,
+   * which the bot keeps up to date on every message because people change it,
+   * and the id behind it. Either may also be typed by hand, for a client sold
+   * outside the bot.
+   */
+  const tgUsername = el('input', { value: v.tgUsername || '', placeholder: '@name' });
+  const tgId = el('input', { value: v.tgId || '', placeholder: '123456789' });
+  const openChat = el('a', { class: 'btn', target: '_blank', rel: 'noopener', text: 'Message them' });
+  const paintChat = () => {
+    const name = tgUsername.value.trim().replace(/^@+/, '');
+    openChat.href = name ? `https://t.me/${encodeURIComponent(name)}` : '';
+    openChat.classList.toggle('hidden', !name);
+  };
+  tgUsername.addEventListener('input', paintChat);
+  paintChat();
+
+  /*
    * A reseller sells a name, an amount and a length of time. Flow and the
    * WireGuard fields belong to how the leader set the inbound up, and putting
    * them in front of somebody who did not choose the inbound is asking them to
@@ -3694,6 +3715,12 @@ function clientForm(existing) {
     formField(form, 'WireGuard peer public key', wgPublicKey, { full: true });
     formField(form, 'WireGuard allowed IPs', wgAllowedIPs, { full: true });
   }
+  formField(form, 'Telegram username', el('div', { class: 'row' }, [tgUsername, openChat]), {
+    hint: 'Filled in by the bot when the config is sold, and kept current afterwards. Type it in for a client sold by hand.'
+  });
+  formField(form, 'Telegram ID', tgId, {
+    hint: 'What the bot delivers to. Clearing it leaves the config in the panel but takes it out of that person\u2019s bot menu.'
+  });
   formField(form, 'Note', comment, { full: true });
 
   // only show the WireGuard peer fields when the selected inbound needs them,
@@ -3742,6 +3769,8 @@ function clientForm(existing) {
           flow: flowSel.value,
           wgPublicKey: wgPublicKey.value.trim(),
           wgAllowedIPs: wgAllowedIPs.value,
+          tgUsername: tgUsername.value,
+          tgId: tgId.value,
           comment: comment.value
         };
         try {

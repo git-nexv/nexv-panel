@@ -492,12 +492,16 @@ const DESTRUCTIVE = /^b:(cancel|del|delyes|no|power)\b/;
 /*
  * The keys that get the colour, and they are few.
  *
- * Buying - the menu entry and each plan behind it - and going back. Colouring
- * every key was worse than colouring none: when everything is green nothing
- * stands out, and the one key the shop actually wants pressed looks like all
- * the others. These two earn it; the rest are left the colour the app draws.
+ * Two only: the buy entry in the menu, and going back. Colouring every key was
+ * worse than colouring none - when everything is green nothing stands out, and
+ * the one key the shop actually wants pressed looks like all the others.
+ *
+ * The plans behind that entry (b:buy) were green too and are not any more.
+ * Once the buyer is looking at a list of sizes they have already decided to
+ * buy; painting 10 GB and 30 GB the same green says nothing about which to
+ * pick, and spends the colour that was meant to carry them into the list.
  */
-const COLOURED = /^b:(plans|buy)\b/;
+const COLOURED = /^b:plans\b/;
 const BACK_ARROW = /^\s*⬅️/;
 
 /**
@@ -1259,7 +1263,7 @@ async function startRename(ctx, clientId) {
     '',
     `نام فعلی: <b>${escapeHtml(c.email)}</b>`,
     '',
-    'نام تازه را بفرستید. با حروف انگلیسی و عدد، حداقل دو کاراکتر.'
+    'نام تازه را بفرستید. فارسی یا انگلیسی، با فاصله هم اشکالی ندارد.'
   ].join('\n'), [[{ text: '⬅️ بازگشت', callback_data: `b:cfg:${shortId(c)}` }]]);
 }
 
@@ -1268,7 +1272,7 @@ async function takeRename(ctx, raw, waiting) {
   const c = myConfig(ctx, clientId);
   if (!c) { forget(ctx.userId); return showConfigs(ctx); }
   const wanted = uniqueName(cleanName(raw), c.id);
-  if (!wanted) return send(ctx.chatId, 'این اسم کار نمی‌کند. با حروف انگلیسی و عدد بفرستید، حداقل دو کاراکتر.');
+  if (!wanted) return send(ctx.chatId, 'یک اسم بفرستید.');
   forget(ctx.userId);
   c.email = wanted;
   db.saveNow();
@@ -1401,23 +1405,35 @@ async function startTrial(ctx) {
     `<b>کانفیگ تست</b> · ${t.mb} مگابایت · ${t.days} روز`,
     '',
     'یک اسم برای کانفیگتان بفرستید (مثلاً اسم خودتان یا اسم گوشی‌تان).',
-    'فقط حروف انگلیسی، عدد و خط تیره.'
+    'فارسی یا انگلیسی، با فاصله هم اشکالی ندارد.'
   ].join('\n'), backRow());
 }
 
 /*
- * The name goes into the client list and into the share link, so it has to be
- * something Xray and every client app will carry: letters, digits, dot, dash
- * and underscore. Anything else is dropped rather than rejected, because
- * bouncing somebody back to retype their own name over a space is unkind.
+ * The name the buyer typed, kept as they typed it.
+ *
+ * This used to throw away everything that was not a letter, a digit or one of
+ * ._- which meant a Persian name came back empty and the bot then told its own
+ * customer their name "does not work". Xray carries whatever is put here -
+ * checked against the binary: a name with Persian letters, spaces and a # in
+ * it configures, passes traffic and comes back correctly in the stats rows -
+ * so there is nothing to strip for Xray's sake.
+ *
+ * Two things still go. Control characters, because a newline makes the export
+ * unreadable to other panels. And '>', because the traffic counters are read
+ * out of lines shaped user>>>name>>>traffic>>>uplink, and a name carrying
+ * '>>>' would be read as the end of itself and lose its traffic.
  */
 function cleanName(raw) {
   return String(raw || '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/>/g, '')
+    // runs of space become one space; the space itself stays
+    .replace(/\s+/g, ' ')
     .trim()
-    .replace(/\s+/g, '-')
-    .replace(/[^A-Za-z0-9._-]/g, '')
-    .replace(/^[-._]+|[-._]+$/g, '')
-    .slice(0, 24);
+    .slice(0, 32)
+    .trim();
 }
 
 /*
@@ -1426,7 +1442,7 @@ function cleanName(raw) {
  * number rather than handed back as an error.
  */
 function uniqueName(wanted, exceptId) {
-  if (!wanted || wanted.length < 2) return '';
+  if (!wanted) return '';
   let name = wanted;
   let n = 2;
   while (db.data.clients.some((c) => c.email === name && c.id !== exceptId)) name = `${wanted}-${n++}`;
@@ -1450,14 +1466,14 @@ async function askName(ctx, planId, renewId) {
     planLine(plan),
     '',
     '✏️ یک <b>نام</b> برای کانفیگتان بفرستید.',
-    'با حروف انگلیسی و عدد، حداقل دو کاراکتر — مثلاً <code>ali-phone</code>.'
+    'فارسی یا انگلیسی، هرطور دوست دارید — مثلاً <code>گوشی علی</code>.'
   ].join('\n'), [[{ text: '⬅️ بازگشت', callback_data: 'b:plans:' }]]);
 }
 
 async function takeOrderName(ctx, raw, waiting) {
   const planId = waiting && waiting.data && waiting.data.planId;
   const name = uniqueName(cleanName(raw));
-  if (!name) return send(ctx.chatId, 'این اسم کار نمی‌کند. با حروف انگلیسی و عدد بفرستید، حداقل دو کاراکتر.');
+  if (!name) return send(ctx.chatId, 'یک اسم بفرستید.');
   forget(ctx.userId);
   return placeOrder(ctx, planId, name, '');
 }
@@ -1465,9 +1481,7 @@ async function takeOrderName(ctx, raw, waiting) {
 async function takeTrialName(ctx, raw) {
   const t = trialSettings();
   const wanted = cleanName(raw);
-  if (wanted.length < 2) {
-    return send(ctx.chatId, 'این اسم کار نمی‌کند. با حروف انگلیسی و عدد بفرستید، حداقل دو کاراکتر.');
-  }
+  if (!wanted) return send(ctx.chatId, 'یک اسم بفرستید.');
 
   const inbound = db.data.inbounds.find((i) => i.id === t.inboundId)
     || db.data.inbounds.find((i) => i.enable !== false);
@@ -1493,6 +1507,7 @@ async function takeTrialName(ctx, raw) {
       expiryDays: t.days,
       expiryTime: startsOnFirstUse() || !t.days ? 0 : Date.now() + t.days * 86400000,
       tgId: String(ctx.userId),
+      tgUsername: ctx.username || '',
       isTrial: true,
       comment: 'کانفیگ تست - ربات'
     });
@@ -1564,6 +1579,41 @@ function whoLine(ctx) {
   ].join(' · ');
 }
 
+/*
+ * What this person already has, for the admin about to answer them.
+ *
+ * Nearly every support message is about a config, and the first thing the
+ * admin did was go and look up whether the sender had bought anything and
+ * whether it had run out. That lookup is the answer to most of these messages,
+ * so it arrives with the message instead: the live ones first, then the
+ * finished ones, with the usage and the days each already carries elsewhere.
+ *
+ * Somebody who has bought nothing is worth saying out loud too - it is what
+ * tells the admin they are talking to a stranger rather than a customer.
+ */
+function servicesLine(userId) {
+  const mine = clientsOf(userId);
+  if (!mine.length) return '<i>سرویس فعالی ندارد (چیزی از ربات نخریده).</i>';
+
+  const live = mine.filter((c) => !dead(c));
+  const gone = mine.filter((c) => dead(c));
+  const out = [];
+  if (live.length) {
+    out.push(`<b>سرویس‌های فعال (${live.length}):</b>`);
+    for (const c of live) out.push(`• ${escapeHtml(c.email)} — ${usageLines(c)}`);
+  } else {
+    out.push('<b>سرویس فعالی ندارد.</b>');
+  }
+  if (gone.length) {
+    out.push(`<b>تمام‌شده (${gone.length}):</b>`);
+    /* a long tail of dead configs would bury the live ones, so only the last
+       few are named and the rest are counted */
+    for (const c of gone.slice(-3)) out.push(`• ${escapeHtml(c.email)} — ${usageLines(c)}`);
+    if (gone.length > 3) out.push(`• و ${gone.length - 3} مورد دیگر`);
+  }
+  return out.join('\n');
+}
+
 async function openSupport(ctx) {
   expect(ctx.userId, 'support');
   const screen = screenByKey('support');
@@ -1587,6 +1637,8 @@ async function toSupport(ctx, message) {
   const header = await send(admin, [
     '<b>💬 پیام پشتیبانی</b>',
     whoLine(ctx),
+    '',
+    servicesLine(ctx.userId),
     '',
     'برای پاسخ، دکمه‌ی زیر را بزنید یا روی همین پیام ریپلای کنید.'
   ].join('\n'), [[{ text: '✍️ پاسخ به این کاربر', callback_data: `b:answer:${ctx.userId}` }]]);
@@ -2303,6 +2355,7 @@ async function deliverOrder(order) {
       expiryDays: plan.days || 0,
       expiryTime: startsOnFirstUse() || !plan.days ? 0 : Date.now() + plan.days * 86400000,
       tgId: String(order.userId),
+      tgUsername: order.username || '',
       comment: `${plan.name} - فروش ربات`
     });
     return { ok: true, client, plan, url: require('./routes/api').subUrl(client.subId) };
@@ -2604,6 +2657,28 @@ async function act(ctx, action, value) {
   }
 }
 
+/*
+ * Keep the @name on this person's configs fresh.
+ *
+ * A username is the only part of a Telegram account that its owner can change
+ * whenever they like, and the admin reaching for it in the panel weeks later
+ * needs the one that works now, not the one from the day of the sale. It is
+ * written only when it has actually changed, so this costs nothing on the
+ * overwhelming majority of updates.
+ */
+function rememberUser(ctx) {
+  const name = String(ctx.username || '');
+  if (!name || !ctx.userId) return;
+  let changed = false;
+  for (const c of db.data.clients) {
+    if (String(c.tgId || '') !== String(ctx.userId)) continue;
+    if (String(c.tgUsername || '') === name) continue;
+    c.tgUsername = name;
+    changed = true;
+  }
+  if (changed) db.saveNow();
+}
+
 async function handle(update) {
   runtime.seen++;
   const b = bot();
@@ -2618,6 +2693,7 @@ async function handle(update) {
       name: from.first_name || from.username || '',
       isAdmin: isAdmin(from)
     };
+    rememberUser(ctx);
     // remembering the admin's chat is what lets an @username admin be reached
     if (ctx.isAdmin && String(b.adminChatId) !== String(ctx.chatId)) {
       b.adminChatId = String(ctx.chatId);
@@ -2744,6 +2820,7 @@ async function handle(update) {
       name: from.first_name || from.username || '',
       isAdmin: isAdmin(from)
     };
+    rememberUser(ctx);
     // held until the gate has spoken, so its message can be the alert
     ctx.answer = (text, alert) => answer(query.id, text, alert);
     const [, action, ...rest] = String(query.data || '').split(':');

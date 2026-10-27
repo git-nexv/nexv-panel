@@ -1901,6 +1901,30 @@ function wantedInbounds(body, existing) {
   return ids.filter((id) => known.has(id));
 }
 
+/**
+ * A Telegram id is digits. The admin may well paste "id123456", "#id123456"
+ * or the whole line the bot printed, so the digits are taken out of whatever
+ * arrives rather than the value being refused.
+ */
+function tgIdOf(raw) {
+  const digits = String(raw == null ? '' : raw).replace(/\D/g, '');
+  return digits.slice(0, 20);
+}
+
+/**
+ * A Telegram username, without the @ and without the rest of a link, so that
+ * pasting t.me/someone or @someone or someone all come to the same thing.
+ */
+function tgNameOf(raw) {
+  return String(raw == null ? '' : raw)
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/^(t\.me|telegram\.me)\//i, '')
+    .replace(/^@+/, '')
+    .replace(/[^A-Za-z0-9_]/g, '')
+    .slice(0, 32);
+}
+
 function normalizeClient(body, existing, inbound) {
   const c = Object.assign({}, existing || {}, {
     // a newline in a name makes the export unreadable to other panels
@@ -1928,7 +1952,10 @@ function normalizeClient(body, existing, inbound) {
        this list is explicit, so a flag that is not named here is dropped */
     isTrial: !!(body.isTrial ?? existing?.isTrial ?? false),
     limitIp: Number(body.limitIp ?? existing?.limitIp ?? 0),
-    tgId: body.tgId ?? existing?.tgId ?? '',
+    tgId: tgIdOf(body.tgId ?? existing?.tgId),
+    /* the @name, kept beside the numeric id so the admin has something they
+       can actually open a chat with; the id alone is not clickable anywhere */
+    tgUsername: tgNameOf(body.tgUsername ?? existing?.tgUsername),
     comment: transfer.clean(body.comment ?? existing?.comment),
     wgPublicKey: body.wgPublicKey ?? existing?.wgPublicKey ?? '',
     wgAllowedIPs: Array.isArray(body.wgAllowedIPs)
