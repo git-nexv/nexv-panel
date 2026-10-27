@@ -43,6 +43,47 @@ app.post('/pay/webhook', express.raw({ type: '*/*', limit: '256kb' }), async (re
   }
 });
 
+/**
+ * Where a buyer lands when the return address is this server's website.
+ *
+ * Nothing is decided here - the gateway's own verify is what delivers an
+ * order, and it has usually already run by the time anybody reads this. It
+ * exists so the last thing a person sees after paying is not a 404, which is
+ * what a return address pointing at the panel used to give them.
+ */
+app.get('/pay/done', (req, res) => {
+  const b = (db.data.bot || {});
+  const bot = require('./telegram').status();
+  const back = bot && bot.username ? `https://t.me/${bot.username}` : '';
+  res.status(200).type('html').send(`<!doctype html>
+<html lang="fa" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(b.brand || 'NexV')}</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center;
+         background:#17181c; color:#e8eaf0; font:16px/1.7 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .box { max-width:420px; padding:32px 26px; text-align:center; }
+  .tick { font-size:44px; }
+  a { display:inline-block; margin-top:18px; padding:11px 20px; border-radius:11px;
+      background:#3d7dff; color:#fff; text-decoration:none; font-weight:600; }
+  p { color:#9aa0ac; }
+</style></head>
+<body><div class="box">
+  <div class="tick">✅</div>
+  <h1>پرداخت شما ثبت شد</h1>
+  <p>نتیجه را در همان ربات تلگرام می‌بینید. اگر کانفیگ هنوز نرسیده، چند لحظه صبر کنید — خودکار بررسی می‌شود.</p>
+  ${back ? `<a href="${escapeHtml(back)}">بازگشت به ربات</a>` : ''}
+</div></body></html>`);
+});
+
+/** The few characters that must not escape into that page. */
+function escapeHtml(value) {
+  return String(value === undefined || value === null ? '' : value)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 app.use(express.json({ limit: '8mb' }));
 app.use(express.urlencoded({ extended: false }));
 

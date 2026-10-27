@@ -215,6 +215,35 @@ function orderRef(order) {
   return `nexv-${String(order.id).replace(/[^A-Za-z0-9_.:-]/g, '-')}`.slice(0, 64);
 }
 
+/**
+ * The order, in the only form Telegram will carry it home.
+ *
+ * When the buyer is sent back to a t.me link, Telegram hands the bot the
+ * `start` payload and nothing else - not the token the gateway appended to
+ * the address, not the status. So the order has to travel inside that
+ * payload, and the payload is narrower than an order id is allowed to be:
+ * letters, digits, underscore and dash, up to 64 characters. A dot or a colon
+ * in there is silently dropped by Telegram and the buyer comes back to a bot
+ * that cannot tell which order they mean.
+ */
+function startPayload(order) {
+  return `paid-${orderRef(order)}`.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 64);
+}
+
+/**
+ * Where the gateway should send the buyer back to, for this one order.
+ *
+ * A shop whose return address is its Telegram bot gets the order appended, so
+ * the bot knows which payment the person coming back has just made. Anything
+ * else - a website - is left exactly as the admin set it, because the gateway
+ * matches it against what it has registered for them.
+ */
+function callbackFor(g, order) {
+  const base = String(g.callbackUrl || '');
+  if (!order || !order.id || !/^https:\/\/t\.me\//i.test(base)) return base;
+  return `${base.split('?')[0]}?start=${startPayload(order)}`;
+}
+
 /* ------------------------------- the calls ------------------------------- */
 
 /**
@@ -237,7 +266,7 @@ async function createLink(order) {
   const body = {};
   body[field.amount] = amount;
   body[field.orderId] = orderRef(order);
-  if (field.callback) body[field.callback] = g.callbackUrl;
+  if (field.callback) body[field.callback] = callbackFor(g, order);
   if (field.description && order.planName) body[field.description] = String(order.planName).slice(0, 200);
   /* only when the admin has a webhook key: a gateway that is told where to
      send one without having been given a key refuses the whole request */
@@ -380,5 +409,5 @@ function newSecret() {
 module.exports = {
   settings, blank, ready, blockedReason,
   createLink, verify, look,
-  checkSignature, newSecret, amountFor, orderRef
+  checkSignature, newSecret, amountFor, orderRef, startPayload, callbackFor
 };

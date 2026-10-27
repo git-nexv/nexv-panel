@@ -1578,6 +1578,19 @@ async function showGateway(ctx, order, lines) {
  */
 function shortOrder(order) { return String(order.id).slice(0, 8); }
 
+/**
+ * The order a returning buyer's start payload names.
+ *
+ * The payload is what the gateway was handed as the return address, so it is
+ * matched back through the very same function that built it rather than by
+ * taking the string apart - one way to write it, one way to read it.
+ */
+function orderByPayRef(payload) {
+  const wanted = String(payload || '').trim();
+  if (!wanted) return null;
+  return (bot().orders || []).find((o) => paygate.startPayload(o) === wanted) || null;
+}
+
 function orderByToken(token) {
   const key = String(token || '');
   const orders = bot().orders || [];
@@ -2295,6 +2308,37 @@ async function handle(update) {
       ].join('\n'));
     }
     if (await gate(ctx)) return null;
+
+    /*
+     * The buyer coming back from the gateway.
+     *
+     * When the return address is this bot, the gateway sends them to
+     * t.me/<bot>?start=paid-<order>, and Telegram hands us the start payload
+     * and nothing else - not the token the gateway put in the address, not
+     * the status. So the order travels in the payload, and this is where it
+     * is read. Without it the payload was dropped on the floor and somebody
+     * who had just paid was shown the main menu, with no sign their money had
+     * arrived until the sweep caught up minutes later.
+     */
+    const started = /^\/start\s+(\S+)/.exec(text);
+    if (started && /^paid-/i.test(started[1])) {
+      const order = orderByPayRef(started[1]);
+      if (!order) return reply(ctx, 'این سفارش پیدا نشد. اگر پرداخت کرده‌اید، چند لحظه دیگر خودکار بررسی می‌شود.', backRow());
+      await send(ctx.chatId, 'در حال بررسی پرداخت شما…');
+      const out = await settleGateway(order, 'return');
+      if (out.ok) return true;
+      if (out.paid) {
+        return reply(ctx, 'پرداخت شما ثبت شد ✅ اما تحویل خودکار انجام نشد؛ پشتیبانی در جریان است.', backRow());
+      }
+      return reply(ctx, [
+        'هنوز پرداختی برای این سفارش ثبت نشده است.',
+        '',
+        'اگر همین الان پرداخت کردید، چند لحظه صبر کنید و دوباره بررسی بزنید.'
+      ].join('\n'), [
+        [{ text: '✅ دوباره بررسی کن', callback_data: `b:paid:${shortOrder(order)}` }],
+        [{ text: '⬅️ بازگشت', callback_data: 'b:screen:start' }]
+      ]);
+    }
 
     const command = text.split(' ')[0].replace('/', '');
     const screen = screenByKey(command);

@@ -598,8 +598,10 @@ router.post('/bot/gateway/import', (req, res) => {
 function suggestedCallback() {
   const s = db.settings;
   const bot = telegram.status();
-  // a Telegram shop's buyer belongs back in the bot, not on a web page
-  if (bot && bot.username) return `https://t.me/${bot.username}?start=paid`;
+  /* a Telegram shop's buyer belongs back in the bot, not on a web page - and
+     the bare link is right, because which order they are coming back from is
+     appended to it per payment */
+  if (bot && bot.username) return `https://t.me/${bot.username}`;
   return s.domain ? `https://${s.domain}/pay/done` : '';
 }
 
