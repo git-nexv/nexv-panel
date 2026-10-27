@@ -304,6 +304,10 @@ function payView(b) {
     multiplier: Number(g.multiplier) || 10,
     hasKey: !!g.apiKey,
     keyHint: g.apiKey ? `${String(g.apiKey).slice(0, 8)}…${String(g.apiKey).slice(-4)}` : '',
+    /* how long the stored key is, so a paste that lost its tail - the usual
+       reason a gateway says the key is invalid - can be spotted against what
+       the gateway's own panel shows, without the key itself ever coming back */
+    keyLength: String(g.apiKey || '').length,
     hasWebhookSecret: !!g.webhookSecret,
     lastError: g.lastError || '',
     lastOkAt: Number(g.lastOkAt) || 0,

@@ -791,7 +791,12 @@ function gatewayCard(draft, bind, toggleOf, redraw) {
   const grid = el('div', { class: 'form-grid' });
   grid.append(el('div', { class: 'field full' }, [
     el('label', { text: 'API key' }), keyField,
-    el('div', { class: 'hint', text: (profile.auth && profile.auth.hint) || 'From the gateway’s own panel. It is stored on this server and never shown again.' })
+    el('div', { class: 'hint', text: (profile.auth && profile.auth.hint) || 'From the gateway’s own panel. It is stored on this server and never shown again.' }),
+    /* the length, because a paste that lost its tail is the usual reason a
+       gateway calls a key invalid, and it cannot be seen in a password box */
+    g.hasKey ? el('div', { class: 'hint' }, [
+      `${t('Stored key')}: ${g.keyHint} · ${g.keyLength} ${t('characters')}`
+    ]) : null
   ]));
 
   formField(grid, 'Button label', bind(g, 'label', el('input', {

@@ -905,6 +905,8 @@ const FA = {
   'The last call failed': 'آخرین درخواست ناموفق بود',
   'Ready — buyers see this alongside your other payment methods.': 'آماده است — خریدارها این را کنار بقیه روش‌های پرداخت می‌بینند.',
   'API key': 'کلید API',
+  'Stored key': 'کلید ذخیره‌شده',
+  'characters': 'کاراکتر',
   'leave empty to keep it': 'خالی بگذارید تا همان بماند',
   'From the gateway\u2019s own panel. It is stored on this server and never shown again.': 'از پنل خود درگاه. روی همین سرور ذخیره می‌شود و دیگر هرگز نمایش داده نمی‌شود.',
   'Button label': 'متن دکمه',

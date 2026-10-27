@@ -130,15 +130,30 @@ function request(method, url, body, headers) {
   });
 }
 
-/** The message a gateway's error body is trying to convey, in its own words. */
+/**
+ * The message a gateway's error body is trying to convey, in its own words -
+ * and, where its own words leave the admin with nothing to do, what to do.
+ *
+ * "کلید API نامعتبر یا باطل‌شده است" is accurate and completely unactionable:
+ * it does not say whether the key was mistyped, revoked, or belongs to another
+ * gateway, and it does not say where to go and look. The gateway's sentence is
+ * kept, because it is the gateway's answer, and the next step is added to it.
+ */
 function errorText(res) {
   const body = res.body || {};
   const err = body.error || body;
   if (typeof err === 'string') return err;
   const message = err.message || err.detail || err.description || '';
   const code = err.code || err.status || '';
-  if (message && code) return `${message} (${code})`;
-  return message || code || `HTTP ${res.status}`;
+  const said = message && code ? `${message} (${code})` : (message || code || `HTTP ${res.status}`);
+
+  if (res.status === 401 || /unauthor/i.test(String(code))) {
+    return `${said} — کلید API را در پنل خود درگاه بسازید یا دوباره کپی کنید و در پنل، بخش ربات ← پرداخت، جایگزینش کنید.`;
+  }
+  if (res.status === 403) {
+    return `${said} — این مربوط به حساب شما نزد درگاه است، نه به پنل؛ با پشتیبانی درگاه تماس بگیرید.`;
+  }
+  return said;
 }
 
 /** The address of one operation in the profile, with the token filled in. */
@@ -152,9 +167,24 @@ function urlFor(profile, op, token) {
   return url.toString();
 }
 
+/**
+ * The key, as it can safely go in a header.
+ *
+ * A key is copied out of somebody else's panel and pasted, and a paste brings
+ * whatever came with it. Spaces around it were sent as part of the header and
+ * the gateway refused them; a newline in it threw "Invalid character in header
+ * content", which names nothing anybody can act on. Neither is ever part of a
+ * key, so both are taken off here - at the point of use, so a key that arrived
+ * through a restored file or an API call is cleaned too, not only one typed
+ * into the panel.
+ */
+function cleanKey(raw) {
+  return String(raw === undefined || raw === null ? '' : raw).replace(/[\s​-‏﻿]/g, '');
+}
+
 function authHeaders(g) {
   const auth = (g.profile && g.profile.auth) || { kind: 'bearer', header: 'Authorization', prefix: 'Bearer ' };
-  return { [auth.header || 'Authorization']: `${auth.prefix || ''}${g.apiKey}` };
+  return { [auth.header || 'Authorization']: `${auth.prefix || ''}${cleanKey(g.apiKey)}` };
 }
 
 /* -------------------------------- the money ------------------------------ */
