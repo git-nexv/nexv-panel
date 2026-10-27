@@ -858,6 +858,79 @@ const FA = {
   'Manual plan': 'پلن دستی',
   'Access user': 'اختیارات کاربر',
 
+  'After showing these, the bot asks the buyer for a photo of the receipt and forwards it to you with their username and numeric id.': 'بعد از نمایش این‌ها، ربات از خریدار عکس رسید می‌خواهد و آن را همراه نام کاربری و شناسه عددی‌اش برای شما می‌فرستد.',
+  '✏️ Let the buyer name their own config': '✏️ خریدار اسم کانفیگ خودش را انتخاب کند',
+
+  /* ---- the online payment gateway ---- */
+  '🌐 Online payment gateway': '🌐 درگاه پرداخت آنلاین',
+  'Import the gateway\u2019s API description (an OpenAPI .json file) and the panel works out from it where to send a payment, how to sign the request and what every field is called. Nothing here is written for one provider, so a different gateway is a different file.': 'فایل مستندات API درگاه (یک فایل OpenAPI با پسوند json) را ایمپورت کنید؛ پنل از روی همان می‌فهمد پرداخت را کجا بفرستد، درخواست را چطور امضا کند و اسم هر فیلد چیست. هیچ‌چیز اینجا مخصوص یک درگاه خاص نوشته نشده، پس درگاه دیگر یعنی فایل دیگر.',
+  'Import a .json file': 'ایمپورت فایل json',
+  'Paste it instead': 'یا متنش را بچسبانید',
+  'Paste the API description': 'مستندات API را بچسبانید',
+  'The gateway\u2019s OpenAPI file, as JSON.': 'فایل OpenAPI درگاه، به شکل JSON.',
+  'Paste the file first': 'اول فایل را بچسبانید',
+  'Import': 'ایمپورت',
+  'Imported': 'ایمپورت شد',
+  'Import a new description': 'ایمپورت مستندات تازه',
+  'Gateway': 'درگاه',
+  'Base address': 'آدرس پایه',
+  'Create a payment': 'ساخت پرداخت',
+  'Confirm a payment': 'تایید پرداخت',
+  'Check a payment': 'استعلام پرداخت',
+  'Signed with': 'امضا با',
+  'not found': 'پیدا نشد',
+  'The file was read, but some of it could not be worked out:': 'فایل خوانده شد، ولی بخش‌هایی از آن قابل تشخیص نبود:',
+  'Buyers are not being offered this yet': 'هنوز به خریدارها نشان داده نمی‌شود',
+  'The last call failed': 'آخرین درخواست ناموفق بود',
+  'Ready — buyers see this alongside your other payment methods.': 'آماده است — خریدارها این را کنار بقیه روش‌های پرداخت می‌بینند.',
+  'API key': 'کلید API',
+  'leave empty to keep it': 'خالی بگذارید تا همان بماند',
+  'From the gateway\u2019s own panel. It is stored on this server and never shown again.': 'از پنل خود درگاه. روی همین سرور ذخیره می‌شود و دیگر هرگز نمایش داده نمی‌شود.',
+  'Button label': 'متن دکمه',
+  'What the buyer sees on the button in the bot': 'چیزی که خریدار روی دکمه داخل ربات می‌بیند',
+  'Multiply the price by': 'ضرب قیمت در',
+  'Your plans are priced in Toman and Iranian gateways charge in Rial, so this is 10. Set it to 1 if your prices are already in the gateway\u2019s unit.': 'قیمت پلن‌های شما به تومان است و درگاه‌های ایرانی به ریال حساب می‌کنند، پس این عدد ۱۰ است. اگر قیمت‌هایتان از قبل به واحد درگاه است، ۱ بگذارید.',
+  'Return address': 'آدرس بازگشت',
+  'Where the buyer is sent back to after paying. It must be an address the gateway has registered for you — your own site, or your bot. Nothing is delivered on the strength of this; it only brings them back.': 'جایی که خریدار بعد از پرداخت به آن برمی‌گردد. باید آدرسی باشد که درگاه برای شما ثبت کرده — سایت خودتان یا ربات خودتان. هیچ کانفیگی به اعتبار این آدرس تحویل نمی‌شود؛ فقط خریدار را برمی‌گرداند.',
+  'Webhook address': 'آدرس وب‌هوک',
+  'Optional. Give the gateway this address and it tells the panel the moment a payment lands, even if the buyer never comes back. This panel answers signed webhooks at /pay/webhook.': 'اختیاری. این آدرس را به درگاه بدهید تا لحظه‌ای که پرداخت انجام شد به پنل خبر دهد، حتی اگر خریدار اصلاً برنگردد. این پنل وب‌هوک امضاشده را روی /pay/webhook می‌پذیرد.',
+  'Field names read from the file': 'نام فیلدهایی که از فایل خوانده شد',
+  'These were read out of the file. Correct any that are wrong, then save.': 'این‌ها از داخل فایل خوانده شده‌اند. هرکدام اشتباه بود اصلاح کنید و ذخیره بزنید.',
+  'What the panel sends to make a payment': 'چیزی که پنل برای ساخت پرداخت می‌فرستد',
+  'What it reads back': 'چیزی که از پاسخ می‌خواند',
+  'What it reads when confirming': 'چیزی که موقع تایید می‌خواند',
+  'Amount field': 'فیلد مبلغ',
+  'Order id field': 'فیلد شناسه سفارش',
+  'Return address field': 'فیلد آدرس بازگشت',
+  'Webhook address field': 'فیلد آدرس وب‌هوک',
+  'Description field': 'فیلد توضیحات',
+  'Token in the reply': 'توکن در پاسخ',
+  'Payment link in the reply': 'لینک پرداخت در پاسخ',
+  'Telegram link in the reply': 'لینک تلگرام در پاسخ',
+  'Optional. When the gateway has a page inside Telegram, the buyer is sent there instead and never leaves the app.': 'اختیاری. اگر درگاه صفحه‌ای داخل تلگرام داشته باشد، خریدار به همان‌جا فرستاده می‌شود و از برنامه بیرون نمی‌رود.',
+  'Status field': 'فیلد وضعیت',
+  'Amount actually paid': 'مبلغی که واقعاً پرداخت شد',
+  'Which status means paid': 'کدام وضعیت یعنی پرداخت‌شده',
+  'Separated by commas. Only these hand a config over.': 'با ویرگول جدا کنید. فقط همین‌ها باعث تحویل کانفیگ می‌شوند.',
+  'not used': 'استفاده نمی‌شود',
+  'Test it': 'تست کن',
+  'The gateway answered': 'درگاه پاسخ داد',
+  'A real link was made for the smallest amount and thrown away. Nothing was charged.': 'یک لینک واقعی با کمترین مبلغ ساخته و دور ریخته شد. هیچ مبلغی دریافت نشد.',
+  'Payment link': 'لینک پرداخت',
+  'In Telegram': 'داخل تلگرام',
+  'The buyer would be charged': 'مبلغی که از خریدار گرفته می‌شود',
+  'Make a webhook key': 'ساخت کلید وب‌هوک',
+  'Make a new webhook key': 'ساخت کلید وب‌هوک تازه',
+  'Your webhook key': 'کلید وب‌هوک شما',
+  'Copy it into the gateway\u2019s panel now — it is not shown again.': 'همین حالا در پنل درگاه واردش کنید — دوباره نمایش داده نمی‌شود.',
+  'A webhook key is set.': 'کلید وب‌هوک تنظیم شده است.',
+  'No webhook key yet.': 'هنوز کلید وب‌هوکی ساخته نشده.',
+  'Remove the gateway': 'حذف درگاه',
+  'Remove the gateway?': 'درگاه حذف شود؟',
+  'The description, the key and the webhook key are all forgotten. Your other payment methods are untouched.': 'مستندات، کلید API و کلید وب‌هوک همه پاک می‌شوند. بقیه روش‌های پرداخت دست‌نخورده می‌مانند.',
+  'Remove': 'حذف',
+  'The gateway was removed': 'درگاه حذف شد',
+
   /* ---- the bot's own backup ---- */
   '💾 Send the panel backup to your chat': '💾 پشتیبان پنل را به چت خودت بفرست',
   'On a schedule': 'به‌صورت زمان‌بندی‌شده',
@@ -1101,7 +1174,17 @@ const PATTERNS = [
     (m) => `قیمت هر گیگ ${m[1]} است و در تب Setup تنظیم می‌شود.`],
   [/^(\d+) people have taken a test config$/, (m) => `${m[1]} نفر کانفیگ تست گرفته‌اند`],
   [/^(\d+) people can take one again$/, (m) => `${m[1]} نفر می‌توانند دوباره بگیرند`],
-  [/^(.+) of (.+)$/, (m) => `${m[1]} از ${m[2]}`],
+  /*
+   * "8.6 GB of 252 GB", and nothing else.
+   *
+   * This was written as `(.+) of (.+)`, which is every English sentence with
+   * the word "of" in it - so a hint reading "on the strength of this" came out
+   * as "on the strength از this", half translated and worse than untranslated.
+   * Both sides have to look like a quantity now: digits, in either set of
+   * numerals, and at most a short unit after them.
+   */
+  [/^([\d.,\u066b\u066c\u06f0-\u06f9]+ ?[A-Za-z%]{0,5}) of ([\d.,\u066b\u066c\u06f0-\u06f9]+ ?[A-Za-z%]{0,5})$/,
+    (m) => `${m[1]} از ${m[2]}`],
   /* an address row: how many connections, how long it has been quiet, and when
      it first appeared. The spans arrive already built ("4m 12s"), so only the
      units inside them are swapped. */

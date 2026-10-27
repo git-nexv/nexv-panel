@@ -701,6 +701,306 @@ async function renderResellerDashboard(view) {
   }
 }
 
+/**
+ * The online payment gateway, built from the provider's own API description.
+ *
+ * The shop had two ways to be paid and both of them ended with a human
+ * looking at a photo of a receipt. This is the third: the buyer pays on the
+ * gateway's own page - where they can still choose card-to-card if the
+ * gateway offers it - and the config is handed over the moment the gateway
+ * confirms it, with nobody awake.
+ *
+ * What makes it worth the page it takes is that none of it is written for one
+ * provider. The admin imports the gateway's OpenAPI file, the panel works out
+ * the addresses and the field names from it, and shows what it found here so
+ * it can be corrected. A new provider, or a new edition of the same one, is
+ * another import rather than another release of the panel.
+ */
+function gatewayCard(draft, bind, toggleOf, redraw) {
+  draft.pay.gateway = draft.pay.gateway || { enable: false, multiplier: 10 };
+  const g = draft.pay.gateway;
+  const profile = g.profile || null;
+
+  const head = el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+    el('strong', { text: '🌐 Online payment gateway' }),
+    toggleOf(g, 'Offer this method')
+  ]);
+
+  const body = el('div');
+  const card = el('div', { class: 'card' }, [head, body]);
+
+  /* ---- nothing imported yet: the only thing to show is the way in ---- */
+  if (!profile) {
+    body.append(
+      el('div', { class: 'hint', style: 'margin-bottom:14px', text: 'Import the gateway’s API description (an OpenAPI .json file) and the panel works out from it where to send a payment, how to sign the request and what every field is called. Nothing here is written for one provider, so a different gateway is a different file.' }),
+      importRow(g, redraw)
+    );
+    return card;
+  }
+
+  /* ---- what was read out of the file ---- */
+  const fact = (label, value) => el('div', { class: 'field' }, [
+    el('label', { text: label }),
+    el('div', { class: 'mono', style: 'word-break:break-all', text: value || '—' })
+  ]);
+
+  const opLine = (name, op) => (op
+    ? `${op.method} ${op.path}`
+    : `${t('not found')}`);
+
+  body.append(el('div', { class: 'form-grid' }, [
+    fact('Gateway', `${profile.title}${profile.version ? ` · ${profile.version}` : ''}`),
+    fact('Base address', profile.baseUrl),
+    fact('Create a payment', opLine('create', profile.create)),
+    fact('Confirm a payment', opLine('verify', profile.verify)),
+    fact('Check a payment', opLine('status', profile.status)),
+    fact('Signed with', profile.auth && profile.auth.kind === 'bearer'
+      ? 'Authorization: Bearer <key>'
+      : `${(profile.auth || {}).header || '?'}: <key>`)
+  ]));
+
+  if ((profile.problems || []).length) {
+    body.append(el('div', { class: 'notice warn', style: 'margin:12px 0' }, [
+      el('div', { text: 'The file was read, but some of it could not be worked out:' }),
+      el('ul', { style: 'margin:8px 0 0;padding-inline-start:18px' },
+        profile.problems.map((p) => el('li', { text: p })))
+    ]));
+  }
+  if (g.blockedBy) {
+    body.append(el('div', { class: 'notice danger', style: 'margin:12px 0' }, [
+      `${t('Buyers are not being offered this yet')}: ${g.blockedBy}`
+    ]));
+  } else {
+    body.append(el('div', { class: 'notice ok', style: 'margin:12px 0' }, [
+      'Ready — buyers see this alongside your other payment methods.'
+    ]));
+  }
+  if (g.lastError) {
+    body.append(el('div', { class: 'notice warn', style: 'margin:12px 0' }, [
+      `${t('The last call failed')}: ${g.lastError}`
+    ]));
+  }
+
+  /* ---- the things only the admin can supply ---- */
+  const keyField = el('input', {
+    type: 'password', autocomplete: 'off',
+    placeholder: g.hasKey ? `${g.keyHint} — ${t('leave empty to keep it')}` : 'tp_live_…'
+  });
+  keyField.addEventListener('input', () => { g.apiKey = keyField.value.trim(); });
+
+  const grid = el('div', { class: 'form-grid' });
+  grid.append(el('div', { class: 'field full' }, [
+    el('label', { text: 'API key' }), keyField,
+    el('div', { class: 'hint', text: (profile.auth && profile.auth.hint) || 'From the gateway’s own panel. It is stored on this server and never shown again.' })
+  ]));
+
+  formField(grid, 'Button label', bind(g, 'label', el('input', {
+    value: g.label || '', placeholder: '🌐 پرداخت آنلاین'
+  })), { hint: 'What the buyer sees on the button in the bot' });
+
+  const factor = numField(g.multiplier ?? 10, { placeholder: '10' });
+  factor.addEventListener('input', () => { g.multiplier = toNumber(factor.value); });
+  grid.append(el('div', { class: 'field' }, [
+    el('label', { text: 'Multiply the price by' }), factor,
+    el('div', { class: 'hint', text: 'Your plans are priced in Toman and Iranian gateways charge in Rial, so this is 10. Set it to 1 if your prices are already in the gateway’s unit.' })
+  ]));
+
+  formField(grid, 'Return address', bind(g, 'callbackUrl', el('input', {
+    value: g.callbackUrl || '', placeholder: 'https://t.me/yourbot?start=paid'
+  })), { full: true, hint: 'Where the buyer is sent back to after paying. It must be an address the gateway has registered for you — your own site, or your bot. Nothing is delivered on the strength of this; it only brings them back.' });
+
+  formField(grid, 'Webhook address', bind(g, 'webhookUrl', el('input', {
+    value: g.webhookUrl || '', placeholder: 'https://panel.example.com/pay/webhook'
+  })), { full: true, hint: 'Optional. Give the gateway this address and it tells the panel the moment a payment lands, even if the buyer never comes back. This panel answers signed webhooks at /pay/webhook.' });
+
+  body.append(grid);
+
+  /* ---- the mapping, for when the guess was wrong ---- */
+  body.append(mappingBlock(g, profile));
+
+  /* ---- what can be done with it ---- */
+  const secretLine = el('div', { class: 'hint', style: 'margin-top:4px' }, [
+    g.hasWebhookSecret ? t('A webhook key is set.') : t('No webhook key yet.')
+  ]);
+
+  body.append(el('div', { class: 'row', style: 'margin-top:14px;flex-wrap:wrap' }, [
+    el('button', {
+      class: 'btn', text: 'Test it',
+      onclick: async () => {
+        try {
+          const out = await api.post('/bot/gateway/test', { amount: 1000 });
+          modal({
+            title: t('The gateway answered'),
+            subtitle: t('A real link was made for the smallest amount and thrown away. Nothing was charged.'),
+            body: el('div', {}, [
+              el('div', { class: 'field' }, [el('label', { text: t('Payment link') }), el('div', { class: 'link-box', text: out.url || '—' })]),
+              out.botUrl ? el('div', { class: 'field' }, [el('label', { text: t('In Telegram') }), el('div', { class: 'link-box', text: out.botUrl })]) : null,
+              el('div', { class: 'field' }, [el('label', { text: t('The buyer would be charged') }), el('div', { text: out.charged || '—' })])
+            ]),
+            width: 640
+          });
+        } catch (err) { toast(err.message, 'err'); }
+      }
+    }),
+    el('button', {
+      class: 'btn', text: g.hasWebhookSecret ? 'Make a new webhook key' : 'Make a webhook key',
+      onclick: async () => {
+        try {
+          const out = await api.post('/bot/gateway/secret', {});
+          g.hasWebhookSecret = true;
+          secretLine.textContent = t('A webhook key is set.');
+          modal({
+            title: t('Your webhook key'),
+            subtitle: t('Copy it into the gateway’s panel now — it is not shown again.'),
+            body: el('div', {}, [
+              el('div', { class: 'link-box', text: out.secret }),
+              el('div', { class: 'hint', style: 'margin-top:10px' }, [`${t('Webhook address')}: ${out.webhookUrl || '/pay/webhook'}`])
+            ]),
+            width: 640
+          });
+        } catch (err) { toast(err.message, 'err'); }
+      }
+    }),
+    importRow(g, redraw, true),
+    el('button', {
+      class: 'btn danger', text: 'Remove the gateway',
+      onclick: () => modal({
+        title: t('Remove the gateway?'),
+        subtitle: t('The description, the key and the webhook key are all forgotten. Your other payment methods are untouched.'),
+        actions: [{
+          label: t('Remove'), kind: 'danger',
+          onClick: async (close) => {
+            try {
+              await api.post('/bot/gateway/forget', {});
+              close();
+              toast(t('The gateway was removed'));
+              render();
+            } catch (err) { toast(err.message, 'err'); }
+          }
+        }]
+      })
+    })
+  ]));
+  body.append(secretLine);
+
+  return card;
+}
+
+/** The key, or the button, that takes an OpenAPI file in. */
+function importRow(g, redraw, compact) {
+  const take = async (text) => {
+    try {
+      const out = await api.post('/bot/gateway/import', { spec: text });
+      toast(`${t('Imported')}: ${out.profile.title}`);
+      render();
+    } catch (err) { toast(err.message, 'err'); }
+  };
+
+  const pick = () => {
+    const picker = el('input', { type: 'file', accept: 'application/json,.json', class: 'hidden' });
+    picker.addEventListener('change', async () => {
+      const file = picker.files[0];
+      if (!file) return;
+      await take(await file.text());
+    });
+    document.body.append(picker);
+    picker.click();
+    setTimeout(() => picker.remove(), 60000);
+  };
+
+  const paste = () => {
+    const area = el('textarea', { style: 'min-height:240px', placeholder: '{ "openapi": "3.1.0", … }' });
+    modal({
+      title: t('Paste the API description'),
+      subtitle: t('The gateway’s OpenAPI file, as JSON.'),
+      body: area,
+      width: 760,
+      actions: [{
+        label: t('Import'), kind: 'primary',
+        onClick: async (close) => {
+          if (!area.value.trim()) return toast(t('Paste the file first'), 'err');
+          await take(area.value);
+          close();
+        }
+      }]
+    });
+  };
+
+  if (compact) {
+    return el('button', { class: 'btn', text: 'Import a new description', onclick: pick });
+  }
+  return el('div', { class: 'row', style: 'flex-wrap:wrap' }, [
+    el('button', { class: 'btn primary', text: 'Import a .json file', onclick: pick }),
+    el('button', { class: 'btn', text: 'Paste it instead', onclick: paste })
+  ]);
+}
+
+/**
+ * The field names the panel read out of the file, open to correction.
+ *
+ * Folded away, because when the guess is right - and for a well-written file
+ * it is - nobody needs to look at it. When it is wrong, this is the
+ * difference between a gateway that works and one that needs a new release.
+ */
+function mappingBlock(g, profile) {
+  g.mapping = g.mapping || {};
+  const map = g.mapping;
+  map.create = map.create || {};
+  map.verify = map.verify || {};
+
+  const row = (grid, label, group, key, value, hint) => {
+    const input = el('input', { value: value || '', placeholder: t('not used') });
+    input.addEventListener('input', () => { map[group][key] = input.value.trim(); });
+    formField(grid, label, input, hint ? { hint } : undefined);
+  };
+
+  const sendGrid = el('div', { class: 'form-grid' });
+  const send = (profile.create || {}).send || {};
+  row(sendGrid, 'Amount field', 'create', 'amount', send.amount);
+  row(sendGrid, 'Order id field', 'create', 'orderId', send.orderId);
+  row(sendGrid, 'Return address field', 'create', 'callback', send.callback);
+  row(sendGrid, 'Webhook address field', 'create', 'webhook', send.webhook);
+  row(sendGrid, 'Description field', 'create', 'description', send.description);
+
+  const backGrid = el('div', { class: 'form-grid' });
+  const back = (profile.create || {}).receive || {};
+  row(backGrid, 'Token in the reply', 'create', 'token', back.token);
+  row(backGrid, 'Payment link in the reply', 'create', 'payUrl', back.payUrl);
+  row(backGrid, 'Telegram link in the reply', 'create', 'botPayUrl', back.botPayUrl,
+    'Optional. When the gateway has a page inside Telegram, the buyer is sent there instead and never leaves the app.');
+
+  const okGrid = el('div', { class: 'form-grid' });
+  const verify = (profile.verify || {}).receive || {};
+  row(okGrid, 'Status field', 'verify', 'status', verify.status);
+  row(okGrid, 'Order id field', 'verify', 'orderId', verify.orderId);
+  row(okGrid, 'Amount field', 'verify', 'amount', verify.amount);
+  row(okGrid, 'Amount actually paid', 'verify', 'paidAmount', verify.paidAmount);
+
+  const paid = el('input', {
+    value: ((profile.verify || {}).paidValues || []).join(', '),
+    placeholder: 'paid, success'
+  });
+  paid.addEventListener('input', () => {
+    map.verify.paidValues = paid.value.split(',').map((v) => v.trim()).filter(Boolean);
+  });
+  okGrid.append(el('div', { class: 'field full' }, [
+    el('label', { text: 'Which status means paid' }), paid,
+    el('div', { class: 'hint', text: 'Separated by commas. Only these hand a config over.' })
+  ]));
+
+  const inner = el('div', { style: 'padding-top:10px' }, [
+    el('div', { class: 'hint', style: 'margin-bottom:10px', text: 'These were read out of the file. Correct any that are wrong, then save.' }),
+    el('div', { class: 'section-title', text: 'What the panel sends to make a payment' }), sendGrid,
+    el('div', { class: 'section-title', text: 'What it reads back' }), backGrid,
+    el('div', { class: 'section-title', text: 'What it reads when confirming' }), okGrid
+  ]);
+
+  return el('details', { style: 'margin-top:14px' }, [
+    el('summary', { style: 'cursor:pointer;font-weight:600;font-size:13px' }, [t('Field names read from the file')]),
+    inner
+  ]);
+}
+
 /** The "no HTTPS, and here is why" banner, wherever it is wanted. */
 async function drawCertWarning(host) {
   let s = state.settings;
@@ -5527,6 +5827,9 @@ async function renderBot(view) {
       walletList,
       el('div', { class: 'hint', style: 'margin-top:10px', text: 'The buyer can answer with a screenshot or paste the transaction hash; either one reaches you with their username and numeric id.' })
     ]));
+
+    /* the online gateway */
+    payBox.append(gatewayCard(draft, bind, toggleOf, drawPay));
 
     payBox.append(el('div', { class: 'row' }, [
       el('button', { class: 'btn primary', text: 'Save payment settings', onclick: () => save() })

@@ -23,6 +23,8 @@ const system = require('../system');
 const membership = require('../membership');
 const firewall = require('../firewall');
 const backup = require('../backup');
+const paygate = require('../paygate');
+const payapi = require('../payapi');
 
 const router = express.Router();
 
@@ -242,6 +244,93 @@ function num(raw, fallback) {
   return Number.isFinite(n) ? n : (fallback === undefined ? 0 : fallback);
 }
 
+/**
+ * The payment settings as the panel may see them.
+ *
+ * The API key and the webhook key never come back out. A key that is shown
+ * once is a key the admin can copy out of a browser tab, a screenshot or a
+ * support chat, and neither of these two is ever needed again once it is in.
+ */
+/**
+ * The field names the admin corrected by hand.
+ *
+ * Reading a gateway's description cannot be perfect - two providers can
+ * describe the same thing in words with nothing in common - so every mapping
+ * is editable. Only the names are: the addresses and the method come from the
+ * imported file and a request body cannot move them, or an admin account
+ * would be a way to point the shop's money at somebody else's server.
+ */
+function applyMapping(profile, mapping) {
+  const text = (value, fallback) => {
+    const out = String(value === undefined || value === null ? '' : value).trim().slice(0, 60);
+    return out || fallback || '';
+  };
+  if (mapping.create && profile.create) {
+    for (const key of ['amount', 'orderId', 'callback', 'webhook', 'description']) {
+      if (mapping.create[key] !== undefined) {
+        profile.create.send[key] = text(mapping.create[key], '');
+      }
+    }
+    for (const key of ['token', 'payUrl', 'botPayUrl', 'payable', 'expiresAt']) {
+      if (mapping.create[key] !== undefined) {
+        profile.create.receive[key] = text(mapping.create[key], '');
+      }
+    }
+  }
+  if (mapping.verify && profile.verify) {
+    for (const key of ['status', 'orderId', 'amount', 'paidAmount']) {
+      if (mapping.verify[key] !== undefined) profile.verify.receive[key] = text(mapping.verify[key], '');
+    }
+    if (Array.isArray(mapping.verify.paidValues)) {
+      const values = mapping.verify.paidValues.map((v) => text(v, '')).filter(Boolean);
+      if (values.length) profile.verify.paidValues = values;
+    }
+  }
+  if (mapping.webhook && profile.webhook) {
+    for (const key of ['signatureHeader', 'orderField', 'statusField', 'amountField']) {
+      if (mapping.webhook[key] !== undefined) profile.webhook[key] = text(mapping.webhook[key], '');
+    }
+  }
+}
+
+function payView(b) {
+  const pay = Object.assign({}, telegram.defaults().pay, b.pay || {});
+  const g = Object.assign(paygate.blank(), pay.gateway || {});
+  pay.gateway = {
+    enable: !!g.enable,
+    label: g.label || '',
+    callbackUrl: g.callbackUrl || '',
+    webhookUrl: g.webhookUrl || '',
+    multiplier: Number(g.multiplier) || 10,
+    hasKey: !!g.apiKey,
+    keyHint: g.apiKey ? `${String(g.apiKey).slice(0, 8)}…${String(g.apiKey).slice(-4)}` : '',
+    hasWebhookSecret: !!g.webhookSecret,
+    lastError: g.lastError || '',
+    lastOkAt: Number(g.lastOkAt) || 0,
+    profile: g.profile ? summariseProfile(g.profile) : null,
+    // the one line that says whether a buyer would actually be offered this
+    blockedBy: paygate.blockedReason()
+  };
+  return pay;
+}
+
+/** The imported description, in the shape the Payment tab draws and edits. */
+function summariseProfile(p) {
+  return {
+    title: p.title || '',
+    version: p.version || '',
+    baseUrl: p.baseUrl || '',
+    servers: p.servers || [],
+    importedAt: p.importedAt || 0,
+    problems: p.problems || [],
+    auth: p.auth || {},
+    webhook: p.webhook || {},
+    create: p.create || null,
+    verify: p.verify || null,
+    status: p.status || null
+  };
+}
+
 function botView() {
   const b = telegram.bot();
   return {
@@ -264,7 +353,7 @@ function botView() {
     access: b.access || telegram.defaults().access,
     backup: telegram.backupStatus(),
     orders: (b.orders || []).slice(0, 60),
-    pay: b.pay || telegram.defaults().pay,
+    pay: payView(b),
     payWays: telegram.payWays(),
     channel: telegram.channel(),
     ai: {
@@ -369,6 +458,31 @@ router.put('/bot', async (req, res) => {
           .filter((w) => w.address)
       };
     }
+    if (body.pay.gateway && typeof body.pay.gateway === 'object') {
+      const want = body.pay.gateway;
+      const g = Object.assign(paygate.blank(), pay.gateway || {});
+      if (want.enable !== undefined) g.enable = !!want.enable;
+      if (want.label !== undefined) g.label = String(want.label).slice(0, 40);
+      // an empty key field means "keep the one you have"; null means forget it
+      if (typeof want.apiKey === 'string' && want.apiKey.trim()) g.apiKey = want.apiKey.trim();
+      if (want.apiKey === null) g.apiKey = '';
+      if (want.callbackUrl !== undefined) g.callbackUrl = String(want.callbackUrl).trim().slice(0, 2000);
+      if (want.webhookUrl !== undefined) g.webhookUrl = String(want.webhookUrl).trim().slice(0, 2000);
+      if (want.multiplier !== undefined) {
+        /* the Toman-to-Rial factor. Zero or a negative would bill nothing or
+           less than nothing, so the field simply refuses them. */
+        const m = num(want.multiplier);
+        if (m > 0) g.multiplier = m;
+      }
+      /* the mapping the admin corrected by hand, if they did: only the parts
+         of the profile that name fields, never the whole object - a profile
+         replaced from the request body would be a profile anyone with the
+         panel could point at a server of their own */
+      if (want.mapping && typeof want.mapping === 'object' && g.profile) {
+        applyMapping(g.profile, want.mapping);
+      }
+      pay.gateway = g;
+    }
     b.pay = pay;
   }
   if (body.channel && typeof body.channel === 'object') {
@@ -429,6 +543,165 @@ router.post('/bot/backup/send', async (req, res) => {
     res.json(Object.assign({ ok: true }, out, { backup: telegram.backupStatus() }));
   } catch (err) { bad(res, err.message); }
 });
+
+/* ---------------------------- payment gateway ---------------------------- */
+
+/**
+ * Import a gateway's own API description.
+ *
+ * This is the point of the whole thing: the admin hands over the provider's
+ * OpenAPI file and the panel works out from it where to send a payment, how
+ * to sign the request and what every field is called. A new file replaces the
+ * old mapping; the key, the return address and the switch are kept, because
+ * re-importing a newer edition of the same gateway's document should not log
+ * the shop out of it.
+ */
+router.post('/bot/gateway/import', (req, res) => {
+  const body = req.body || {};
+  let doc = body.spec;
+  if (typeof doc === 'string') {
+    try { doc = JSON.parse(doc); } catch (_) { return bad(res, 'that text is not valid JSON'); }
+  }
+  if (!doc || typeof doc !== 'object') return bad(res, 'send the API description as JSON');
+
+  let profile;
+  try {
+    profile = payapi.parse(doc, { baseUrl: body.baseUrl });
+  } catch (err) {
+    return bad(res, err.message);
+  }
+
+  const g = paygate.settings();
+  g.profile = profile;
+  g.lastError = '';
+  /* the return address, when the file leaves us able to guess a sane one and
+     the admin has not set one yet - they can always change it */
+  if (!g.callbackUrl) g.callbackUrl = suggestedCallback();
+  if (!g.webhookUrl) g.webhookUrl = suggestedWebhook();
+  db.saveNow();
+
+  logEvent('bot', `imported the ${profile.title} payment description`);
+  res.json({
+    ok: true,
+    profile: summariseProfile(profile),
+    usable: payapi.usable(profile),
+    blockedBy: paygate.blockedReason(),
+    pay: payView(telegram.bot())
+  });
+});
+
+/** Where the buyer comes back to, as far as this panel can tell. */
+function suggestedCallback() {
+  const s = db.settings;
+  const bot = telegram.status();
+  // a Telegram shop's buyer belongs back in the bot, not on a web page
+  if (bot && bot.username) return `https://t.me/${bot.username}?start=paid`;
+  return s.domain ? `https://${s.domain}/pay/done` : '';
+}
+
+function suggestedWebhook() {
+  const s = db.settings;
+  return s.domain ? `https://${s.domain}/pay/webhook` : '';
+}
+
+/**
+ * A key for the signed webhook, shown once.
+ *
+ * Generated here rather than taken from the admin so it is long and random;
+ * they paste it into the gateway's own panel. It is never shown again - what
+ * comes back afterwards only says whether one exists.
+ */
+router.post('/bot/gateway/secret', (req, res) => {
+  const g = paygate.settings();
+  g.webhookSecret = paygate.newSecret();
+  if (!g.webhookUrl) g.webhookUrl = suggestedWebhook();
+  db.saveNow();
+  logEvent('bot', 'a new payment webhook key was generated');
+  res.json({ ok: true, secret: g.webhookSecret, webhookUrl: g.webhookUrl });
+});
+
+/**
+ * Prove the whole path works, with a real payment of the smallest amount.
+ *
+ * Nothing is delivered and no order is created: a link is asked for and
+ * thrown away. That is enough to tell the key, the address, the mapping and
+ * the gateway's own state apart, which is everything that can be wrong before
+ * the first buyer meets it.
+ */
+router.post('/bot/gateway/test', async (req, res) => {
+  const blocked = paygate.blockedReason();
+  if (blocked) return bad(res, blocked);
+  const amount = num((req.body || {}).amount) || 1000;
+  try {
+    const link = await paygate.createLink({
+      id: `test-${Date.now().toString(36)}`,
+      price: amount,
+      planName: 'NexV test'
+    });
+    res.json({
+      ok: true,
+      token: link.token,
+      url: link.url,
+      botUrl: link.botUrl,
+      charged: link.payable,
+      expiresAt: link.expiresAt
+    });
+  } catch (err) { bad(res, err.message); }
+});
+
+/** Forget the imported description, and with it the gateway. */
+router.post('/bot/gateway/forget', (req, res) => {
+  const b = telegram.bot();
+  b.pay = b.pay || {};
+  b.pay.gateway = paygate.blank();
+  db.saveNow();
+  logEvent('bot', 'the payment gateway was removed');
+  res.json({ ok: true, pay: payView(b) });
+});
+
+/**
+ * The gateway's signed word that a payment landed.
+ *
+ * Mounted above everything in server.js, so this is a plain function rather
+ * than a route: it needs the body exactly as it arrived, before any parser
+ * has touched it.
+ *
+ * It is generous with 200s on purpose. A gateway that does not get one keeps
+ * resending for four hours, so anything already handled, or about an order
+ * this panel has never heard of, is acknowledged rather than retried. Only a
+ * message that is not signed by us is refused.
+ */
+async function payWebhook(req) {
+  const g = paygate.settings();
+  const profile = g.profile || {};
+  const hook = profile.webhook || {};
+  const header = req.headers[String(hook.signatureHeader || 'x-signature').toLowerCase()];
+  const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body || ''));
+
+  const signed = paygate.checkSignature(raw, header, g.webhookSecret);
+  if (!signed.ok) return { status: 401, body: { ok: false, error: signed.reason } };
+
+  let payload;
+  try { payload = JSON.parse(raw.toString('utf8')); } catch (_) {
+    return { status: 400, body: { ok: false, error: 'the body is not JSON' } };
+  }
+
+  const ref = String(payload[hook.orderField || 'order_id'] || '');
+  const order = (telegram.bot().orders || []).find((o) => paygate.orderRef(o) === ref);
+  // not ours, or long since trimmed off the end of the list: acknowledged, so
+  // the gateway stops resending something nobody here can act on
+  if (!order) return { status: 200, body: { ok: true, ignored: 'unknown order' } };
+
+  /*
+   * The webhook says it is paid; the gateway's verify is still what decides.
+   * The signature proves who sent it, and settling through the same path the
+   * button and the sweep use means an order cannot be delivered twice by two
+   * routes arriving at once.
+   */
+  const out = await telegram.settleGateway(order, 'webhook');
+  logEvent('bot', `payment webhook for ${order.planName || 'an order'}: ${out.ok ? 'delivered' : (out.reason || 'not paid')}`);
+  return { status: 200, body: { ok: true } };
+}
 
 /** Does this token belong to a real bot? Answers without starting anything. */
 router.post('/bot/test', async (req, res) => {
@@ -2592,3 +2865,4 @@ module.exports = router;
 module.exports.subUrl = subUrl;
 module.exports.createClient = createClient;
 module.exports.bootPayload = bootPayload;
+module.exports.payWebhook = payWebhook;

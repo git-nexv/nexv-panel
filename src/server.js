@@ -17,6 +17,32 @@ const api = require('./routes/api');
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', true);
+
+/* ------------------------- the payment gateway's word -------------------- */
+/**
+ * The signed result of an online payment, straight from the gateway.
+ *
+ * It sits here, above everything: before the JSON parser, because the
+ * signature is over the bytes exactly as they arrived and re-encoding the
+ * parsed object would change a space or a key order and fail every time;
+ * before the secret web path, because a gateway is given one address and
+ * cannot be asked to guess a path the panel invented for itself; and before
+ * the session check, because the gateway has no session - the signature is
+ * what proves who it is, and nothing is believed without one.
+ *
+ * It answers 200 to anything it has already handled or cannot act on, and
+ * only refuses an unsigned one, so a gateway is never left retrying a message
+ * the panel has in fact dealt with.
+ */
+app.post('/pay/webhook', express.raw({ type: '*/*', limit: '256kb' }), async (req, res) => {
+  try {
+    const out = await require('./routes/api').payWebhook(req);
+    res.status(out.status).json(out.body);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.use(express.json({ limit: '8mb' }));
 app.use(express.urlencoded({ extended: false }));
 

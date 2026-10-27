@@ -11,6 +11,7 @@
 const https = require('https');
 const db = require('./db');
 const membership = require('./membership');
+const paygate = require('./paygate');
 
 /* A mirror can be set when api.telegram.org itself is filtered on the server. */
 const [API_HOST, API_PORT] = String(process.env.NEXV_TG_API || 'api.telegram.org').split(':');
@@ -171,7 +172,10 @@ function defaults() {
     orders: [],
     pay: {
       card: { enable: true, number: '', holder: '', note: '' },
-      crypto: { enable: false, wallets: [] }
+      crypto: { enable: false, wallets: [] },
+      /* the online gateway, built from whatever API description the admin
+         imported rather than from any one provider's names */
+      gateway: require('./paygate').blank()
     },
     channel: {
       enable: false,
@@ -1403,9 +1407,18 @@ async function fromSupport(ctx, message, target) {
 function payWays() {
   const pay = bot().pay || {};
   const ways = [];
+  /* the gateway first: it is the one that finishes by itself, and a buyer
+     offered it alongside a card number will nearly always take it */
+  if (paygate.ready()) ways.push('gateway');
   if (pay.card && pay.card.enable !== false && pay.card.number) ways.push('card');
   if (pay.crypto && pay.crypto.enable !== false && (pay.crypto.wallets || []).some((w) => w.address)) ways.push('crypto');
   return ways;
+}
+
+/** What each way is called on its button. */
+function payLabel(way) {
+  if (way === 'gateway') return paygate.settings().label || '🌐 پرداخت آنلاین';
+  return { card: '💳 کارت به کارت', crypto: '🪙 ارز دیجیتال' }[way] || way;
 }
 
 /** A purchase starts here: pick how to pay, or go straight there if only one way. */
@@ -1421,6 +1434,11 @@ async function placeOrder(ctx, planId, clientName, renewId) {
     planName: plan.name,
     price: plan.price,
     userId: ctx.userId,
+    /* where to write back to. In a private chat it is the same number as the
+       user id, which is why nothing missed it before - but an order settled
+       minutes later by a webhook has no ctx to ask, and guessing is how a
+       delivered config gets sent into the void */
+    chatId: ctx.chatId || ctx.userId,
     username: ctx.username || '',
     name: ctx.name || '',
     /* what the buyer asked their config be called, and - for a top-up - which
@@ -1442,14 +1460,13 @@ async function placeOrder(ctx, planId, clientName, renewId) {
   /* both ways are on, so the buyer says which. The rows are built from what
      is actually configured rather than written out, so a third method later
      appears here without this having to be touched again. */
-  const label = { card: '💳 کارت به کارت', crypto: '🪙 ارز دیجیتال' };
   return reply(ctx, [
     planLine(plan),
     order.clientName ? `نام کانفیگ: <b>${escapeHtml(order.clientName)}</b>` : '',
     '',
     '💰 پرداخت را چطور انجام می‌دهید؟'
   ].filter(Boolean).join('\n'),
-  ways.map((way) => ([{ text: label[way] || way, callback_data: `b:pay:${order.id}:${way}` }]))
+  ways.map((way) => ([{ text: payLabel(way), callback_data: `b:pay:${order.id}:${way}` }]))
     .concat([[{ text: '⬅️ بازگشت', callback_data: 'b:plans:' }]]));
 }
 
@@ -1466,6 +1483,8 @@ async function showPayment(ctx, order, method) {
     `مبلغ: <b>${escapeHtml(String(order.price))} ${escapeHtml(b.currency)}</b>`,
     ''
   ];
+
+  if (method === 'gateway') return showGateway(ctx, order, lines);
 
   if (method === 'card') {
     const card = pay.card || {};
@@ -1495,10 +1514,237 @@ async function showPayment(ctx, order, method) {
   ]);
 }
 
+/**
+ * The online gateway: a link to pay at, and a key to say it is done.
+ *
+ * The link is asked for here rather than when the plan was chosen, so a buyer
+ * who never gets this far never costs the shop one of its daily links. Asking
+ * again for an order that already has one is safe - a gateway hands back the
+ * bill it already made - so a buyer who comes back to a stale message gets the
+ * same page rather than a second charge.
+ *
+ * Nothing is delivered on this screen. The buyer pressing "I have paid" only
+ * makes the panel ask the gateway; the gateway's answer is what decides.
+ */
+async function showGateway(ctx, order, lines) {
+  let link;
+  try {
+    link = await paygate.createLink(order);
+  } catch (err) {
+    order.status = 'awaiting';
+    order.error = err.message;
+    db.saveNow();
+    await warnAdminAboutGateway(err.message);
+    const other = payWays().filter((w) => w !== 'gateway');
+    return reply(ctx, [
+      '❌ درگاه پرداخت در دسترس نیست.',
+      other.length ? 'می‌توانید از روش دیگری پرداخت کنید:' : 'کمی بعد دوباره تلاش کنید.'
+    ].join('\n'),
+    other.map((way) => ([{ text: payLabel(way), callback_data: `b:pay:${order.id}:${way}` }]))
+      .concat([[{ text: '⬅️ بازگشت', callback_data: 'b:screen:start' }]]));
+  }
+
+  order.payToken = link.token;
+  order.payRef = link.ref;
+  order.payUrl = link.url;
+  order.payAt = Date.now();
+  db.saveNow();
+
+  /* the in-Telegram page when the gateway offers one: it keeps the buyer in
+     the app they are already in, and it is where the gateway shows them the
+     card-to-card option alongside the online one */
+  const url = link.botUrl || link.url;
+  lines.push(
+    `${escapeHtml(paygate.settings().label || '🌐 پرداخت آنلاین')}`,
+    '',
+    'روی دکمه زیر بزنید و پرداخت را انجام دهید. روش پرداخت را در همان صفحه انتخاب می‌کنید.',
+    '',
+    'پس از پرداخت، دکمه «پرداخت کردم» را بزنید تا بررسی شود — اگر هم نزدید، چند لحظه بعد خودکار بررسی می‌شود.'
+  );
+
+  return reply(ctx, lines.join('\n'), [
+    [{ text: '💳 پرداخت', url }],
+    [{ text: '✅ پرداخت کردم', callback_data: `b:paid:${shortOrder(order)}` }],
+    [{ text: '✖️ انصراف', callback_data: `b:cancel:${order.id}` }]
+  ]);
+}
+
+/*
+ * An order id short enough to ride in a button.
+ *
+ * Telegram refuses a whole message over one callback_data above 64 bytes, and
+ * says so in an error nobody sees - the message simply never arrives. Eight
+ * characters of a uuid is plenty to tell a few hundred orders apart.
+ */
+function shortOrder(order) { return String(order.id).slice(0, 8); }
+
+function orderByToken(token) {
+  const key = String(token || '');
+  const orders = bot().orders || [];
+  return orders.find((o) => o.id === key) || orders.find((o) => String(o.id).startsWith(key)) || null;
+}
+
+/**
+ * Ask the gateway whether this order was really paid, and hand it over if so.
+ *
+ * Shared by the buyer's button, the signed webhook and the sweep, because all
+ * three mean the same thing and must not mean it three different ways. It is
+ * safe to run twice: an order already delivered is left exactly as it is.
+ */
+async function settleGateway(order, how) {
+  if (!order || order.method !== 'gateway') return { ok: false, reason: 'not a gateway order' };
+  if (order.status === 'delivered' || order.status === 'approved') {
+    return { ok: true, already: true };
+  }
+
+  let result;
+  try {
+    result = await paygate.verify(order);
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+  if (!result.paid) return { ok: false, pending: result.ok, reason: result.reason || result.state || '' };
+
+  order.paidAt = Date.now();
+  order.paidVia = how || 'verify';
+  db.saveNow();
+
+  const handed = await deliverOrder(order);
+  if (!handed.ok) {
+    order.status = 'pending';
+    order.error = handed.error;
+    db.saveNow();
+    await tellAdmin([
+      '<b>پرداخت آنلاین انجام شد ولی تحویل نشد</b>',
+      `اشتراک: ${escapeHtml(order.planName)}`,
+      `مبلغ: ${escapeHtml(String(order.price))} ${escapeHtml(bot().currency)}`,
+      ...buyerLines(order),
+      '',
+      `خطا: ${escapeHtml(handed.error || 'نامشخص')}`
+    ].join('\n'), [[{ text: '✅ تحویل دستی', callback_data: `b:ok:${order.id}` }]]);
+    return { ok: false, paid: true, reason: handed.error };
+  }
+
+  order.status = 'delivered';
+  order.clientId = handed.client.id;
+  db.saveNow();
+
+  await send(order.chatId || order.userId, [
+    '<b>پرداخت شما تایید شد ✅</b>',
+    `${escapeHtml(order.planName)}`,
+    '',
+    'لینک اشتراک:',
+    `<code>${escapeHtml(handed.url)}</code>`,
+    '',
+    'این لینک را در برنامه‌تان به‌عنوان Subscription اضافه کنید.'
+  ].join('\n'), backRow());
+
+  await tellAdmin([
+    '<b>فروش آنلاین</b>',
+    `اشتراک: ${escapeHtml(order.planName)}`,
+    `مبلغ: ${escapeHtml(String(order.price))} ${escapeHtml(bot().currency)}`,
+    ...buyerLines(order),
+    '',
+    `کانفیگ تحویل شد: <code>${escapeHtml(handed.client.email)}</code>`
+  ].join('\n'));
+
+  return { ok: true, delivered: true };
+}
+
+/** The buyer pressing "I have paid". */
+async function confirmGateway(ctx, token) {
+  const order = orderByToken(token);
+  if (!order) return reply(ctx, 'این سفارش پیدا نشد.', backRow());
+  if (order.status === 'delivered' || order.status === 'approved') {
+    return reply(ctx, 'این سفارش قبلاً تحویل داده شده است ✅', backRow());
+  }
+
+  if (ctx.answer) ctx.answer('در حال بررسی پرداخت…');
+  const out = await settleGateway(order, 'button');
+  if (out.ok) return true;
+  if (out.paid) {
+    return reply(ctx, 'پرداخت شما ثبت شد ✅ اما تحویل خودکار انجام نشد؛ پشتیبانی همین حالا در جریان است.', backRow());
+  }
+  return reply(ctx, [
+    'هنوز پرداختی برای این سفارش ثبت نشده است.',
+    '',
+    'اگر همین الان پرداخت کردید، چند لحظه صبر کنید و دوباره بزنید.'
+  ].join('\n'), [
+    [{ text: '💳 رفتن به صفحه پرداخت', url: order.payUrl || 'https://t.me' }],
+    [{ text: '✅ دوباره بررسی کن', callback_data: `b:paid:${shortOrder(order)}` }],
+    [{ text: '⬅️ بازگشت', callback_data: 'b:screen:start' }]
+  ]);
+}
+
+/** Say something to the admin, when there is an admin to say it to. */
+async function tellAdmin(text, keyboard) {
+  const admin = adminChat();
+  if (!admin) return;
+  await send(admin, text, keyboard);
+}
+
+/*
+ * The gateway failing is the admin's problem, not the buyer's, and it has to
+ * reach them without filling their chat: a gateway that is down fails for
+ * every buyer at once, and one message an hour is enough to act on.
+ */
+let gatewayWarnedAt = 0;
+const GATEWAY_WARN_GAP = 60 * 60 * 1000;
+
+async function warnAdminAboutGateway(reason) {
+  if (Date.now() - gatewayWarnedAt < GATEWAY_WARN_GAP) return;
+  gatewayWarnedAt = Date.now();
+  await tellAdmin([
+    '⚠️ <b>درگاه پرداخت جواب نداد</b>',
+    escapeHtml(reason || 'نامشخص'),
+    '',
+    'تا رفع مشکل، خریدارها روش‌های دیگر را می‌بینند.'
+  ].join('\n'));
+}
+
+/*
+ * Orders paid for but never confirmed.
+ *
+ * A buyer who pays and then closes Telegram, or whose "I have paid" never
+ * arrives, has paid all the same - and before this they would simply have
+ * been left with nothing until they thought to complain. Every few minutes
+ * the open gateway orders of the last day are asked about, oldest first, and
+ * whichever the gateway says is paid is handed over.
+ */
+const SWEEP_MS = 3 * 60 * 1000;
+const SWEEP_WINDOW = 24 * 3600 * 1000;
+let sweepTimer = null;
+
+async function sweepGateway() {
+  if (!runtime.running || !paygate.ready()) return;
+  const now = Date.now();
+  const open = (bot().orders || []).filter((o) => o.method === 'gateway'
+    && o.payToken
+    && o.status !== 'delivered' && o.status !== 'approved'
+    && o.status !== 'cancelled' && o.status !== 'rejected'
+    && now - (o.payAt || o.at || 0) < SWEEP_WINDOW);
+
+  // a handful at a time: the gateway counts requests per minute, and an order
+  // missed on this pass is picked up on the next one three minutes later
+  for (const order of open.slice(0, 8)) {
+    try { await settleGateway(order, 'sweep'); } catch (_) { /* next time round */ }
+  }
+}
+
+function watchGateway() {
+  if (sweepTimer) return sweepTimer;
+  sweepTimer = setInterval(() => { sweepGateway().catch(() => {}); }, SWEEP_MS);
+  if (typeof sweepTimer.unref === 'function') sweepTimer.unref();
+  return sweepTimer;
+}
+
 /** The order the buyer still owes a receipt for, if any. A day is long enough. */
 function openOrder(userId) {
   return bot().orders.find((o) => String(o.userId) === String(userId)
     && o.status === 'awaiting'
+    // an online order is settled by the gateway's answer; a photo sent while
+    // one is open is a photo, not a receipt to forward to the admin
+    && o.method !== 'gateway'
     && Date.now() - o.at < 24 * 3600 * 1000);
 }
 
@@ -1943,8 +2189,10 @@ async function act(ctx, action, value) {
       const [orderId, method] = String(value).split(':');
       const order = bot().orders.find((o) => o.id === orderId);
       if (!order) return reply(ctx, 'این سفارش پیدا نشد.', backRow());
-      return showPayment(ctx, order, method === 'crypto' ? 'crypto' : 'card');
+      const ways = payWays();
+      return showPayment(ctx, order, ways.includes(method) ? method : (ways[0] || 'card'));
     }
+    case 'paid': return confirmGateway(ctx, value);
     case 'cancel': return cancelOrder(ctx, value);
     // approval buttons live in the admin's own chat, never in the buyer's
     case 'ok': return ctx.isAdmin ? approveOrder(ctx, value) : send(ctx.chatId, 'فقط ادمین می‌تواند این کار را انجام دهد.');
@@ -2132,6 +2380,8 @@ async function start() {
   loop();
   // and from here the scheduled backup has something to send through
   watchBackups();
+  // and an online payment nobody confirmed still gets delivered
+  watchGateway();
   return status();
 }
 
@@ -2421,6 +2671,7 @@ module.exports = {
   resetTrials, trialsTaken, repairOrphanClients, dateUndatedClients, customTerms,
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
   sendBackup, backupStatus, backupSettings, backupTimes, watchBackups, minutesOf, nextBackupAt, backupTick,
+  payLabel, settleGateway, sweepGateway, watchGateway, orderByToken,
   /* the entry point for one update: what the polling loop feeds, and what a
      webhook would feed if this ever grows one */
   handle

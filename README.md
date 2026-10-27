@@ -152,8 +152,20 @@ corner still reads - `web/i18n.js` is one table and a line fixes one.
   Rules pick their inbounds from a list of the ones you have, rather than asking
   you to retype a generated tag.
 - **Bot** — a Telegram bot that sells subscriptions. A buyer picks a plan, pays
-  by card or crypto, and sends a photo of the receipt; the config is handed over
-  **the moment the receipt arrives**, so nobody waits on the admin being awake.
+  by card, by crypto, or through an online gateway, and sends a photo of the
+  receipt; the config is handed over **the moment the receipt arrives**, so
+  nobody waits on the admin being awake.
+  - **Online gateway**: the one method that needs nobody at all. You import the
+    gateway's own OpenAPI description and the panel works out from the file
+    where to send a payment, how to sign the request and what every field is
+    called — so a different provider is a different file, not a different
+    release of this panel. What it read is shown on the Payment tab and every
+    field name can be corrected by hand. An order is only ever delivered on the
+    gateway's own `verify` saying paid, for the order we billed and the amount
+    we billed; the buyer's word is not evidence. Three things can settle a
+    payment and all three go through that same check: the buyer pressing "I
+    have paid", a signed webhook, and a sweep every few minutes that catches
+    whoever paid and then closed Telegram.
   The admin gets the receipt with the buyer's username and numeric id and two
   keys: approve, or reject. Rejecting cuts the config off and renames it, in the
   buyer's own app, to say the payment was not approved — so a reversed sale is
