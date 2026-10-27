@@ -789,6 +789,23 @@ function offeredTerms() {
   return customTerms().filter((t) => t.enable);
 }
 
+/**
+ * What the custom-volume option is called, which depends on what it offers.
+ *
+ * With more than one length switched on the buyer really does choose both,
+ * and the button should say so. With one - or none - the length is fixed and
+ * the only thing they pick is the volume, so promising a choice of time would
+ * be a promise the next screen does not keep.
+ */
+function customLabel() {
+  return offeredTerms().length > 1 ? 'حجم و زمان دلخواه' : 'حجم دلخواه';
+}
+
+/** Does the buyer get to pick how long, as well as how much? */
+function picksTerm() {
+  return offeredTerms().length > 1;
+}
+
 /*
  * What a length adds on top of the volume.
  *
@@ -834,7 +851,7 @@ async function showPlans(ctx, renewId) {
   const plans = b.plans.filter((p) => p.enable !== false && !p.custom);
   const tail = renewId ? `:${renewId}` : '';
   const rows = plans.map((p) => ([{ text: planButton(p), callback_data: `b:buy:${p.id}${tail}` }]));
-  if (customOn()) rows.push([{ text: '🎚 حجم دلخواه', callback_data: `b:custom:${renewId || ''}` }]);
+  if (customOn()) rows.push([{ text: `🎚 ${customLabel()}`, callback_data: `b:custom:${renewId || ''}` }]);
   if (!rows.length) {
     return reply(ctx, 'فعلاً اشتراکی برای فروش تعریف نشده است.', renewId ? [[{ text: '⬅️ بازگشت', callback_data: `b:cfg:${renewId}` }]] : backRow());
   }
@@ -851,17 +868,19 @@ async function showPlans(ctx, renewId) {
 /* --------------------------- buying by the gigabyte ---------------------- */
 
 async function startCustom(ctx, renewId) {
-  if (!customOn()) return reply(ctx, 'خرید حجم دلخواه فعلاً فعال نیست.', backRow());
+  if (!customOn()) return reply(ctx, `خرید ${customLabel()} فعلاً فعال نیست.`, backRow());
   const c = customSettings();
   const per = pricePerGB();
   expect(ctx.userId, 'customGB', { renewId: renewId || '' });
   return reply(ctx, [
-    '<b>حجم دلخواه</b>',
+    `<b>${customLabel()}</b>`,
     `هر گیگابایت ${per.toLocaleString('en-US')} ${escapeHtml(bot().currency || '')}`,
     `حداقل ${c.minGB} گیگ${c.maxGB ? ` و حداکثر ${c.maxGB} گیگ` : ''}`,
     '',
-    'چند گیگابایت می‌خواهید؟ فقط عدد بفرستید.'
-  ].join('\n'), backRow());
+    'چند گیگابایت می‌خواهید؟ فقط عدد بفرستید.',
+    /* only when there is really a second question coming */
+    picksTerm() ? 'بعد از حجم، مدت را هم خودتان انتخاب می‌کنید.' : ''
+  ].filter(Boolean).join('\n'), backRow());
 }
 
 /*
@@ -3058,7 +3077,7 @@ module.exports = {
   resetTrials, trialsTaken, repairOrphanClients, dateUndatedClients, customTerms,
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
   sendBackup, backupStatus, backupSettings, backupTimes, watchBackups, minutesOf, nextBackupAt, backupTick,
-  payLabel, settleGateway, sweepGateway, watchGateway, orderByToken,
+  payLabel, customLabel, picksTerm, settleGateway, sweepGateway, watchGateway, orderByToken,
   /* the entry point for one update: what the polling loop feeds, and what a
      webhook would feed if this ever grows one */
   handle
