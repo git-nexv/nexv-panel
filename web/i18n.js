@@ -882,6 +882,30 @@ const FA = {
   'The backup carried the other server’s port and secret path. Taking those would have moved the panel out from under you.': 'بکاپ، پورت و مسیر مخفی سرور قبلی را هم داشت. اگر آن‌ها اعمال می‌شدند، پنل از زیر دستتان جابه‌جا می‌شد.',
   'Reload the panel': 'تازه‌سازی پنل',
 
+  'Button colour': 'رنگ دکمه‌ها',
+  'Green': 'سبز',
+  'Blue': 'آبی',
+  'Red': 'قرمز',
+  'Whatever the app uses': 'هرچه خود برنامه استفاده می‌کند',
+  'The colour of the keys inside the bot. Delete and Cancel stay red whatever this says. Telegram apps older than February 2026 draw them their own way and ignore this.': 'رنگ دکمه‌های داخل ربات. حذف و انصراف هرچه اینجا باشد قرمز می‌مانند. تلگرام‌های قدیمی‌تر از بهمن ۱۴۰۴ این را نادیده می‌گیرند و دکمه را به شکل خودشان می‌کشند.',
+
+  /* ---- the guide ---- */
+  'Help': 'راهنما',
+  '❓ The guide': '❓ راهنما',
+  'What the bot tells a buyer who does not know which app to install.': 'چیزی که ربات به خریداری می‌گوید که نمی‌داند کدام برنامه را نصب کند.',
+  'On the start menu': 'در منوی اصلی',
+  'Four screens: the one that asks which device, and one each for Android, iPhone and TV. HTML works here the same as everywhere else in the bot — <b>bold</b> and <code>code</code>.': 'چهار صفحه: یکی که می‌پرسد چه دستگاهی، و یکی برای اندروید، یکی آیفون و یکی تلویزیون. مثل بقیه‌ی جاهای ربات، HTML کار می‌کند — <b>بولد</b> و <code>کد</code>.',
+  'Title': 'عنوان',
+  'What it says': 'متنش',
+  'Put the original back': 'بازگرداندن متن اولیه',
+  'The original wording is back': 'متن اولیه برگشت',
+  'Save the guide': 'ذخیره‌ی راهنما',
+  'The guide is saved': 'راهنما ذخیره شد',
+  'Intro': 'صفحه‌ی اول',
+  'Android': 'اندروید',
+  'iPhone': 'آیفون',
+  'TV': 'تلویزیون',
+
   /* ---- the info line ---- */
   'ℹ️ Info line': 'ℹ️ خط اطلاعات',
   'An entry at the top of every subscription that is read, not connected to.': 'یک ردیف در بالای هر ساب که برای خواندن است، نه برای وصل شدن.',

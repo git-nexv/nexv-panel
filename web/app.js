@@ -702,6 +702,88 @@ async function renderResellerDashboard(view) {
 }
 
 /**
+ * The guide the bot gives buyers, in the admin's own words.
+ *
+ * It ships with wording that answers the questions that actually arrive -
+ * which app, where do I paste this - but they are the admin's buyers and
+ * their words, so all four screens are editable here and the shipped text is
+ * a starting point that can be put back one screen at a time.
+ */
+async function renderBotHelp(panel) {
+  panel.innerHTML = '';
+  const card = el('div', { class: 'card' });
+  panel.append(card);
+
+  let data;
+  try {
+    data = await api.get('/bot/help');
+  } catch (err) {
+    card.append(el('div', { class: 'hint', text: err.message }));
+    return;
+  }
+
+  const onMenu = el('input', { type: 'checkbox' });
+  onMenu.checked = !!data.onMenu;
+
+  const fields = {};
+  const box = el('div', { class: 'col', style: 'gap:16px' });
+
+  for (const screen of data.screens) {
+    const title = el('input', { value: screen.title || '', placeholder: screen.label });
+    const text = el('textarea', { style: 'min-height:200px' }, [screen.text || '']);
+    fields[screen.key] = { title, text };
+
+    box.append(el('div', { class: 'card' }, [
+      el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+        el('strong', { text: screen.label }),
+        el('button', {
+          class: 'btn ghost', text: 'Put the original back',
+          onclick: async () => {
+            try {
+              const out = await api.post('/bot/help/reset', { key: screen.key });
+              const fresh = out.screens.find((x) => x.key === screen.key) || {};
+              title.value = fresh.title || '';
+              text.value = fresh.text || '';
+              toast('The original wording is back');
+            } catch (err) { toast(err.message, 'err'); }
+          }
+        })
+      ]),
+      el('div', { class: 'field' }, [el('label', { text: 'Title' }), title]),
+      el('div', { class: 'field' }, [el('label', { text: 'What it says' }), text])
+    ]));
+  }
+
+  const save = async () => {
+    const screens = {};
+    for (const [key, f] of Object.entries(fields)) {
+      screens[key] = { title: f.title.value, text: f.text.value };
+    }
+    try {
+      const out = await api.put('/bot/help', { screens, onMenu: onMenu.checked });
+      onMenu.checked = !!out.onMenu;
+      toast('The guide is saved');
+    } catch (err) { toast(err.message, 'err'); }
+  };
+
+  card.append(
+    el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+      el('div', {}, [
+        el('strong', { text: '❓ The guide' }),
+        el('div', { class: 'muted', text: 'What the bot tells a buyer who does not know which app to install.' })
+      ]),
+      el('label', { class: 'switch' }, [onMenu, el('span', { class: 'track' }),
+        el('span', { class: 'muted', text: t('On the start menu') })])
+    ]),
+    el('div', { class: 'hint', style: 'margin-bottom:14px', text: 'Four screens: the one that asks which device, and one each for Android, iPhone and TV. HTML works here the same as everywhere else in the bot — <b>bold</b> and <code>code</code>.' }),
+    box,
+    el('div', { class: 'row', style: 'margin-top:14px' }, [
+      el('button', { class: 'btn primary', text: 'Save the guide', onclick: save })
+    ])
+  );
+}
+
+/**
  * The online payment gateway, built from the provider's own API description.
  *
  * The shop had two ways to be paid and both of them ended with a human
@@ -5560,7 +5642,7 @@ async function renderBot(view) {
    * untouched: they are still loaded, still saved, and still what the bot
    * shows; there is just no longer a tab for rewriting them.
    */
-  const { wrap, panels } = tabbed(['Setup', 'Plans', 'Test config', 'Manual plan', 'Access user', 'Payment', 'Backup', 'Channel', 'Orders', 'AI']);
+  const { wrap, panels } = tabbed(['Setup', 'Plans', 'Test config', 'Manual plan', 'Access user', 'Payment', 'Help', 'Backup', 'Channel', 'Orders', 'AI']);
   for (const panel of Object.values(panels)) panel.className = 'tab-panel';
   view.append(wrap);
 
@@ -5570,7 +5652,7 @@ async function renderBot(view) {
       screens: draft.screens, plans: draft.plans, pay: draft.pay, channel: draft.channel,
       pricePerGB: draft.pricePerGB, trial: draft.trial, custom: draft.custom,
       access: draft.access, startOnFirstUse: draft.startOnFirstUse,
-      backup: draft.backup
+      buttonStyle: draft.buttonStyle, backup: draft.backup
     }, extra || {});
     try {
       await api.put('/bot', payload);
@@ -5627,6 +5709,20 @@ async function renderBot(view) {
    * length you set having been ignored.
    */
   draft.startOnFirstUse = data.startOnFirstUse === true;
+  /* the colour of the keys in the bot. Telegram draws these from 2026 on and
+     an older app simply ignores the field, so there is nothing to lose */
+  draft.buttonStyle = data.buttonStyle === undefined ? 'success' : data.buttonStyle;
+  const btnStyle = selectOf([
+    { value: 'success', label: t('Green') },
+    { value: 'primary', label: t('Blue') },
+    { value: 'danger', label: t('Red') },
+    { value: '', label: t('Whatever the app uses') }
+  ], draft.buttonStyle);
+  btnStyle.addEventListener('change', () => { draft.buttonStyle = btnStyle.value; });
+  formField(setupGrid, 'Button colour', btnStyle, {
+    hint: 'The colour of the keys inside the bot. Delete and Cancel stay red whatever this says. Telegram apps older than February 2026 draw them their own way and ignore this.'
+  });
+
   const clock = switchFor(draft, 'startOnFirstUse', 'Start the days on first use, not at the sale');
   setupGrid.append(el('div', { class: 'field full' }, [
     clock,
@@ -5920,6 +6016,9 @@ async function renderBot(view) {
     ])
   ]));
   hydrateIcons(panels['Access user']);
+
+  /* ---- Help: the guide the bot gives buyers ---- */
+  renderBotHelp(panels.Help);
 
   /* ---- Backup: the panel, sent to the admin's own chat ---- */
   const backup = draft.backup = Object.assign(

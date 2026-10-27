@@ -156,9 +156,17 @@ function migrateHelp() {
     if (fresh) { b.screens.push(JSON.parse(JSON.stringify(fresh))); touched = true; }
   }
 
-  /* a button that opens the guide, however the admin has rearranged the menu */
-  const offersHelp = (b.screens || []).some((screen) => (screen.buttons || [])
-    .some((row) => row.some((x) => x.action === 'screen' && x.value === 'help')));
+  /*
+   * A button that opens the guide, however the admin has rearranged the menu.
+   *
+   * Only the start screen counts. Looking at every screen found the "back"
+   * buttons inside the guide itself - they point at `help` too - decided the
+   * menu already offered it, and added nothing. The screens appeared and the
+   * way in never did, which is exactly "the guide was not added to the menu".
+   */
+  const start = (b.screens || []).find((screen) => screen.key === 'start');
+  const offersHelp = ((start || {}).buttons || [])
+    .some((row) => row.some((x) => x.action === 'screen' && x.value === 'help'));
   if (!offersHelp) {
     if (addToStart(b.screens, { label: '❓ راهنما', action: 'screen', value: 'help' })) touched = true;
   }
@@ -257,6 +265,17 @@ function defaults() {
      * anyone who wants it, but it is not what you get by asking for nothing.
      */
     startOnFirstUse: false,
+
+    /*
+     * The colour of the keyboard buttons in the bot.
+     *
+     * Telegram added this in 2026: 'success' is green, 'primary' blue,
+     * 'danger' red, and a client older than that simply draws the button the
+     * way it always did - so there is nothing to lose by asking for a colour.
+     * Green by default, because that is what a shop looks like; '' leaves
+     * every button the app's own colour.
+     */
+    buttonStyle: 'success',
 
     /* what the buyer is allowed to decide for themselves rather than be given */
     access: { chooseName: true },
@@ -462,6 +481,32 @@ async function whoAmI(token) {
   return call('getMe', {}, token);
 }
 
+/*
+ * Anything that undoes, cuts off or refuses, which must never be green.
+ *
+ * Matched on the action in the callback rather than on the label, because the
+ * label is the admin's to rewrite and the action is not.
+ */
+const DESTRUCTIVE = /^b:(cancel|del|delyes|no|power)\b/;
+
+/**
+ * Paint the keyboard.
+ *
+ * One place, so every message the bot sends is coloured the same way without
+ * each caller remembering to. A button that already names its own style keeps
+ * it, and a shop that wants the app's own colours sets the style to nothing.
+ */
+function styled(keyboard) {
+  const want = bot().buttonStyle;
+  if (!Array.isArray(keyboard)) return keyboard;
+  return keyboard.map((row) => (Array.isArray(row) ? row.map((button) => {
+    if (!button || button.style) return button;
+    const data = String(button.callback_data || '');
+    if (DESTRUCTIVE.test(data)) return Object.assign({}, button, { style: 'danger' });
+    return want ? Object.assign({}, button, { style: want }) : button;
+  }) : row));
+}
+
 function send(chatId, text, keyboard) {
   runtime.sent++;
   return call('sendMessage', {
@@ -469,7 +514,7 @@ function send(chatId, text, keyboard) {
     text,
     parse_mode: 'HTML',
     disable_web_page_preview: true,
-    reply_markup: keyboard ? { inline_keyboard: keyboard } : undefined
+    reply_markup: keyboard ? { inline_keyboard: styled(keyboard) } : undefined
   }).catch((err) => { runtime.error = err.message; });
 }
 
@@ -488,7 +533,7 @@ function sendPhoto(chatId, fileId, caption, keyboard) {
     photo: fileId,
     caption,
     parse_mode: 'HTML',
-    reply_markup: keyboard ? { inline_keyboard: keyboard } : undefined
+    reply_markup: keyboard ? { inline_keyboard: styled(keyboard) } : undefined
   }).catch((err) => { runtime.error = err.message; });
 }
 
@@ -499,7 +544,7 @@ function sendDocument(chatId, fileId, caption, keyboard) {
     document: fileId,
     caption,
     parse_mode: 'HTML',
-    reply_markup: keyboard ? { inline_keyboard: keyboard } : undefined
+    reply_markup: keyboard ? { inline_keyboard: styled(keyboard) } : undefined
   }).catch((err) => { runtime.error = err.message; });
 }
 
@@ -535,7 +580,7 @@ function upload(method, field, contentType, chatId, filename, content, caption, 
     part('chat_id', chatId),
     part('caption', caption || ''),
     part('parse_mode', 'HTML'),
-    ...(keyboard ? [part('reply_markup', JSON.stringify({ inline_keyboard: keyboard }))] : []),
+    ...(keyboard ? [part('reply_markup', JSON.stringify({ inline_keyboard: styled(keyboard) }))] : []),
     Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${field}"; filename="${filename}"\r\n`
       + `Content-Type: ${contentType}\r\n\r\n`),
     Buffer.isBuffer(content) ? content : Buffer.from(String(content), 'utf8'),
@@ -578,7 +623,7 @@ function edit(chatId, messageId, text, keyboard) {
     text,
     parse_mode: 'HTML',
     disable_web_page_preview: true,
-    reply_markup: keyboard ? { inline_keyboard: keyboard } : undefined
+    reply_markup: keyboard ? { inline_keyboard: styled(keyboard) } : undefined
   }).catch(() => send(chatId, text, keyboard));
 }
 

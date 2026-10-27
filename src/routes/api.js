@@ -357,6 +357,7 @@ function botView() {
     custom: Object.assign({}, telegram.defaults().custom, b.custom || {},
       { terms: telegram.customTerms() }),
     startOnFirstUse: b.startOnFirstUse === true,
+    buttonStyle: b.buttonStyle === undefined ? 'success' : b.buttonStyle,
     access: b.access || telegram.defaults().access,
     backup: telegram.backupStatus(),
     orders: (b.orders || []).slice(0, 60),
@@ -387,6 +388,11 @@ router.put('/bot', async (req, res) => {
   if (body.adminId !== undefined) b.adminId = String(body.adminId).trim();
   if (body.brand !== undefined) b.brand = String(body.brand).slice(0, 40);
   if (body.currency !== undefined) b.currency = String(body.currency).slice(0, 16);
+  if (body.buttonStyle !== undefined) {
+    // Telegram's own three, or nothing at all for the app's own colours
+    const want = String(body.buttonStyle);
+    b.buttonStyle = ['success', 'primary', 'danger'].includes(want) ? want : '';
+  }
   if (Array.isArray(body.screens)) b.screens = botai.sanitise({ screens: body.screens });
   if (Array.isArray(body.plans)) {
     /*
@@ -771,6 +777,99 @@ router.post('/bot/trial/reset', (req, res) => {
   const cleared = telegram.resetTrials();
   logEvent('bot', `test-config eligibility reset for ${cleared} people`);
   res.json({ ok: true, cleared });
+});
+
+/* ------------------------------- the guide ------------------------------- */
+
+const HELP_SCREENS = [
+  { key: 'help', label: 'Intro' },
+  { key: 'help-android', label: 'Android' },
+  { key: 'help-ios', label: 'iPhone' },
+  { key: 'help-tv', label: 'TV' }
+];
+
+/** The four guide screens as the Bot page edits them. */
+function helpView() {
+  const b = telegram.bot();
+  const start = (b.screens || []).find((screen) => screen.key === 'start');
+  const onMenu = ((start || {}).buttons || [])
+    .some((row) => row.some((x) => x.action === 'screen' && x.value === 'help'));
+  return {
+    onMenu,
+    screens: HELP_SCREENS.map((wanted) => {
+      const mine = (b.screens || []).find((screen) => screen.key === wanted.key);
+      return {
+        key: wanted.key,
+        label: wanted.label,
+        title: (mine && mine.title) || '',
+        text: (mine && mine.text) || ''
+      };
+    })
+  };
+}
+
+router.get('/bot/help', (req, res) => res.json(helpView()));
+
+/**
+ * Rewrite the guide, and put its button back on the menu when it is missing.
+ *
+ * The text belongs to the admin: these are their words to their buyers, and
+ * the ones shipped are a starting point rather than something to be restored
+ * over the top of what they wrote.
+ */
+router.put('/bot/help', (req, res) => {
+  const b = telegram.bot();
+  const body = req.body || {};
+  b.screens = b.screens || [];
+
+  for (const wanted of HELP_SCREENS) {
+    const given = (body.screens || {})[wanted.key];
+    if (!given || typeof given !== 'object') continue;
+    let mine = b.screens.find((screen) => screen.key === wanted.key);
+    if (!mine) {
+      const fresh = telegram.starterScreens().find((screen) => screen.key === wanted.key);
+      mine = JSON.parse(JSON.stringify(fresh || { key: wanted.key, buttons: [] }));
+      b.screens.push(mine);
+    }
+    if (given.title !== undefined) mine.title = String(given.title).slice(0, 60);
+    if (given.text !== undefined) mine.text = String(given.text).slice(0, 4000);
+  }
+
+  // the switch that puts it in front of a buyer at all
+  if (body.onMenu !== undefined) setHelpOnMenu(!!body.onMenu);
+
+  db.saveNow();
+  logEvent('bot', 'the guide was edited');
+  res.json(helpView());
+});
+
+/** Put the guide's button on the start menu, or take it off. */
+function setHelpOnMenu(on) {
+  const b = telegram.bot();
+  const start = (b.screens || []).find((screen) => screen.key === 'start');
+  if (!start) return;
+  start.buttons = (start.buttons || [])
+    .map((row) => row.filter((x) => !(x.action === 'screen' && x.value === 'help')))
+    .filter((row) => row.length);
+  if (on) telegram.migrateHelp();
+}
+
+/** Put the shipped wording back, for one screen or for all four. */
+router.post('/bot/help/reset', (req, res) => {
+  const b = telegram.bot();
+  const only = String((req.body || {}).key || '');
+  const starter = telegram.starterScreens();
+  for (const wanted of HELP_SCREENS) {
+    if (only && only !== wanted.key) continue;
+    const fresh = starter.find((screen) => screen.key === wanted.key);
+    if (!fresh) continue;
+    const at = (b.screens || []).findIndex((screen) => screen.key === wanted.key);
+    if (at >= 0) b.screens[at] = JSON.parse(JSON.stringify(fresh));
+    else b.screens.push(JSON.parse(JSON.stringify(fresh)));
+  }
+  db.saveNow();
+  logEvent('bot', 'the guide was put back to the shipped wording');
+  res.json(helpView());
 });
 
 router.post('/bot/reset-screens', (req, res) => {
