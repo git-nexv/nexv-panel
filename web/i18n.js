@@ -882,6 +882,19 @@ const FA = {
   'The backup carried the other server’s port and secret path. Taking those would have moved the panel out from under you.': 'بکاپ، پورت و مسیر مخفی سرور قبلی را هم داشت. اگر آن‌ها اعمال می‌شدند، پنل از زیر دستتان جابه‌جا می‌شد.',
   'Reload the panel': 'تازه‌سازی پنل',
 
+  /* ---- the info line ---- */
+  'ℹ️ Info line': 'ℹ️ خط اطلاعات',
+  'An entry at the top of every subscription that is read, not connected to.': 'یک ردیف در بالای هر ساب که برای خواندن است، نه برای وصل شدن.',
+  'Show it': 'نمایش بده',
+  'Set what it says on Settings → Config names. With this on, your configs can be named after the inbound alone.': 'متنش را در تنظیمات ← نام کانفیگ‌ها بنویسید. با روشن بودن این، کانفیگ‌ها می‌توانند فقط اسم خود این‌باند را داشته باشند.',
+  'Off: every entry in the subscription is a config, named by the template on Settings → Config names.': 'خاموش: هر ردیف ساب یک کانفیگ است، با همان الگوی تنظیمات ← نام کانفیگ‌ها.',
+  'The info line is on': 'خط اطلاعات روشن شد',
+  'The info line is off': 'خط اطلاعات خاموش شد',
+  'The info line': 'خط اطلاعات',
+  'Info line template': 'الگوی خط اطلاعات',
+  'An extra entry at the top of the subscription whose only job is its name — whose config it is, how much is left, how long is left. Switch it on from the Inbounds page. With it on, the configs themselves can go back to being named after the inbound alone.': 'یک ردیف اضافه در بالای ساب که تنها کارش نام خودش است — کانفیگ مال کیست، چقدر مانده، چند روز مانده. روشن‌کردنش از صفحه‌ی این‌باندها است. با روشن بودنش، خود کانفیگ‌ها می‌توانند دوباره فقط به اسم این‌باند نامیده شوند.',
+  'The same pieces as above. For example:  ℹ️ info | {{client}} | {{usage}} | {{days}}': 'همان قطعات بالا. مثلاً:  ℹ️ info | {{client}} | {{usage}} | {{days}}',
+
   /* ---- the online payment gateway ---- */
   '🌐 Online payment gateway': '🌐 درگاه پرداخت آنلاین',
   'Import the gateway\u2019s API description (an OpenAPI .json file) and the panel works out from it where to send a payment, how to sign the request and what every field is called. Nothing here is written for one provider, so a different gateway is a different file.': 'فایل مستندات API درگاه (یک فایل OpenAPI با پسوند json) را ایمپورت کنید؛ پنل از روی همان می‌فهمد پرداخت را کجا بفرستد، درخواست را چطور امضا کند و اسم هر فیلد چیست. هیچ‌چیز اینجا مخصوص یک درگاه خاص نوشته نشده، پس درگاه دیگر یعنی فایل دیگر.',

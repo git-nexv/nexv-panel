@@ -402,7 +402,7 @@ router.put('/bot', async (req, res) => {
       gb: num(p.gb),
       days: num(p.days, 30) || 30,
       price: String(p.price || '0').slice(0, 20),
-      inboundId: p.inboundId || '',
+      /* no inboundId: a sale goes out on every inbound that is switched on */
       enable: p.enable !== false
     })).concat(oneOffs);
   }
@@ -2541,6 +2541,8 @@ function settingsView() {
   const s = Object.assign({}, db.settings);
   delete s.sessionSecret;
   s.remarkTemplate = s.remarkTemplate || links.DEFAULT_REMARK;
+  s.infoTemplate = s.infoTemplate || links.DEFAULT_INFO;
+  s.infoRow = s.infoRow || { enable: false };
   s.remarkTokens = links.REMARK_TOKENS;
   return s;
 }
@@ -2579,7 +2581,7 @@ router.put('/settings', async (req, res) => {
   const allowed = ['panelPort', 'webBasePath', 'domain', 'subDomain', 'subPort', 'subPath',
     'tgBotToken', 'tgAdminId', 'theme', 'lang', 'certFile', 'keyFile', 'xrayLogLevel',
     'blockTorrent', 'serverIP', 'trafficResetDay', 'defaultOutbound', 'domainStrategy', 'trackIps',
-    'subTitle', 'panelCertFile', 'panelKeyFile', 'httpRedirect', 'remarkTemplate', 'pricePerGB',
+    'subTitle', 'panelCertFile', 'panelKeyFile', 'httpRedirect', 'remarkTemplate', 'infoTemplate', 'pricePerGB',
     'panelListen', 'panelDomain', 'sessionHours', 'trustedProxies', 'ipLimitAllowlist',
     'pageSize', 'restartXrayOnAutoDisable', 'expireWarnDays', 'trafficWarnGB',
     // written by the installer and the terminal when a certificate is refused;
@@ -2607,6 +2609,11 @@ router.put('/settings', async (req, res) => {
     if (req.body[key] === undefined) continue;
     if (restartKeys.includes(key) && String(req.body[key]) !== String(s[key] ?? '')) restartNeeded = true;
     s[key] = req.body[key];
+  }
+  /* the info line's switch, which lives on the Inbounds page rather than in
+     Settings - it is about what a subscription carries, not about the panel */
+  if (req.body.infoRow && typeof req.body.infoRow === 'object') {
+    s.infoRow = Object.assign({}, s.infoRow, { enable: !!req.body.infoRow.enable });
   }
   if (s.subPath && !s.subPath.startsWith('/')) s.subPath = `/${s.subPath}`;
   db.saveNow();

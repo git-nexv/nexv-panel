@@ -725,11 +725,10 @@ async function makeCustomPlan(ctx, gb, days, extra, renewId) {
     gb,
     days,
     price: String(gb * pricePerGB() + (Number(extra) || 0)),
-    inboundId: c.inboundId || (db.data.inbounds.find((i) => i.enable !== false) || {}).id || '',
     enable: true,
     custom: true
   };
-  if (!plan.inboundId) return send(ctx.chatId, 'اینباندی برای فروش تنظیم نشده است.');
+  if (!sellingInbounds().length) return send(ctx.chatId, 'اینباندی برای فروش تنظیم نشده است.');
   /* kept with the plans so deliverOrder can find it later, and pruned so a
      year of one-off purchases does not pile up in the settings file */
   b.plans.push(plan);
@@ -1415,6 +1414,20 @@ function payWays() {
   return ways;
 }
 
+/**
+ * The inbounds a sale is handed over on: every one that is switched on.
+ *
+ * It used to be one, named on the plan. That made the plan list an inbound
+ * list as well, left the admin re-pointing every plan whenever an inbound was
+ * replaced, and gave each buyer a single way in - so the day one inbound was
+ * blocked, everybody on it was stuck until somebody moved them by hand. There
+ * is nothing to choose here: a buyer gets all of them, and the admin takes one
+ * away from a client afterwards if they ever want to.
+ */
+function sellingInbounds() {
+  return (db.data.inbounds || []).filter((i) => i.enable !== false);
+}
+
 /** What each way is called on its button. */
 function payLabel(way) {
   if (way === 'gateway') return paygate.settings().label || '🌐 پرداخت آنلاین';
@@ -1873,8 +1886,9 @@ async function cancelOrder(ctx, orderId) {
 async function deliverOrder(order) {
   const b = bot();
   const plan = b.plans.find((p) => p.id === order.planId);
-  const inbound = db.data.inbounds.find((i) => i.id === (plan && plan.inboundId));
-  if (!plan || !inbound) return { ok: false, error: 'اشتراک یا اینباند آن پیدا نشد' };
+  const selling = sellingInbounds();
+  if (!plan || !selling.length) return { ok: false, error: 'اشتراک یا اینباند آن پیدا نشد' };
+  const inbound = selling[0];
 
   /*
    * A top-up lands on the config the buyer was looking at when they pressed
@@ -1900,6 +1914,11 @@ async function deliverOrder(order) {
     const client = await require('./routes/api').createClient(inbound, {
       // what the buyer called it, if they were asked and the name is still free
       email: uniqueName(cleanName(order.clientName)) || `tg-${order.userId}-${String(order.id).slice(0, 4)}`,
+      /* every way in, not one. A buyer who gets a single inbound has a single
+         thing that can be blocked, and the admin ends up moving people by hand
+         the first time one is; handing over all of them costs nothing and the
+         subscription simply carries more entries. */
+      inboundIds: selling.map((i) => i.id),
       totalGB: plan.gb || 0,
       /* when the days start is the admin's call: unwound until the config is
          first used, which is kinder, or from the sale, which is the one that

@@ -1797,6 +1797,69 @@ function deleteInbound(inb) {
   });
 }
 
+/**
+ * The info line's switch, and what it currently says.
+ *
+ * It is not an inbound and must not look like one in the table - nothing
+ * listens for it and nobody can edit its port - so it gets a card of its own
+ * above the list. What it says is set on Settings → Config names, because
+ * that is where every other name in the subscription is set.
+ */
+function infoRowCard() {
+  const card = el('div', { class: 'card', style: 'margin-bottom:16px' });
+  const box = el('input', { type: 'checkbox' });
+  const sample = el('div', { class: 'link-box', style: 'margin-top:10px' });
+  const note = el('div', { class: 'hint', style: 'margin-top:8px' });
+
+  const paint = (on) => {
+    sample.style.display = on ? '' : 'none';
+    note.textContent = on
+      ? t('Set what it says on Settings → Config names. With this on, your configs can be named after the inbound alone.')
+      : t('Off: every entry in the subscription is a config, named by the template on Settings → Config names.');
+  };
+
+  box.addEventListener('change', async () => {
+    box.disabled = true;
+    try {
+      await api.put('/settings', { infoRow: { enable: box.checked } });
+      paint(box.checked);
+      toast(box.checked ? 'The info line is on' : 'The info line is off');
+    } catch (err) {
+      box.checked = !box.checked;
+      toast(err.message, 'err');
+    }
+    box.disabled = false;
+  });
+
+  card.append(
+    el('div', { class: 'between' }, [
+      el('div', {}, [
+        el('strong', { text: 'ℹ️ Info line' }),
+        el('div', { class: 'muted', text: 'An entry at the top of every subscription that is read, not connected to.' })
+      ]),
+      el('label', { class: 'switch' }, [box, el('span', { class: 'track' }), el('span', { class: 'muted', text: t('Show it') })])
+    ]),
+    sample,
+    note
+  );
+
+  /* the settings arrive after the page is drawn, so the card fills itself in */
+  (async () => {
+    let s = state.settings;
+    if (!s || s.infoRow === undefined) {
+      try { s = await api.get('/settings'); state.settings = s; } catch (_) { return; }
+    }
+    box.checked = !!(s.infoRow && s.infoRow.enable);
+    paint(box.checked);
+    try {
+      const out = await api.post('/settings/remark-preview', { template: s.infoTemplate || '' });
+      sample.textContent = out.preview || '(empty)';
+    } catch (_) { sample.textContent = s.infoTemplate || ''; }
+  })();
+
+  return card;
+}
+
 async function renderInbounds(view) {
   view.append(el('div', { class: 'between', style: 'margin-bottom:16px' }, [
     el('div', { class: 'muted', text: 'Each inbound is one port and one protocol that clients connect to.' }),
@@ -1812,6 +1875,14 @@ async function renderInbounds(view) {
       el('button', { class: 'btn primary', html: `${icon('plus')} New inbound`, onclick: () => inboundForm(null) })
     ])
   ]));
+
+  /*
+   * The info line sits above the inbounds because that is what it looks like
+   * to whoever receives it - one more entry in their server list - while not
+   * being an inbound at all: nothing listens for it, it is one of the real
+   * ones wearing a different name.
+   */
+  view.append(infoRowCard());
 
   const wrap = el('div', { class: 'table-wrap' });
   wrap.innerHTML = '<div class="empty"><div class="skeleton" style="height:120px"></div></div>';
@@ -3412,8 +3483,14 @@ function clientForm(existing) {
   const inboundPick = el('div', { class: 'chips' });
   for (const inb of state.inbounds) {
     const box = el('input', { type: 'checkbox', value: inb.id });
-    // a brand new client starts on the first inbound, which is the common case
-    box.checked = existing ? already.includes(inb.id) : inb.id === (state.inbounds[0] || {}).id;
+    /*
+     * A new client starts on every inbound there is, and the admin unticks
+     * what they do not want. The other way round - one ticked, the rest not -
+     * meant the common case took as many taps as there were inbounds, and a
+     * client quietly ended up with a single way in, so the day that inbound
+     * was blocked they had none.
+     */
+    box.checked = existing ? already.includes(inb.id) : inb.enable !== false;
     inboundPick.append(el('label', { title: `${inb.protocol}:${inb.port}` },
       [box, `${inb.remark} · ${inb.protocol}:${inb.port}`]));
   }
@@ -4348,6 +4425,26 @@ async function renderSettings(view) {
   const subTitle = el('input', { type: 'text', value: s.subTitle || 'NexV', placeholder: 'NexV' });
   inputs.subTitle = subTitle;
 
+  /* the info line's own template, previewed the same way the config name is */
+  const infoTemplate = el('input', {
+    type: 'text', class: 'mono',
+    value: s.infoTemplate || 'ℹ️ info | {{client}} | {{usage}} | {{days}}',
+    placeholder: 'ℹ️ info | {{client}} | {{usage}} | {{days}}'
+  });
+  inputs.infoTemplate = infoTemplate;
+  const infoPreview = el('div', { class: 'link-box', style: 'margin-top:10px' });
+  let infoTimer = null;
+  const drawInfoPreview = async () => {
+    try {
+      const result = await api.post('/settings/remark-preview', { template: infoTemplate.value });
+      infoPreview.textContent = result.preview || '(empty)';
+    } catch (err) { infoPreview.textContent = err.message; }
+  };
+  infoTemplate.addEventListener('input', () => {
+    clearTimeout(infoTimer);
+    infoTimer = setTimeout(drawInfoPreview, 220);
+  });
+
   naming.append(
     el('div', { class: 'muted', style: 'margin-bottom:14px' }, [
       'What the client app calls things: the subscription itself, and each config inside it.'
@@ -4369,10 +4466,25 @@ async function renderSettings(view) {
     ]),
     el('div', { class: 'hint', style: 'margin-top:4px' }, [
       'Names are built when a link is handed out, so changing this renames every config at once — people will see the new name after their app refreshes the subscription.'
+    ]),
+
+    /* the info line. Same tokens, same preview, but it names the one entry
+       that is there to be read rather than connected to */
+    el('div', { class: 'section-title', text: 'The info line' }),
+    el('div', { class: 'hint', style: 'margin-bottom:12px' }, [
+      'An extra entry at the top of the subscription whose only job is its name — whose config it is, how much is left, how long is left. Switch it on from the Inbounds page. With it on, the configs themselves can go back to being named after the inbound alone.'
+    ]),
+    el('div', { class: 'field full' }, [
+      el('label', { text: 'Info line template' }), infoTemplate,
+      el('div', { class: 'hint', text: 'The same pieces as above. For example:  ℹ️ info | {{client}} | {{usage}} | {{days}}' })
+    ]),
+    el('div', { class: 'field full' }, [
+      el('label', { text: 'Preview' }), infoPreview
     ])
   );
   panels['Config names'].append(el('div', { class: 'card' }, [naming]));
   drawPreview();
+  drawInfoPreview();
 
   /* ---- TLS ---- */
   const tls = el('div', { class: 'form-grid' });
@@ -5608,9 +5720,9 @@ async function renderBot(view) {
       formField(grid, 'Price', bind('price', el('input', { value: plan.price || '' })));
       formField(grid, 'Quota (GB)', bind('gb', el('input', { type: 'number', min: '0', value: plan.gb || 0 }), Number), { hint: '0 means unlimited' });
       formField(grid, 'Days', bind('days', el('input', { type: 'number', min: '1', value: plan.days || 30 }), Number));
-      const inbound = selectOf(inbounds.map((i) => ({ value: i.id, label: `${i.remark} (${i.protocol}:${i.port})` })), plan.inboundId);
-      inbound.addEventListener('change', () => { plan.inboundId = inbound.value; });
-      formField(grid, 'Sold from inbound', inbound, { full: true, hint: 'The client is created on this inbound when you approve an order' });
+      /* no inbound picker: a sale goes out on every inbound that is switched
+         on, so there is nothing here to choose and nothing to keep in step
+         when an inbound is replaced */
       plansBox.append(el('div', { class: 'card' }, [
         el('div', { class: 'between', style: 'margin-bottom:12px' }, [
           el('strong', { text: plan.name || 'Plan' }),
@@ -5626,7 +5738,7 @@ async function renderBot(view) {
       el('button', {
         class: 'btn', html: `${icon('plus')} Add a plan`,
         onclick: () => {
-          draft.plans.push({ name: 'New plan', gb: 30, days: 30, price: '0', inboundId: inbounds[0] ? inbounds[0].id : '', enable: true });
+          draft.plans.push({ name: 'New plan', gb: 30, days: 30, price: '0', enable: true });
           drawPlans();
         }
       }),

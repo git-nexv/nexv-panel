@@ -68,6 +68,17 @@ function streamParams(inb) {
  */
 const DEFAULT_REMARK = '{{inbound}}-{{client}}';
 
+/*
+ * The line at the top of a subscription that is not a server at all.
+ *
+ * Every entry in a subscription is a way in, and every app shows its name in
+ * the server list - so one of them can be spent on telling the buyer what
+ * they have left instead. That is what this is: a config whose only job is
+ * its own name. The real entries then go back to being called after the
+ * inbound they are, with nobody's name or quota hanging off them.
+ */
+const DEFAULT_INFO = 'ℹ️ info | {{client}} | {{usage}} | {{days}}';
+
 const REMARK_TOKENS = [
   { token: 'inbound', about: 'the inbound\u2019s name' },
   { token: 'client', about: 'the client\u2019s name' },
@@ -168,12 +179,14 @@ function qs(obj) {
  * itself, which is what every caller that does not care about external proxies
  * gets by default.
  */
-function buildLink(inb, client, where) {
+function buildLink(inb, client, where, nameOverride) {
   const at = where || addressesFor(inb)[0];
   const host = at.host;
   const port = at.port;
-  const base = remarkFor(inb, client);
-  const remark = at.remark ? `${base} · ${at.remark}` : base;
+  const base = nameOverride || remarkFor(inb, client);
+  /* an address with a label of its own says so after the name - but not when
+     the caller has dictated the whole name, as the info line does */
+  const remark = (!nameOverride && at.remark) ? `${base} · ${at.remark}` : base;
   const params = streamParams(inb);
   // an address in front may terminate TLS itself, or add it
   if (at.security) params.security = at.security;
@@ -224,10 +237,49 @@ function buildLink(inb, client, where) {
 }
 
 /** All links for one subscription id, as plain text (clients expect base64 of this). */
+/**
+ * The info line for one client, as a link an app will accept.
+ *
+ * It is a real entry built from a real inbound - the first one this client
+ * can actually use - with nothing changed but its name. That is deliberate:
+ * a made-up address would show up in the app as a server that never
+ * connects, and somebody will tap it. This one works if they do.
+ */
+function infoLinkFor(client, inbounds) {
+  const template = db.settings.infoTemplate || DEFAULT_INFO;
+  for (const inb of inbounds) {
+    if (inb.enable === false) continue;
+    const where = addressesFor(inb)[0];
+    if (!where) continue;
+    const link = buildLink(inb, client, where, remarkFor(inb, client, template));
+    if (link) return link;
+  }
+  return '';
+}
+
+/** Is the info line switched on? */
+function infoRowOn() {
+  return !!(db.settings.infoRow && db.settings.infoRow.enable);
+}
+
 function subscriptionFor(subId) {
   const d = db.data;
   const clients = d.clients.filter((c) => c.subId === subId);
   const links = [];
+
+  /*
+   * The info line goes first, so it is the first thing in the server list
+   * rather than something to scroll for. One per subscription, not one per
+   * client: it is the subscription that was bought.
+   */
+  if (infoRowOn()) {
+    for (const c of clients) {
+      if (c.enable === false && !c.blockedReason) continue;
+      const line = infoLinkFor(c, membership.inboundsOf(c, d.inbounds));
+      if (line) { links.push(line); break; }
+    }
+  }
+
   for (const c of clients) {
     /*
      * A blocked client stays in the list on purpose. It cannot connect - Xray
@@ -252,4 +304,7 @@ function subscriptionFor(subId) {
   return links;
 }
 
-module.exports = { buildLink, subscriptionFor, hostFor, addressesFor, remarkFor, DEFAULT_REMARK, REMARK_TOKENS };
+module.exports = {
+  buildLink, subscriptionFor, hostFor, addressesFor, remarkFor, infoLinkFor, infoRowOn,
+  DEFAULT_REMARK, DEFAULT_INFO, REMARK_TOKENS
+};
