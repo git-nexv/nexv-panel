@@ -1378,6 +1378,40 @@ function startClockIfUsed(c, now, d) {
   return true;
 }
 
+/**
+ * The clock starts when the config is imported, not when it is first used.
+ *
+ * A config sold "days start on first use" has no expiry date until something
+ * moves traffic through it - and the only thing that ever noticed was the
+ * stats poll, half a minute later. So the buyer imported their subscription,
+ * their app asked how long it had, and was told nothing at all; the thirty
+ * days turned up some refreshes later, once they had connected and the poll
+ * had come round. That is "I have to hit update several times".
+ *
+ * Fetching the subscription is the import, and the import is the first use:
+ * the app is asking for the configs because somebody is adding them. Starting
+ * the clock here means the first answer the app ever gets already carries the
+ * date, and nothing has to be refreshed for it to appear.
+ *
+ * Returns how many were started, so the caller can decide whether to save.
+ */
+function startClockOnImport(subId) {
+  const d = db.data;
+  const now = Date.now();
+  let started = 0;
+  for (const c of d.clients) {
+    if (c.subId !== subId) continue;
+    if (c.expiryTime || !c.startAfterFirstUse || !(Number(c.expiryDays) > 0)) continue;
+    c.expiryTime = now + Number(c.expiryDays) * 86400000;
+    c.startedAt = c.startedAt || now;
+    started++;
+    d.logs.unshift({ at: now, type: 'client',
+      message: `${c.email} was added to an app - its ${c.expiryDays} days start now` });
+  }
+  if (started && d.logs.length > 500) d.logs.length = 500;
+  return started;
+}
+
 async function enforceLimits() {
   const d = db.data;
   let dirty = false;
@@ -1486,5 +1520,5 @@ module.exports = {
   outboundConfig, outboundStream,
   INBOUND_PROTOCOLS, OUTBOUND_PROTOCOLS, CLIENT_PROTOCOLS, LINK_PROTOCOLS,
   restart, start, stop, ensureRunning, collectTraffic, enforceLimits, ensureAccessLog, accessLogUsable, ACCESS_LOG, rateFor,
-  clientTag, isExpired, isOverQuota, inboundDead, generateReality, generateECH, parseECH, run, serviceUser
+  clientTag, isExpired, isOverQuota, inboundDead, startClockOnImport, generateReality, generateECH, parseECH, run, serviceUser
 };

@@ -156,6 +156,11 @@ function serveSubscription(req, res) {
   const list = links.subscriptionFor(subId);
   if (!list.length) return res.status(404).send('not found');
 
+  /* this fetch is the config being added to an app, which is the first use a
+     config sold "days start on first use" has been waiting for - so its date
+     exists before the answer below is built, rather than a poll later */
+  if (xray.startClockOnImport(subId)) db.save();
+
   const clients = db.data.clients.filter((c) => c.subId === subId);
   const totalGB = clients.reduce((a, c) => a + (c.totalGB || 0), 0);
   const expiry = clients.reduce((a, c) => Math.max(a, c.expiryTime || 0), 0);
