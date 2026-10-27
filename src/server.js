@@ -305,6 +305,19 @@ app.get(/^\/[\w.-]+\.(js|css)$/, (req, res, next) => {
   return res.end(entry.raw);
 });
 
+/*
+ * The fonts are the largest thing the panel sends - a hundred and thirty
+ * kilobytes of them - and they have never changed. An hour's cache meant a
+ * browser that came back the next morning fetched them all over again, which
+ * on a filtered link is most of the wait before anything is readable. They
+ * are content-addressed by name here: a different font is a different file.
+ */
+app.use('/fonts', express.static(path.join(WEB_DIR, 'fonts'), {
+  index: false,
+  immutable: true,
+  maxAge: '365d'
+}));
+
 app.use(express.static(WEB_DIR, { index: false, maxAge: '1h' }));
 
 /**
@@ -341,9 +354,30 @@ function renderPage(file, base) {
   return html;
 }
 
-function sendPage(res, file, base, req) {
+async function sendPage(res, file, base, req) {
   res.setHeader('Cache-Control', 'no-store');
   let html = renderPage(file, base);
+
+  /*
+   * The panel's opening answers, baked into the page that asks for them.
+   *
+   * Even gathered into one call, /boot is still a round trip the page has to
+   * make after it has loaded a script that it had to wait for the page to
+   * arrive to know about. On a link with half a second each way that is a
+   * second of blank screen for an answer the server already had in its hand
+   * while it was writing the page. So it is written in. The browser still has
+   * the /boot route to fall back on, and uses it on every later reload of the
+   * shell.
+   */
+  if (file === 'index.html') {
+    try {
+      const payload = await require('./routes/api').bootPayload(req);
+      if (payload) {
+        html = html.replace('</head>',
+          `<script>window.__NEXV_BOOT__=${JSON.stringify(payload).replace(/</g, '\\u003c')};</script>\n</head>`);
+      }
+    } catch (_) { /* the page still works; it will ask for itself */ }
+  }
   /* the sign-in page of a panel whose owner has not made an account yet offers
      to make one; every other door gets the ordinary form */
   if (req && req.resellerSlug) {
@@ -360,20 +394,20 @@ function baseFor(req) {
   return req.resellerSlug ? `/${req.resellerSlug}` : normalizeBasePath(db.settings.webBasePath);
 }
 
-app.get('/login', (req, res) => {
+app.get('/login', (req, res, next) => {
   const base = baseFor(req);
   const user = auth.currentUser(req);
   /* somebody signed in as the leader who opens a reseller's address is not
      signed in *there*, and the other way round: each door has its own panel */
   if (user && !mismatched(req, user)) return res.redirect(`${base}/`);
-  sendPage(res, 'login.html', base, req);
+  sendPage(res, 'login.html', base, req).catch(next);
 });
 
-app.get('/', (req, res) => {
+app.get('/', (req, res, next) => {
   const base = baseFor(req);
   const user = auth.currentUser(req);
   if (!user || mismatched(req, user)) return res.redirect(`${base}/login`);
-  sendPage(res, 'index.html', base, req);
+  sendPage(res, 'index.html', base, req).catch(next);
 });
 
 /** Is this session for a different panel than the door it arrived at? */

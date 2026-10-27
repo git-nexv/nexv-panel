@@ -39,8 +39,41 @@ const store = {
 
 /* ------------------------------- helpers -------------------------------- */
 
+/*
+ * Answers the first paint already has.
+ *
+ * /boot hands back who you are, the settings, the dashboard status and the
+ * version in one request, and the handful of seconds that follow are exactly
+ * when the pages that need them are drawn. So they are parked here and the
+ * GETs for them are answered without going back to the server - five round
+ * trips on a slow link become one. Anything written clears the lot, so a save
+ * is never followed by a stale read.
+ */
+const primed = new Map();
+const PRIME_TTL = 6000;
+
+function prime(path, value) {
+  if (value === undefined || value === null) return;
+  primed.set(path, { at: Date.now(), value });
+}
+
+function primedAnswer(path) {
+  const hit = primed.get(path);
+  if (!hit) return undefined;
+  if (Date.now() - hit.at > PRIME_TTL) { primed.delete(path); return undefined; }
+  // a fresh object each time: a caller that edits what it got must not edit
+  // what the next caller gets
+  return JSON.parse(JSON.stringify(hit.value));
+}
+
 const api = {
   async request(method, path, body, opts = {}) {
+    if (method === 'GET') {
+      const ready = primedAnswer(path);
+      if (ready !== undefined) return ready;
+    } else {
+      primed.clear();
+    }
     const abort = new AbortController();
     const budget = opts.timeout
       || (method === 'GET' ? REQUEST_TIMEOUT : WRITE_TIMEOUT);
@@ -670,8 +703,10 @@ async function renderResellerDashboard(view) {
 
 /** The "no HTTPS, and here is why" banner, wherever it is wanted. */
 async function drawCertWarning(host) {
-  let s;
-  try { s = await api.get('/settings'); } catch (_) { return; }
+  let s = state.settings;
+  if (!s || s.certError === undefined) {
+    try { s = await api.get('/settings'); } catch (_) { return; }
+  }
   host.innerHTML = '';
   if (!s.certError) return;
   host.append(el('div', { class: 'notice danger', style: 'margin-bottom:16px' }, [
@@ -681,7 +716,11 @@ async function drawCertWarning(host) {
       el('button', {
         class: 'btn ghost', text: 'Dismiss',
         onclick: async () => {
-          try { await api.put('/settings', { certError: '' }); host.innerHTML = ''; } catch (err) { toast(err.message, 'err'); }
+          try {
+            await api.put('/settings', { certError: '' });
+            if (state.settings) state.settings.certError = '';
+            host.innerHTML = '';
+          } catch (err) { toast(err.message, 'err'); }
         }
       })
     ])
@@ -6674,18 +6713,36 @@ async function boot() {
     translateChrome();
   }
 
-  /* and the role before that, because it decides what pages exist at all */
+  /*
+   * Who you are, the settings, the dashboard and the version - one request.
+   *
+   * These used to be asked for one after another, and the first box on the
+   * screen waited on all of them in turn. The answers are parked so the
+   * dashboard, the Clients page and the version key read them without asking
+   * again, and if /boot is not there - an older server behind a browser that
+   * kept this script - the old road is still open underneath.
+   */
   try {
-    const me = await api.get('/me');
-    state.role = me.role || 'admin';
-    state.me = me;
-  } catch (_) { /* the shell still draws; the API will refuse what it must */ }
-
-  /* the panel's own settings, once: the Clients page reads the warning
-     thresholds out of them and would otherwise only have them after somebody
-     had visited Settings, which is not a thing anyone should have to do */
-  if (state.role !== 'reseller') {
-    try { state.settings = await api.get('/settings'); } catch (_) { /* defaults apply */ }
+    /* the server writes this into the page when it serves it; only a shell
+       that arrived without one has to ask */
+    const first = window.__NEXV_BOOT__ || await api.get('/boot');
+    state.me = first.me || null;
+    state.role = (first.me && first.me.role) || 'admin';
+    if (first.settings) state.settings = first.settings;
+    prime('/me', first.me);
+    prime('/settings', first.settings);
+    prime('/status', first.status);
+    prime('/version', first.version);
+    prime('/update/log', first.updateLog);
+  } catch (_) {
+    try {
+      const me = await api.get('/me');
+      state.role = me.role || 'admin';
+      state.me = me;
+    } catch (__) { /* the shell still draws; the API will refuse what it must */ }
+    if (state.role !== 'reseller') {
+      try { state.settings = await api.get('/settings'); } catch (__) { /* defaults apply */ }
+    }
   }
   themeSwitch(document.getElementById('themeToggle'));
   languageKey();

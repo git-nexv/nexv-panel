@@ -115,16 +115,16 @@ router.post('/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-router.get('/me', (req, res) => {
+function meView(req) {
   const user = auth.currentUser(req);
-  if (!user) return bad(res, 'unauthorized', 401);
+  if (!user) return null;
 
   /* a reseller's panel is drawn from this: what they may see, what they may
      spend, and what they have already sold */
   const mine = resellers.forUser(user);
   if (mine) {
     const view = resellers.summary(mine);
-    return res.json({
+    return {
       username: user.username,
       role: 'reseller',
       reseller: {
@@ -140,9 +140,15 @@ router.get('/me', (req, res) => {
         hasBot: view.hasBot,
         ledger: (mine.ledger || []).slice(0, 20)
       }
-    });
+    };
   }
-  res.json({ username: user.username, role: user.role || 'admin' });
+  return { username: user.username, role: user.role || 'admin' };
+}
+
+router.get('/me', (req, res) => {
+  const me = meView(req);
+  if (!me) return bad(res, 'unauthorized', 401);
+  res.json(me);
 });
 
 /** Unauthenticated liveness probe, used by the nexv CLI to report panel state. */
@@ -568,9 +574,78 @@ router.post('/bot/ai', async (req, res) => {
   } catch (err) { bad(res, err.message, 502); }
 });
 
+/* --------------------------------- boot ---------------------------------- */
+
+/**
+ * Run a handler and keep what it would have sent, instead of sending it.
+ *
+ * The dashboard handler is three hundred lines of counting and it answers a
+ * res, not a value. Rather than grow a second copy of it for /boot, it is
+ * called with a res that writes into a variable.
+ */
+function captured(fn, req) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (body) => { if (!settled) { settled = true; resolve(body); } };
+    const sink = {
+      statusCode: 200,
+      status(code) { this.statusCode = code; return this; },
+      setHeader() { return this; },
+      json: finish,
+      send: finish
+    };
+    Promise.resolve(fn(req, sink)).catch(() => finish(null));
+  });
+}
+
+/**
+ * Everything the first paint needs, in one request.
+ *
+ * Opening the panel used to be five round trips in a row before a single box
+ * appeared: who am I, then the settings, then - once the dashboard started
+ * drawing - the status, the version and the update log. On a link with half a
+ * second of latency each way that is most of three seconds of waiting with
+ * nothing on the screen, which is what "the panel takes forever to open" has
+ * been. They are all answered here at once, and the browser holds onto them
+ * for the few seconds the first paint takes.
+ *
+ * Nothing new is computed: each piece is the same handler the separate route
+ * calls, so the two can never disagree.
+ */
+async function bootPayload(req) {
+  const me = meView(req);
+  if (!me) return null;
+  // the page route has not been through the api router's middleware
+  if (req.reseller === undefined) req.reseller = resellers.forUser(auth.currentUser(req));
+
+  const [status, ver] = await Promise.all([
+    captured(statusView, req).catch(() => null),
+    version.check(false).catch(() => null)
+  ]);
+
+  const ready = update.available();
+  return {
+    me,
+    // a reseller has no panel settings to be told about
+    settings: req.reseller ? null : settingsView(),
+    status,
+    version: ver
+      ? Object.assign({}, ver, { canUpdate: ready.ok, updateBlockedBy: ready.reason })
+      : { current: version.current, latest: version.current, updateAvailable: false, canUpdate: ready.ok },
+    // an update that started before this page existed; asked for on every load
+    updateLog: update.state()
+  };
+}
+
+router.get('/boot', async (req, res) => {
+  const payload = await bootPayload(req);
+  if (!payload) return bad(res, 'unauthorized', 401);
+  res.json(payload);
+});
+
 /* ------------------------------ dashboard ------------------------------- */
 
-router.get('/status', async (req, res) => {
+async function statusView(req, res) {
   const d = db.data;
 
   /*
@@ -621,7 +696,9 @@ router.get('/status', async (req, res) => {
     traffic: totals,
     settings: { domain: d.settings.domain, subPath: d.settings.subPath, subPort: d.settings.subPort }
   });
-});
+}
+
+router.get('/status', statusView);
 
 router.get('/logs', (req, res) => res.json(db.data.logs.slice(0, 200)));
 
@@ -2147,13 +2224,15 @@ router.post('/routing/reorder', async (req, res) => {
 
 /* ------------------------------- settings ------------------------------- */
 
-router.get('/settings', (req, res) => {
+function settingsView() {
   const s = Object.assign({}, db.settings);
   delete s.sessionSecret;
   s.remarkTemplate = s.remarkTemplate || links.DEFAULT_REMARK;
   s.remarkTokens = links.REMARK_TOKENS;
-  res.json(s);
-});
+  return s;
+}
+
+router.get('/settings', (req, res) => res.json(settingsView()));
 
 /*
  * What a template would actually name things, run against a real client so the
@@ -2512,3 +2591,4 @@ router.use((err, req, res, next) => {
 module.exports = router;
 module.exports.subUrl = subUrl;
 module.exports.createClient = createClient;
+module.exports.bootPayload = bootPayload;
