@@ -40,6 +40,27 @@ const DEFAULTS = () => ({
 
 let cache = null;
 let writeTimer = null;
+/*
+ * When this process last read or wrote the file. The terminal menu edits
+ * db.json directly - that is how the port, the web path, a password reset and
+ * a certificate are applied - and then restarts the panel. If the panel then
+ * writes its own copy out on the way down, it puts back everything the admin
+ * had just changed, and the command silently does nothing at all.
+ *
+ * (It only started doing that once the panel began exiting on SIGTERM. Before
+ * that it was killed outright, and a killed process runs no exit handler, so
+ * the edit survived by luck rather than design.)
+ */
+let lastTouched = 0;
+
+function rememberFile() {
+  try { lastTouched = fs.statSync(DB_FILE).mtimeMs; } catch (_) { lastTouched = 0; }
+}
+
+/** Has somebody else written the file since we last did? */
+function changedElsewhere() {
+  try { return fs.statSync(DB_FILE).mtimeMs !== lastTouched; } catch (_) { return false; }
+}
 
 function ensureDir() {
   fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o750 });
@@ -60,6 +81,7 @@ function load() {
   } else {
     cache = DEFAULTS();
   }
+  rememberFile();
   // fill in keys added by newer versions
   const base = DEFAULTS();
   for (const key of Object.keys(base)) {
@@ -75,6 +97,7 @@ function flush() {
   const tmp = `${DB_FILE}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(cache, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, DB_FILE);
+  rememberFile();
 }
 
 /** Persist soon; batches bursts of writes into one disk hit. */
@@ -101,6 +124,24 @@ const db = {
   DB_FILE
 };
 
-process.on('exit', () => { try { saveNow(); } catch (_) {} });
+/*
+ * On the way out, write only what has not been written yet - and not even
+ * that if the file has moved under us.
+ *
+ * Flushing unconditionally meant every shutdown rewrote the whole store from
+ * memory, which is how `nexv port`, `nexv url` and the password reset came to
+ * do nothing: they edit the file and restart the panel, and the panel put its
+ * stale copy back on the way down. There is nothing to write unless a
+ * debounced save is still outstanding, and if somebody has edited the file in
+ * the meantime theirs is the newer truth.
+ */
+process.on('exit', () => {
+  if (!writeTimer) return;
+  if (changedElsewhere()) {
+    console.warn('[db] the database changed on disk while shutting down - keeping that version');
+    return;
+  }
+  try { saveNow(); } catch (_) { /* nothing more we can do here */ }
+});
 
 module.exports = db;

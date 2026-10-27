@@ -209,12 +209,18 @@ function defaults() {
 
     /*
      * Whether a config's days start when it is paid for or when it is first
-     * used. Unwound is kinder - somebody who buys on Monday and installs on
-     * Friday has not lost four days - but it also means the panel shows no
-     * expiry date at all until the first byte moves, which reads as the time
-     * limit having been ignored. Switch it off and the clock starts at the sale.
+     * used.
+     *
+     * At the sale, by default. Waiting for first use is kinder in theory -
+     * somebody who buys on Monday and installs on Friday has not lost four
+     * days - but what it does in practice is sell a "60 day" service that has
+     * no expiry date anywhere, in the panel or in the bot, until the buyer
+     * happens to move some traffic. If they never do, or the stats poll never
+     * sees it, the config runs for ever. A shop that sells by the month needs
+     * the month to start when it is paid for; the other way round is here for
+     * anyone who wants it, but it is not what you get by asking for nothing.
      */
-    startOnFirstUse: true,
+    startOnFirstUse: false,
 
     /* what the buyer is allowed to decide for themselves rather than be given */
     access: { chooseName: true }
@@ -506,7 +512,7 @@ function extraFor(term) {
 
 /** Whether a config sold now should start its clock now or on first use. */
 function startsOnFirstUse() {
-  return bot().startOnFirstUse !== false;
+  return bot().startOnFirstUse === true;
 }
 
 function pricePerGB() { return Math.max(0, Number(bot().pricePerGB) || 0); }
@@ -2095,6 +2101,46 @@ function status() {
  * is the one the plan it was sold on names, or the one test configs are made
  * on, or failing both the first inbound that is switched on.
  */
+/*
+ * Give a date to configs that were sold without one.
+ *
+ * A config sold while the clock waited for first use carries its length as a
+ * number of days and no date at all. If the buyer never moved traffic the
+ * panel has nothing to show and nothing to enforce, so a "60 day" service runs
+ * for ever - which is what "the time limit is not applied" has meant all
+ * along.
+ *
+ * The term starts now rather than from the sale. Not from the sale because
+ * that would silently take days off somebody who has not used any of them;
+ * now, because that is the first moment the config has a deadline, and they
+ * still get the whole of what they paid for.
+ *
+ * Only configs the bot sold - they carry a Telegram id - and only while the
+ * panel is set to start the clock at the sale. An admin who has deliberately
+ * chosen to wait for first use keeps their configs waiting.
+ */
+async function dateUndatedClients() {
+  if (startsOnFirstUse()) return { dated: 0, reason: 'the panel is set to wait for first use' };
+  const d = db.data;
+  const now = Date.now();
+  let dated = 0;
+  for (const c of d.clients) {
+    if (!String(c.tgId || '').trim()) continue;
+    if (!c.startAfterFirstUse || c.expiryTime || !(Number(c.expiryDays) > 0)) continue;
+    c.expiryTime = now + Number(c.expiryDays) * 86400000;
+    c.startAfterFirstUse = false;
+    c.startedAt = c.startedAt || now;
+    dated++;
+  }
+  if (!dated) return { dated: 0 };
+  db.saveNow();
+  d.logs.unshift({ at: now, type: 'client',
+    message: `${dated} config(s) sold without an expiry date now have one, starting today` });
+  if (d.logs.length > 500) d.logs.length = 500;
+  await require('./xray').apply();
+  return { dated };
+}
+
 async function repairOrphanClients() {
   const d = db.data;
   const b = bot();
@@ -2139,7 +2185,7 @@ function resume() {
 
 module.exports = {
   bot, defaults, starterScreens, migrateStarter, migrateUsageButton, start, stop, status, whoAmI, resume,
-  resetTrials, trialsTaken, repairOrphanClients, customTerms,
+  resetTrials, trialsTaken, repairOrphanClients, dateUndatedClients, customTerms,
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
   /* the entry point for one update: what the polling loop feeds, and what a
      webhook would feed if this ever grows one */

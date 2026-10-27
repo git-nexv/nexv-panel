@@ -457,6 +457,10 @@ async function bootstrap() {
   require('./telegram').repairOrphanClients()
     .then((r) => { if (r && r.fixed) console.log(`[bot] put ${r.fixed} config(s) back on an inbound`); })
     .catch((err) => console.error('[bot] could not repair sold configs:', err.message));
+  /* and configs sold with a length but no date, which therefore never expired */
+  require('./telegram').dateUndatedClients()
+    .then((r) => { if (r && r.dated) console.log(`[bot] gave ${r.dated} config(s) an expiry date`); })
+    .catch((err) => console.error('[bot] could not date sold configs:', err.message));
   // and from here on xray gets itself picked up when it falls over
   try { require('./watchdog').start(); } catch (err) { console.error('[watchdog] could not start:', err.message); }
 

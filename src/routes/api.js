@@ -252,7 +252,7 @@ function botView() {
     trialsTaken: telegram.trialsTaken(),
     custom: Object.assign({}, telegram.defaults().custom, b.custom || {},
       { terms: telegram.customTerms() }),
-    startOnFirstUse: b.startOnFirstUse !== false,
+    startOnFirstUse: b.startOnFirstUse === true,
     access: b.access || telegram.defaults().access,
     orders: (b.orders || []).slice(0, 60),
     pay: b.pay || telegram.defaults().pay,
@@ -333,7 +333,7 @@ router.put('/bot', async (req, res) => {
         : telegram.defaults().custom.terms
     };
   }
-  if (body.startOnFirstUse !== undefined) b.startOnFirstUse = body.startOnFirstUse !== false;
+  if (body.startOnFirstUse !== undefined) b.startOnFirstUse = body.startOnFirstUse === true;
   if (body.access && typeof body.access === 'object') {
     b.access = { chooseName: body.access.chooseName !== false };
   }
@@ -2317,10 +2317,29 @@ router.post('/restore', async (req, res) => {
   const keepSecret = d.settings.sessionSecret;
   const keepUsers = d.users;
   const keepSessions = d.sessions;
-  d.inbounds = incoming.inbounds;
-  d.clients = incoming.clients;
-  d.outbounds = Array.isArray(incoming.outbounds) ? incoming.outbounds : [];
-  d.routing = Array.isArray(incoming.routing) ? incoming.routing : [];
+  const hadBotToken = (d.bot || {}).token || '';
+
+  /*
+   * Everything in the file comes back, not a hand-written list of six keys.
+   *
+   * The backup has always held the whole store - the bot's token, its admin,
+   * its plans and payment details, the reseller panels, the traffic history -
+   * and the restore put back inbounds, clients, outbounds, routing, settings
+   * and users, and silently dropped the rest. So restoring a backup wiped the
+   * bot: the token gone, the plans gone, and nothing said. Copying every key
+   * the file carries also means a key added later is restored without this
+   * having to be edited again.
+   *
+   * Two things are deliberately not taken from the file. The session secret
+   * stays this server's own, or every cookie it has ever issued would be
+   * forgeable from a backup; and the sessions stay this server's own, or the
+   * admin doing the restore is signed out by it.
+   */
+  const KEEP_OURS = new Set(['sessions']);
+  for (const [key, value] of Object.entries(incoming)) {
+    if (KEEP_OURS.has(key)) continue;
+    d[key] = value;
+  }
   d.settings = Object.assign({}, incoming.settings || {}, { sessionSecret: keepSecret });
   d.users = (Array.isArray(incoming.users) && incoming.users.length) ? incoming.users : keepUsers;
   // keep only sessions whose admin survived the restore, so the caller is not
@@ -2329,8 +2348,25 @@ router.post('/restore', async (req, res) => {
   d.sessions = keepSessions.filter((session) => userIds.has(session.userId));
   db.saveNow();
   await xray.apply();
-  logEvent('settings', 'configuration restored from backup');
-  res.json({ ok: true });
+
+  /*
+   * The bot is a running process holding the old token. If the file carried a
+   * different one it has to be picked up, or the panel shows one bot's
+   * settings while another one answers.
+   */
+  let botNote = '';
+  const nowToken = (d.bot || {}).token || '';
+  if (nowToken !== hadBotToken) {
+    try {
+      telegram.stop();
+      if (d.bot && d.bot.enabled && nowToken) await telegram.start();
+      botNote = nowToken ? ' the bot was restarted on the restored token' : ' the bot was stopped';
+    } catch (err) {
+      botNote = ` the bot could not be restarted: ${err.message}`;
+    }
+  }
+  logEvent('settings', `configuration restored from backup -${botNote || ' everything in the file was put back'}`);
+  res.json({ ok: true, bot: !!(d.bot && d.bot.token), restarted: !!botNote });
 });
 
 // eslint-disable-next-line no-unused-vars -- express needs the 4-argument shape

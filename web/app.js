@@ -4867,11 +4867,11 @@ async function renderBot(view) {
    * panel then shows no expiry date at all until they do, which reads as the
    * length you set having been ignored.
    */
-  draft.startOnFirstUse = data.startOnFirstUse !== false;
-  const clock = switchFor(draft, 'startOnFirstUse', 'Start the days on first use, not at the sale', true);
+  draft.startOnFirstUse = data.startOnFirstUse === true;
+  const clock = switchFor(draft, 'startOnFirstUse', 'Start the days on first use, not at the sale');
   setupGrid.append(el('div', { class: 'field full' }, [
     clock,
-    el('div', { class: 'hint', text: 'On: a config bought today shows "Not started" until it is first used, and its days begin then. Off: the days start the moment it is sold and the expiry date is on the panel straight away.' })
+    el('div', { class: 'hint', text: 'Off (the default): the days start the moment it is sold, so a 60-day service expires 60 days from the sale and the date is on the panel straight away. On: the config shows "Not started" until the buyer first uses it — kinder to them, but it has no expiry date at all until they do, and none if they never do.' })
   ]));
 
   const startBtn = el('button', {
