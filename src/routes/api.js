@@ -2803,6 +2803,8 @@ router.post('/restore', async (req, res) => {
   }
   const d = db.data;
   const keepSecret = d.settings.sessionSecret;
+  // a snapshot, not a reference: d.settings is about to be replaced wholesale
+  const keepSettings = Object.assign({}, d.settings);
   const keepUsers = d.users;
   const keepSessions = d.sessions;
   const hadBotToken = (d.bot || {}).token || '';
@@ -2828,8 +2830,52 @@ router.post('/restore', async (req, res) => {
     if (KEEP_OURS.has(key)) continue;
     d[key] = value;
   }
-  d.settings = Object.assign({}, incoming.settings || {}, { sessionSecret: keepSecret });
+
+  /*
+   * ...except the handful of settings that are not about the service at all,
+   * but about how you reach *this* machine.
+   *
+   * Restoring those is how a migration goes wrong. A backup off the old box
+   * carries its port and its secret path, and taking them moves the panel
+   * out from under the person doing the restore: the address in their bar
+   * 404s that same second, the port only changes on the next restart, and
+   * from the outside it looks as though the restore wiped the server. It is
+   * also a lock-out if the old port is taken here or the old TLS files do
+   * not exist on this box.
+   *
+   * So the way in stays this machine's, and everything that describes the
+   * service being moved - the domain, the subscription address, the bot, the
+   * plans, the clients - comes across. `?takeAddress=1` is the admin saying
+   * they want the old box's address too, in so many words.
+   */
+  const MACHINE_OWN = ['panelPort', 'webBasePath', 'panelListen', 'panelDomain',
+    'panelCertFile', 'panelKeyFile'];
+  const takeAddress = ['1', 'true', 'yes'].includes(String(req.query.takeAddress || ''));
+  const ourAddress = {};
+  for (const key of MACHINE_OWN) ourAddress[key] = keepSettings[key];
+
+  d.settings = Object.assign({}, incoming.settings || {},
+    takeAddress ? {} : ourAddress,
+    { sessionSecret: keepSecret });
+
+  const kept = takeAddress ? [] : MACHINE_OWN.filter(
+    (key) => String((incoming.settings || {})[key] ?? '') !== String(keepSettings[key] ?? '')
+  );
+
   d.users = (Array.isArray(incoming.users) && incoming.users.length) ? incoming.users : keepUsers;
+  /*
+   * Whoever signs in next does so with the accounts out of the file, which is
+   * the whole point of moving - but nobody guesses it, so it is said out loud.
+   *
+   * By the stored password and not by the name: both servers call their admin
+   * "admin", so comparing names says nothing changed while the password that
+   * actually opens the panel has just been replaced.
+   */
+  const asLogins = (users) => JSON.stringify(
+    (users || []).map((u) => [u.username, u.password || u.hash || '']).sort()
+  );
+  const accountsChanged = Array.isArray(incoming.users) && incoming.users.length
+    && asLogins(incoming.users) !== asLogins(keepUsers);
   // keep only sessions whose admin survived the restore, so the caller is not
   // signed out by restoring a backup that still contains their own account
   const userIds = new Set(d.users.map((u) => u.id));
@@ -2854,7 +2900,32 @@ router.post('/restore', async (req, res) => {
     }
   }
   logEvent('settings', `configuration restored from backup -${botNote || ' everything in the file was put back'}`);
-  res.json({ ok: true, bot: !!(d.bot && d.bot.token), restarted: !!botNote });
+
+  /*
+   * What came back, in enough detail to be believed.
+   *
+   * "Configuration restored" on its own is why a good restore gets reported
+   * as a failed one: the admin opens the Bot page, is asked to sign in again
+   * because the accounts came out of the file, and concludes the bot settings
+   * were lost. Counting what landed, and saying plainly that the sign-in has
+   * moved, is the difference.
+   */
+  res.json({
+    ok: true,
+    bot: !!(d.bot && d.bot.token),
+    restarted: !!botNote,
+    accountsChanged: !!accountsChanged,
+    keptOurAddress: kept,
+    restored: {
+      inbounds: (d.inbounds || []).length,
+      clients: (d.clients || []).length,
+      plans: ((d.bot || {}).plans || []).length,
+      botToken: !!(d.bot || {}).token,
+      botAdmin: !!(d.bot || {}).adminId,
+      gateway: !!(((d.bot || {}).pay || {}).gateway || {}).apiKey,
+      resellers: (d.resellers || []).length
+    }
+  });
 });
 
 // eslint-disable-next-line no-unused-vars -- express needs the 4-argument shape

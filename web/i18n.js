@@ -864,6 +864,24 @@ const FA = {
   'After showing these, the bot asks the buyer for a photo of the receipt and forwards it to you with their username and numeric id.': 'بعد از نمایش این‌ها، ربات از خریدار عکس رسید می‌خواهد و آن را همراه نام کاربری و شناسه عددی‌اش برای شما می‌فرستد.',
   '✏️ Let the buyer name their own config': '✏️ خریدار اسم کانفیگ خودش را انتخاب کند',
 
+  /* ---- what a restore actually did ---- */
+  'Restored': 'بازگردانی انجام شد',
+  'Here is what came out of the file.': 'این چیزی است که از فایل بیرون آمد.',
+  'Inbounds': 'این‌باندها',
+  'Clients': 'کلاینت‌ها',
+  'Bot plans': 'پلن‌های ربات',
+  'Bot token': 'توکن ربات',
+  'Bot admin': 'ادمین ربات',
+  'Payment gateway key': 'کلید درگاه پرداخت',
+  'Reseller panels': 'پنل‌های نمایندگی',
+  'yes': 'بله',
+  'no': 'خیر',
+  'Sign in with the other server’s password from now on.': 'از این به بعد با گذرواژه‌ی همان سروری وارد شوید که بکاپ از آن گرفته شده.',
+  'The admin accounts came out of the backup too, so this panel now wants whatever username and password the server you took it from used.': 'حساب‌های ادمین هم از داخل بکاپ آمده‌اند، پس این پنل حالا همان نام کاربری و گذرواژه‌ی سرور قبلی را می‌خواهد.',
+  'This server kept its own address, so the link you are on still works:': 'این سرور آدرس خودش را نگه داشت، پس همین لینکی که روی آن هستید کار می‌کند:',
+  'The backup carried the other server’s port and secret path. Taking those would have moved the panel out from under you.': 'بکاپ، پورت و مسیر مخفی سرور قبلی را هم داشت. اگر آن‌ها اعمال می‌شدند، پنل از زیر دستتان جابه‌جا می‌شد.',
+  'Reload the panel': 'تازه‌سازی پنل',
+
   /* ---- the online payment gateway ---- */
   '🌐 Online payment gateway': '🌐 درگاه پرداخت آنلاین',
   'Import the gateway\u2019s API description (an OpenAPI .json file) and the panel works out from it where to send a payment, how to sign the request and what every field is called. Nothing here is written for one provider, so a different gateway is a different file.': 'فایل مستندات API درگاه (یک فایل OpenAPI با پسوند json) را ایمپورت کنید؛ پنل از روی همان می‌فهمد پرداخت را کجا بفرستد، درخواست را چطور امضا کند و اسم هر فیلد چیست. هیچ‌چیز اینجا مخصوص یک درگاه خاص نوشته نشده، پس درگاه دیگر یعنی فایل دیگر.',

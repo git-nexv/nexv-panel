@@ -1001,6 +1001,59 @@ function mappingBlock(g, profile) {
   ]);
 }
 
+/**
+ * What a restore actually did, said out loud.
+ *
+ * This used to be a one-word toast, and a one-word toast is why a restore
+ * that worked gets reported as one that did not: the accounts come out of the
+ * file, so the next page asks you to sign in, and from there it looks as
+ * though everything was lost. Counting what landed answers that before it is
+ * asked - and the sign-in moving is the one thing nobody guesses.
+ */
+function afterRestore(out) {
+  const r = (out && out.restored) || {};
+  const line = (label, value) => el('div', { class: 'row', style: 'justify-content:space-between;gap:16px' }, [
+    el('span', { class: 'muted', text: label }),
+    el('strong', { text: String(value) })
+  ]);
+  const yes = (v) => (v ? t('yes') : t('no'));
+
+  modal({
+    title: 'Restored',
+    subtitle: 'Here is what came out of the file.',
+    width: 560,
+    body: el('div', { class: 'col', style: 'gap:8px' }, [
+      line(t('Inbounds'), r.inbounds ?? 0),
+      line(t('Clients'), r.clients ?? 0),
+      line(t('Bot plans'), r.plans ?? 0),
+      line(t('Bot token'), yes(r.botToken)),
+      line(t('Bot admin'), yes(r.botAdmin)),
+      line(t('Payment gateway key'), yes(r.gateway)),
+      line(t('Reseller panels'), r.resellers ?? 0),
+
+      out && out.accountsChanged ? el('div', { class: 'notice warn', style: 'margin-top:12px' }, [
+        el('strong', { text: t('Sign in with the other server’s password from now on.') }),
+        el('div', { style: 'margin-top:6px' }, [
+          t('The admin accounts came out of the backup too, so this panel now wants whatever username and password the server you took it from used.')
+        ])
+      ]) : null,
+
+      (out && (out.keptOurAddress || []).length) ? el('div', { class: 'notice', style: 'margin-top:12px' }, [
+        el('div', {}, [t('This server kept its own address, so the link you are on still works:')]),
+        el('div', { class: 'row', style: 'margin-top:8px;flex-wrap:wrap' },
+          out.keptOurAddress.map((k) => el('span', { class: 'chip', text: k }))),
+        el('div', { class: 'hint', style: 'margin-top:8px' }, [
+          t('The backup carried the other server’s port and secret path. Taking those would have moved the panel out from under you.')
+        ])
+      ]) : null
+    ]),
+    actions: [{
+      label: t('Reload the panel'), kind: 'primary',
+      onClick: () => { location.reload(); }
+    }]
+  });
+}
+
 /** The "no HTTPS, and here is why" banner, wherever it is wanted. */
 async function drawCertWarning(host) {
   let s = state.settings;
@@ -4325,10 +4378,9 @@ async function renderSettings(view) {
               let parsed;
               try { parsed = JSON.parse(area.value); } catch (_) { return toast('That is not valid JSON', 'err'); }
               try {
-                await api.post('/restore', parsed);
-                toast('Configuration restored');
+                const out = await api.post('/restore', parsed);
                 close();
-                render();
+                afterRestore(out);
               } catch (err) { toast(err.message, 'err'); }
             }
           }]
@@ -4344,9 +4396,7 @@ async function renderSettings(view) {
           const file = picker.files[0];
           if (!file) return;
           try {
-            await api.post('/restore', JSON.parse(await file.text()));
-            toast('Configuration restored');
-            render();
+            afterRestore(await api.post('/restore', JSON.parse(await file.text())));
           } catch (err) { toast(err.message, 'err'); }
         });
         document.body.append(picker);

@@ -76,6 +76,18 @@ panel_port() {
   ' 2>/dev/null || echo 2087
 }
 
+# The secret path the panel answers on - everything but /pay/webhook lives
+# behind it, so a health check that leaves it off gets a 404 and reads as a
+# panel that is down.
+panel_path() {
+  DATA_DIR="$DATA_DIR" node -e '
+    try {
+      const db = require(process.env.DATA_DIR + "/db.json");
+      process.stdout.write(String((db.settings && db.settings.webBasePath) || ""));
+    } catch (e) { process.stdout.write(""); }
+  ' 2>/dev/null || echo ""
+}
+
 confirm() {
   # the panel runs the repairs itself, with nobody there to answer
   [[ ${NEXV_ASSUME_YES:-0} == 1 ]] && return 0
@@ -200,11 +212,48 @@ act_update() {
   refresh_unit
   echo "Restarting the panel..."
   systemctl restart "$SERVICE"
-  ok "Panel updated"
-  echo "UPDATE-DONE"
-  # a fresh install generates a secret web path; never let the admin lose it
-  sleep 2
-  act_url
+
+  # An update that ends by printing a URL nobody can open is worse than one
+  # that fails: the admin is told it worked. Wait for the panel to answer its
+  # own health check before saying so, and if it never does, say what is wrong
+  # and where to look rather than leaving them with a dead address.
+  if wait_until_up 30; then
+    ok "Panel updated"
+    echo "UPDATE-DONE"
+    act_url
+  else
+    err "The panel was updated but is not answering."
+    echo "UPDATE-FAILED"
+    echo
+    echo "  What systemd says:"
+    systemctl status "$SERVICE" --no-pager --lines=0 2>/dev/null | sed 's/^/    /'
+    echo
+    echo "  The last few lines of its log:"
+    journalctl -u "$SERVICE" -n 20 --no-pager 2>/dev/null | sed 's/^/    /'
+    echo
+    echo "  Put the previous version back with:  nexv rollback"
+    return 1
+  fi
+}
+
+# Is the panel answering yet? Up to $1 seconds, then give up.
+# /api/health needs no session, which is the whole reason it exists.
+wait_until_up() {
+  local deadline=$(( SECONDS + ${1:-30} ))
+  local port path
+  port="$(panel_port)"
+  path="$(panel_path)"
+  while (( SECONDS < deadline )); do
+    # http first, then the same door over TLS for a panel serving itself https
+    for scheme in http https; do
+      if curl -ksS --max-time 3 -o /dev/null -w '%{http_code}' \
+           "${scheme}://127.0.0.1:${port}${path}/api/health" 2>/dev/null | grep -q '^200$'; then
+        return 0
+      fi
+    done
+    sleep 1
+  done
+  return 1
 }
 
 act_backup() {
@@ -218,10 +267,49 @@ act_restore() {
   local file="${1:-}"
   [[ -f $file ]] || { err "Give the path to a backup file: nexv restore <file>"; return 1; }
   cp "$DATA_DIR/db.json" "$DATA_DIR/db.json.before-restore" 2>/dev/null || true
-  cp "$file" "$DATA_DIR/db.json"
+
+  # Everything in the file comes back except the way in to this machine. A
+  # backup off another server carries its port and its secret path, and taking
+  # those leaves the admin typing an address that is no longer the panel's -
+  # on a box they may only be able to reach through that panel. Pass --all to
+  # take the other server's address as well.
+  local take_all=""
+  [[ ${2:-} == "--all" || ${1:-} == "--all" ]] && take_all=1
+  FILE="$file" DATA_DIR="$DATA_DIR" TAKE_ALL="$take_all" node -e '
+    const fs = require("fs"), path = require("path");
+    const live = path.join(process.env.DATA_DIR, "db.json");
+    const incoming = JSON.parse(fs.readFileSync(process.env.FILE, "utf8"));
+    if (!Array.isArray(incoming.inbounds) || !Array.isArray(incoming.clients)) {
+      console.error("that file is not a NexV backup");
+      process.exit(1);
+    }
+    let current = {};
+    try { current = JSON.parse(fs.readFileSync(live, "utf8")); } catch (e) { current = {}; }
+    const mine = current.settings || {};
+    incoming.settings = incoming.settings || {};
+    if (!process.env.TAKE_ALL) {
+      for (const key of ["panelPort", "webBasePath", "panelListen", "panelDomain",
+                         "panelCertFile", "panelKeyFile"]) {
+        if (mine[key] !== undefined) incoming.settings[key] = mine[key];
+      }
+    }
+    // this server keeps its own signing secret, or a leaked backup would let
+    // anybody forge a cookie for it
+    if (mine.sessionSecret) incoming.settings.sessionSecret = mine.sessionSecret;
+    incoming.sessions = [];
+    fs.writeFileSync(live, JSON.stringify(incoming, null, 2), { mode: 0o600 });
+    const b = incoming.bot || {};
+    console.log("  inbounds: " + incoming.inbounds.length
+      + "  clients: " + incoming.clients.length
+      + "  bot plans: " + ((b.plans || []).length)
+      + "  bot token: " + (b.token ? "yes" : "no"));
+  ' || { err "Could not read that backup"; return 1; }
+
   chmod 600 "$DATA_DIR/db.json"
   systemctl restart "$SERVICE"
   ok "Restored from $file"
+  warn "Sign in with the username and password of the server the backup came from."
+  if wait_until_up 30; then act_url; else err "The panel is not answering - check: nexv logs"; fi
 }
 
 act_url() {
