@@ -577,7 +577,13 @@ async function bootstrap() {
     .catch((err) => console.error('[bot] could not repair sold configs:', err.message));
   /* and configs sold with a length but no date, which therefore never expired */
   require('./telegram').dateUndatedClients()
-    .then((r) => { if (r && r.dated) console.log(`[bot] gave ${r.dated} config(s) an expiry date`); })
+    .then((r) => {
+      if (r && r.dated) console.log(`[bot] gave ${r.dated} config(s) an expiry date`);
+      if (r && r.rebuilt) {
+        console.log(`[bot] ${r.rebuilt} config(s) had no time limit at all - their term was read `
+          + 'back from the orders that sold them');
+      }
+    })
     .catch((err) => console.error('[bot] could not date sold configs:', err.message));
   /*
    * Every port the panel needs, opened once on the way up. Inbounds created

@@ -3087,26 +3087,108 @@ function status() {
  * panel is set to start the clock at the sale. An admin who has deliberately
  * chosen to wait for first use keeps their configs waiting.
  */
+/**
+ * How long a config was sold for, worked out after the fact.
+ *
+ * A config sold by the bot before it knew how to set a date carries no length
+ * at all - not a date, not a number of days - so nothing could ever expire it,
+ * and no amount of fixing the sale helps the ones already out there. But the
+ * order that sold it is still in the settings file, and the order names the
+ * plan. The plan is where the length lives.
+ *
+ * Three ways, in order of how sure each one is: the order whose buyer and
+ * chosen name both match this config; the plan named in the config's own
+ * comment, which is what delivery writes there; and failing those, the most
+ * recent order this buyer placed before the config was cut. Nothing found
+ * means nothing is changed - a guessed length is worse than none.
+ */
+function soldTerm(c) {
+  const b = bot();
+  const plans = b.plans || [];
+  const daysOf = (plan) => (plan && Number(plan.days) > 0 ? Number(plan.days) : 0);
+  const mine = (b.orders || []).filter((o) => String(o.userId || '') === String(c.tgId || ''));
+
+  const named = mine.find((o) => o.clientName && o.clientName === c.email);
+  if (named) {
+    const days = daysOf(plans.find((p) => p.id === named.planId));
+    if (days) return { days, how: 'its own order' };
+  }
+
+  const comment = String(c.comment || '');
+  const byName = plans.find((p) => p.name && comment.startsWith(`${p.name} -`));
+  if (daysOf(byName)) return { days: daysOf(byName), how: 'the plan named on it' };
+
+  const made = Number(c.createdAt || 0);
+  if (made) {
+    const before = mine
+      .filter((o) => Number(o.at || 0) <= made + 600000)
+      .sort((x, y) => Number(y.at || 0) - Number(x.at || 0))[0];
+    const days = daysOf(plans.find((p) => p.id === (before || {}).planId));
+    if (days) return { days, how: 'the order placed when it was cut' };
+  }
+  return null;
+}
+
 async function dateUndatedClients() {
-  if (startsOnFirstUse()) return { dated: 0, reason: 'the panel is set to wait for first use' };
   const d = db.data;
   const now = Date.now();
+  const waiting = startsOnFirstUse();
   let dated = 0;
+  let rebuilt = 0;
+
   for (const c of d.clients) {
     if (!String(c.tgId || '').trim()) continue;
-    if (!c.startAfterFirstUse || c.expiryTime || !(Number(c.expiryDays) > 0)) continue;
-    c.expiryTime = now + Number(c.expiryDays) * 86400000;
+    if (c.expiryTime) continue;
+
+    /*
+     * Sold with a length but no date, while the panel was set to start at the
+     * sale. Its days start today. Left alone while the panel is set to wait
+     * for first use, because then waiting is what was meant.
+     */
+    if (c.startAfterFirstUse && Number(c.expiryDays) > 0) {
+      if (waiting) continue;
+      c.expiryTime = now + Number(c.expiryDays) * 86400000;
+      c.startAfterFirstUse = false;
+      c.startedAt = c.startedAt || now;
+      dated++;
+      continue;
+    }
+
+    /*
+     * Sold with no length at all, which no setting and no first use can ever
+     * repair: there is nothing to count. The term is read back off the order
+     * and the deadline put where it always should have been - the day it was
+     * sold plus what was paid for. One already past that comes out expired,
+     * which is the true answer: it is a config that has been running free.
+     */
+    if (Number(c.expiryDays) > 0) continue;
+    const term = soldTerm(c);
+    if (!term) continue;
+    const from = Number(c.createdAt) || now;
+    c.expiryDays = term.days;
+    c.expiryTime = from + term.days * 86400000;
     c.startAfterFirstUse = false;
-    c.startedAt = c.startedAt || now;
-    dated++;
+    c.startedAt = c.startedAt || from;
+    rebuilt++;
+    d.logs.unshift({ at: now, type: 'client',
+      message: `${c.email} was sold with no time limit at all; ${term.days} days read back from `
+        + `${term.how}, counting from the day it was sold`
+        + (c.expiryTime < now ? ' - which has already passed' : '') });
   }
-  if (!dated) return { dated: 0 };
+
+  if (!dated && !rebuilt) return { dated: 0, rebuilt: 0 };
   db.saveNow();
-  d.logs.unshift({ at: now, type: 'client',
-    message: `${dated} config(s) sold without an expiry date now have one, starting today` });
+  if (dated) {
+    d.logs.unshift({ at: now, type: 'client',
+      message: `${dated} config(s) sold without an expiry date now have one, starting today` });
+  }
+  if (rebuilt) {
+    d.logs.unshift({ at: now, type: 'client',
+      message: `${rebuilt} config(s) had no time limit at all; their term was read back from the orders that sold them` });
+  }
   if (d.logs.length > 500) d.logs.length = 500;
   await require('./xray').apply();
-  return { dated };
+  return { dated, rebuilt };
 }
 
 async function repairOrphanClients() {

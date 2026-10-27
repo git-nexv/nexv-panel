@@ -1253,7 +1253,20 @@ const OWNERS = {
 };
 const SECURITIES = { none: 'بدون امنیت', tls: 'tls', reality: 'reality' };
 
+const HOW_DATED = {
+  'its own order': 'سفارش خودش',
+  'the plan named on it': 'پلنی که رویش نوشته شده',
+  'the order placed when it was cut': 'سفارشی که موقع ساختش ثبت شده'
+};
+
 const PATTERNS = [
+  [/^(\d+) config\(s\) had no time limit at all; their term was read back from the orders that sold them$/,
+    (m) => `${m[1]} کانفیگ هیچ محدودیت زمانی نداشتند؛ مدتشان از روی سفارش‌هایی که فروخته شده‌اند بازخوانی شد`],
+  [/^(.+) was sold with no time limit at all; (\d+) days read back from (.+), counting from the day it was sold - which has already passed$/,
+    (m) => `${m[1]} بدون هیچ محدودیت زمانی فروخته شده بود؛ ${m[2]} روز از ${HOW_DATED[m[3]] || m[3]} بازخوانی شد، از روز فروش — که دیگر گذشته است`],
+  [/^(.+) was sold with no time limit at all; (\d+) days read back from (.+), counting from the day it was sold$/,
+    (m) => `${m[1]} بدون هیچ محدودیت زمانی فروخته شده بود؛ ${m[2]} روز از ${HOW_DATED[m[3]] || m[3]} بازخوانی شد، از روز فروش`],
+
   [/^there is no outbound called "(.+)"$/, (m) => `اوت‌باندی به نام «${m[1]}» وجود ندارد`],
   [/^could not reach Telegram through outbound "(.+)": (.+)\. Xray has to be running for the bot to use an outbound\.$/,
     (m) => `از طریق اوت‌باند «${m[1]}» نشد به تلگرام رسید: ${m[2]}. برای اینکه ربات از اوت‌باند استفاده کند، Xray باید روشن باشد.`],
