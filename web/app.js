@@ -1330,8 +1330,10 @@ function serverPasswordCard() {
      clock, which the admin can work out without opening the panel */
   const styleSel = el('select', { class: 'input' }, [
     el('option', { value: 'random', text: t('Twenty random characters') }),
-    el('option', { value: 'clock', text: t('The time in Iran, like 20/30') })
+    el('option', { value: 'clock', text: t('The time in Iran, like 20/30') }),
+    el('option', { value: 'totp', text: t('An authenticator code, read off your phone') })
   ]);
+  const totpBox = el('div', { class: 'notice hidden', style: 'margin-top:10px' });
   const secret = el('input', { type: 'text', placeholder: t('secret word'), style: 'max-width:200px' });
   const styleRow = el('div', { class: 'row', style: 'margin-top:12px;flex-wrap:wrap;gap:10px' });
   const sampleLine = el('div', { class: 'hint' });
@@ -1354,6 +1356,29 @@ function serverPasswordCard() {
     sampleLine.textContent = s.style === 'clock'
       ? `${t('Right now that would be')}: ${s.sample}`
       : '';
+    /*
+     * The authenticator side: the QR to scan, and the one thing that will
+     * otherwise waste an evening - Google's own app ignores the window length
+     * in the QR and always shows a thirty-second code, so it is the one app
+     * this cannot be used with. Said here rather than found at a login prompt.
+     */
+    totpBox.classList.toggle('hidden', s.style !== 'totp');
+    if (s.style === 'totp' && s.totp && s.totp.ready && totpBox.dataset.uri !== s.totp.uri) {
+      totpBox.dataset.uri = s.totp.uri;
+      totpBox.innerHTML = '';
+      const img = el('img', { alt: 'QR', src: s.totp.qr || '',
+        style: 'width:190px;height:190px;background:#fff;padding:8px;border-radius:12px' });
+      totpBox.append(
+        el('div', { style: 'margin-bottom:10px', text:
+          t('Scan this with Aegis, 2FAS or FreeOTP. Not with Google Authenticator — it ignores the window length and always shows a 30-second code, which will never match.') }),
+        img,
+        el('div', { class: 'hint', style: 'margin-top:10px', text:
+          `${t('Or type the key in by hand')}: ${s.totp.secret}` }),
+        el('div', { class: 'hint', text:
+          `${t('The code is the password for')} ${s.totp.periodHours} ${t('hours at a time')}.` })
+      );
+    }
+
     warnLine.classList.toggle('hidden', !s.weak);
     if (s.weak) {
       warnLine.textContent = t('A password that is only the clock has 1440 possibilities and is written on every watch in the country — anyone who knows the pattern can log straight in. Put a secret word in front of it: you still work it out from the time, they still cannot.');
@@ -1460,6 +1485,7 @@ function serverPasswordCard() {
     el('div', { class: 'hint', style: 'margin-top:16px', text: t('What the automatic change makes') }),
     styleRow,
     sampleLine,
+    totpBox,
     warnLine,
     el('div', { class: 'hint', style: 'margin-top:10px' }, [
       el('span', { text: t('This is the password you log in to the server with over SSH. If you turn on the automatic change, set up an SSH key first — otherwise the only way back in is this page.') })

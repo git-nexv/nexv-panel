@@ -530,10 +530,15 @@ function startJobs() {
 
   /*
    * The server's own password, when the admin has asked for it to change
-   * itself. Looked at every five minutes rather than set on a five-hour
-   * timer: a long interval starts again from zero on every panel restart, so
-   * on a box that restarts at all often it would never come round. The due
-   * time is stored, so this does not care how often the panel stops.
+   * itself. Looked at every minute rather than set on a five-hour timer: a
+   * long interval starts again from zero on every panel restart, so on a box
+   * that restarts at all often it would never come round. The due time is
+   * stored, so this does not care how often the panel stops.
+   *
+   * Every minute rather than every five because of the authenticator style,
+   * where the password has to change as the window turns: whatever this
+   * interval is, is how long the phone can be showing a code the server has
+   * not caught up with. A tick that finds nothing due costs a comparison.
    */
   setInterval(async () => {
     try {
@@ -542,7 +547,7 @@ function startJobs() {
     } catch (err) {
       console.error('[server] could not change the login password:', err.message);
     }
-  }, 300000).unref?.();
+  }, 60000).unref?.();
 
   // keep a cached public IP for link building when no domain is set
   const refreshIP = async () => {

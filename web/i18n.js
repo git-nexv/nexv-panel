@@ -311,6 +311,11 @@ const FA = {
   'This decides what the next automatic password will be.': 'این تعیین می‌کند رمز خودکار بعدی چه باشد.',
   'A password that is only the clock has 1440 possibilities and is written on every watch in the country \u2014 anyone who knows the pattern can log straight in. Put a secret word in front of it: you still work it out from the time, they still cannot.': 'رمزی که فقط ساعت باشد ۱۴۴۰ حالت بیشتر ندارد و روی ساعت همه نوشته شده — هرکس الگو را بداند مستقیم وارد می‌شود. یک کلمه‌ی رمزی جلویش بگذارید: شما همچنان از روی ساعت حسابش می‌کنید، او همچنان نمی‌تواند.',
   'Forgotten it? You are not locked out. Press \"Random one\" and the server gets a new password straight away \u2014 the old one is not needed. It will be shown here from then on. (Nothing can read the password the server has now: Linux keeps only a one-way hash of it.)': 'فراموشش کرده‌اید؟ پشت در نمانده‌اید. دکمه‌ی «یک رمز تصادفی» را بزنید تا همان لحظه رمز تازه روی سرور بنشیند — به رمز قبلی هیچ نیازی نیست. از آن به بعد همین‌جا نشانتان داده می‌شود. (رمز فعلی سرور را هیچ برنامه‌ای نمی‌تواند بخواند: لینوکس فقط یک هش یک‌طرفه از آن دارد.)',
+  'An authenticator code, read off your phone': 'کد اتنتیکیتور، از روی گوشی خودتان',
+  'Scan this with Aegis, 2FAS or FreeOTP. Not with Google Authenticator \u2014 it ignores the window length and always shows a 30-second code, which will never match.': 'این را با Aegis یا 2FAS یا FreeOTP اسکن کنید. با Google Authenticator نه — آن طول بازه را نادیده می‌گیرد و همیشه کد ۳۰ ثانیه‌ای نشان می‌دهد که هیچ‌وقت با رمز سرور یکی نمی‌شود.',
+  'Or type the key in by hand': 'یا کلید را دستی وارد کنید',
+  'The code is the password for': 'این کد به مدت',
+  'hours at a time': 'ساعت رمز سرور است',
   'Server password': 'رمز سرور',
   'Server login': 'کاربر سرور',
   'Change it by itself every 5 hours': 'هر ۵ ساعت خودش عوض شود',
@@ -1298,6 +1303,9 @@ const HOW_DATED = {
 };
 
 const PATTERNS = [
+  [/^the automatic password is now an authenticator code, (\d+) digits, changing every (\d+) hours$/,
+    (m) => `رمز خودکار از این به بعد کد اتنتیکیتور است، ${m[1]} رقمی، هر ${m[2]} ساعت عوض می‌شود`],
+
   [/^the automatic password is now the Tehran clock, with no secret word in front of it$/,
     () => 'رمز خودکار از این به بعد ساعت تهران است، بدون هیچ کلمه‌ی رمزی جلویش'],
   [/^the automatic password is now the Tehran clock, behind a secret word$/,

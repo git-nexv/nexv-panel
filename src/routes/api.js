@@ -1168,7 +1168,22 @@ async function confirmedAdmin(req, res) {
   return true;
 }
 
-router.get('/server/password', (req, res) => res.json(rootpw.status()));
+/**
+ * The status, plus the QR for the authenticator when there is one to scan.
+ * Drawn here because this is where the QR library already lives, and because
+ * a secret is easier to scan than to type.
+ */
+async function serverPasswordView() {
+  const out = rootpw.status();
+  if (out.totp && out.totp.uri) {
+    try {
+      out.totp.qr = await QRCode.toDataURL(out.totp.uri, { margin: 1, width: 380, errorCorrectionLevel: 'M' });
+    } catch (_) { out.totp.qr = ''; }
+  }
+  return out;
+}
+
+router.get('/server/password', async (req, res) => res.json(await serverPasswordView()));
 
 /** Set it to something chosen, or to something nobody has seen. */
 router.post('/server/password', async (req, res) => {
@@ -1179,7 +1194,7 @@ router.post('/server/password', async (req, res) => {
     /* the password itself is never written to the log - the log is shown on a
        page, copied into messages and read by anybody who gets that far */
     logEvent('system', `the ${out.user} password was changed from the panel`);
-    return res.json(rootpw.status());
+    return res.json(await serverPasswordView());
   } catch (err) {
     return bad(res, err.message);
   }
@@ -1196,10 +1211,13 @@ router.put('/server/style', async (req, res) => {
   const body = req.body || {};
   if (!await confirmedAdmin(req, res)) return undefined;
   const out = rootpw.setStyle(body.style, body.secret);
-  logEvent('system', out.style === 'clock'
-    ? `the automatic password is now the Tehran clock${out.weak ? ', with no secret word in front of it' : ', behind a secret word'}`
-    : 'the automatic password is now twenty random characters');
-  return res.json(out);
+  const said = {
+    clock: `the automatic password is now the Tehran clock${out.weak ? ', with no secret word in front of it' : ', behind a secret word'}`,
+    totp: `the automatic password is now an authenticator code, ${out.totp.digits} digits, changing every ${out.totp.periodHours} hours`,
+    random: 'the automatic password is now twenty random characters'
+  };
+  logEvent('system', said[out.style] || said.random);
+  return res.json(await serverPasswordView());
 });
 
 router.put('/server/auto-rotate', async (req, res) => {
@@ -1211,7 +1229,7 @@ router.put('/server/auto-rotate', async (req, res) => {
   logEvent('system', on
     ? `the server password will now change itself every ${out.everyHours} hours`
     : 'the server password will no longer change itself');
-  return res.json(out);
+  return res.json(await serverPasswordView());
 });
 
 /** Whether a newer panel has been published. Never fails the page. */
