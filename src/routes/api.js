@@ -452,13 +452,23 @@ router.put('/bot', async (req, res) => {
 
   if (body.pricePerGB !== undefined) b.pricePerGB = Math.max(0, num(body.pricePerGB));
   if (body.trial && typeof body.trial === 'object') {
-    b.trial = {
+    /*
+     * Written over the block that is already there, not in place of it.
+     *
+     * The record of who has already had a trial lives in this same object,
+     * beside the settings - and replacing the object wholesale threw it away.
+     * So pressing Save on the Bot page, even without changing anything about
+     * the trial, handed every person who had ever taken one the right to take
+     * another. The ledger is the whole point of the feature: a trial is a
+     * hundred megabytes for a day, so the config itself is gone within hours
+     * and the record is all that is left to go on.
+     */
+    b.trial = Object.assign({}, b.trial, {
       enable: body.trial.enable !== false,
       mb: Math.max(1, num(body.trial.mb, 100)),
       days: Math.max(1, num(body.trial.days, 1)),
-      inboundId: body.trial.inboundId || '',
       oncePerUser: body.trial.oncePerUser !== false
-    };
+    });
   }
   if (body.custom && typeof body.custom === 'object') {
     b.custom = {
