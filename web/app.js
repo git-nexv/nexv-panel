@@ -1266,102 +1266,6 @@ async function drawCertWarning(host) {
 }
 
 /**
- * Has somebody been in this server.
- *
- * This reads and reports and never deletes, which is the point rather than
- * timidity. On a server you suspect, the files are the evidence of how it was
- * got into: removing a backdoor the moment it appears destroys the record,
- * usually leaves the way in open, and on a false positive takes a working
- * system with it. So the findings are laid out and the admin decides.
- */
-function securityCard() {
-  const card = el('div', { class: 'card', style: 'grid-column:1/-1' });
-  const list = el('div', { class: 'stack', style: 'margin-top:12px' });
-  const summary = el('div', { class: 'muted' });
-  const quickBtn = el('button', { class: 'btn', text: 'Check now' });
-  const deepBtn = el('button', { class: 'btn primary', text: 'Check the OS files too' });
-  let timer = null;
-
-  const RANK = { high: 0, medium: 1, low: 2, info: 3 };
-  const TONE = { high: 'danger', medium: 'warn', low: '', info: '' };
-
-  const paint = (s) => {
-    list.innerHTML = '';
-    const busy = s.running;
-    quickBtn.disabled = busy;
-    deepBtn.disabled = busy;
-
-    if (busy) {
-      summary.textContent = t('Looking through the server… the OS file check takes a minute or two.');
-      return;
-    }
-    if (s.error) { summary.textContent = s.error; return; }
-    if (!s.result) {
-      summary.textContent = t('Not checked yet. "Check now" is quick; the OS check walks every packaged file and takes a minute or two.');
-      return;
-    }
-
-    const checks = [...s.result.checks].sort((a, b) => RANK[a.severity] - RANK[b.severity]);
-    const loud = checks.filter((c) => c.severity === 'high').length;
-    summary.textContent = loud
-      ? `${loud} ${t('thing(s) worth acting on')} · ${t('checked')} ${ago(s.result.at)}`
-      : `${t('Nothing alarming found')} · ${t('checked')} ${ago(s.result.at)}`
-        + (s.result.deep ? '' : ` · ${t('the OS files were not checked')}`);
-
-    for (const c of checks) {
-      const body = el('div', { class: 'stack', style: 'gap:4px;margin-top:8px' });
-      for (const item of c.items.slice(0, 40)) {
-        body.append(el('div', { class: 'hint', style: 'word-break:break-all' },
-          [el('strong', { text: item.what }), el('span', { text: ` — ${item.detail}` })]));
-      }
-      if (c.items.length > 40) {
-        body.append(el('div', { class: 'hint', text: `… ${t('and')} ${c.items.length - 40} ${t('more')}` }));
-      }
-      list.append(el('div', { class: `notice ${TONE[c.severity] || ''}` }, [
-        el('div', { class: 'between' }, [
-          el('strong', { text: t(c.title) }),
-          el('span', { class: 'muted', text: c.clean ? '✓' : String(c.items.length) })
-        ]),
-        el('div', { class: 'hint', style: 'margin-top:6px', text: c.summary }),
-        c.items.length ? body : null
-      ]));
-    }
-
-    list.append(el('div', { class: 'hint', style: 'margin-top:12px', text:
-      t('None of this is a guarantee. Somebody good enough edits the package list as well, and the only real answer to a server you cannot trust is a fresh one with the data moved across by hand.') }));
-  };
-
-  const poll = async () => {
-    try {
-      const s = await api.get('/audit');
-      paint(s);
-      if (s.running && !timer) timer = setInterval(poll, 3000);
-      if (!s.running && timer) { clearInterval(timer); timer = null; }
-    } catch (err) { summary.textContent = err.message; }
-  };
-
-  const begin = async (deep) => {
-    try {
-      paint(await api.post('/audit/scan', { deep }));
-      if (!timer) timer = setInterval(poll, 3000);
-    } catch (err) { toast(err.message, 'err'); }
-  };
-  quickBtn.onclick = () => begin(false);
-  deepBtn.onclick = () => begin(true);
-
-  card.append(
-    el('div', { class: 'between', style: 'margin-bottom:4px' }, [
-      el('strong', { text: 'Security check' }),
-      el('div', { class: 'row', style: 'gap:8px' }, [quickBtn, deepBtn])
-    ]),
-    summary,
-    list
-  );
-  poll();
-  return card;
-}
-
-/**
  * Who is signed in to this panel, and from where.
  *
  * One question, really: is any of these not mine. So each row carries the
@@ -1742,7 +1646,6 @@ async function renderDashboard(view) {
     ]),
     serverPasswordCard(),
     sessionsCard(),
-    securityCard(),
     leftoverFilesCard()
   );
 
