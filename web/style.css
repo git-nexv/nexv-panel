@@ -356,7 +356,14 @@ button, input, select, textarea { font: inherit; color: inherit; }
   position: sticky; z-index: 40;
   top: max(10px, env(safe-area-inset-top));
   display: flex; align-items: center; gap: 10px;
-  margin: 10px 14px 0;
+  /*
+   * The resting position has to clear the status bar as well as the stuck
+   * one. Added to the home screen the panel runs with a translucent status
+   * bar, so the page begins at the very top of the screen and a flat 10px
+   * margin put the bar under the clock and the battery - it only moved clear
+   * once something was scrolled and the sticky offset took over.
+   */
+  margin: max(10px, env(safe-area-inset-top)) 14px 0;
   padding: 8px 10px 8px 16px;
   border-radius: 999px;
   border: 1px solid var(--glass-edge);
@@ -560,6 +567,16 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .notice .chip { color: inherit; }
 input, select, textarea {
+  /*
+   * Each line finds its own direction from its first real letter.
+   *
+   * Without this a Persian plan name that starts with digits - "10 گیگ | 30
+   * روزه" - is laid out as one left-to-right paragraph, and the leading
+   * number is pushed to the far end: the admin types one thing and the box
+   * shows another. plaintext is dir="auto" done per line, which is what a
+   * textarea full of Persian guide text needs as well.
+   */
+  unicode-bidi: plaintext;
   width: 100%;
   padding: 10px 12px;
   background: var(--surface);
@@ -580,7 +597,14 @@ select { appearance: none; background-image: none; cursor: pointer; }
   border-color: rgba(16, 24, 45, .16);
   box-shadow: inset 0 1px 2px rgba(16, 24, 45, .05);
 }
-textarea { resize: vertical; min-height: 90px; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 12.5px; }
+/* Vazirmatn before the monospace faces: the guide screens are Persian with
+   HTML tags in them, and a mono stack with no Persian glyphs renders every
+   letter from a fallback at the wrong width, which is what made that text
+   look broken apart */
+textarea {
+  resize: vertical; min-height: 90px; font-size: 12.5px;
+  font-family: 'Vazirmatn', ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
 
 .switch { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; user-select: none; }
 .switch input { display: none; }
@@ -1282,6 +1306,7 @@ tr.filter-empty td { text-align: center; padding: 30px 16px; }
 .topbar {
   position: sticky;
   top: max(10px, env(safe-area-inset-top));
+  margin-top: max(10px, env(safe-area-inset-top));
 }
 
 /*
@@ -2209,3 +2234,10 @@ td .row-actions { display: inline-flex; width: auto; }
 /* the Xray chip, when it has something to tell you */
 .chip.chip-why { cursor: pointer; }
 .chip.chip-why:hover { border-color: var(--danger); }
+
+/*
+ * Anything the admin or a buyer typed, shown as plain text: a plan name, a
+ * client name, a remark. Same reason as the fields above - a name beginning
+ * with a number reads back to front without it.
+ */
+.user-text { unicode-bidi: plaintext; }

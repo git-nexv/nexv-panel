@@ -390,6 +390,19 @@ function botView() {
 
 router.get('/bot', (req, res) => res.json(botView()));
 
+/**
+ * Can the bot reach the admin at all? Asked on demand from the Bot page,
+ * because the answer is a round trip to Telegram and the page is opened far
+ * more often than the admin id is changed.
+ */
+router.get('/bot/admin-check', async (req, res) => {
+  try {
+    res.json(await telegram.checkAdmin());
+  } catch (err) {
+    res.json({ ok: false, why: err.message });
+  }
+});
+
 router.put('/bot', async (req, res) => {
   const b = telegram.bot();
   const body = req.body || {};

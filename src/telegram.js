@@ -1775,14 +1775,48 @@ async function toSupport(ctx, message) {
    * client and is awkward on a phone: the button puts the admin straight into
    * answering this person, and a plain reply still works as it always did.
    */
-  const header = await send(admin, [
-    '<b>💬 پیام پشتیبانی</b>',
-    whoLine(ctx),
-    '',
-    servicesLine(ctx.userId),
-    '',
-    'برای پاسخ، دکمه‌ی زیر را بزنید یا روی همین پیام ریپلای کنید.'
-  ].join('\n'), [[{ text: '✍️ پاسخ به این کاربر', callback_data: `b:answer:${ctx.userId}` }]]);
+  /*
+   * Sent through call() rather than send(), because send() swallows whatever
+   * Telegram says and hands back nothing. That is what made this look broken:
+   * the message to the admin failed, the failure went nowhere, and the buyer
+   * was told their message had been delivered with a tick. A buyer who is
+   * told it arrived does not send it again, and the admin never learns there
+   * was anything to answer.
+   *
+   * The usual reason is Telegram's own rule: a bot may not open a chat with
+   * somebody who has never pressed Start on it. An admin id that was typed
+   * into the panel and never used to message the bot is unreachable, and no
+   * amount of retrying changes that - which is why the reason is kept and
+   * shown on the Bot page rather than just logged.
+   */
+  let header;
+  try {
+    header = await call('sendMessage', {
+      chat_id: admin,
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+      text: [
+        '<b>💬 پیام پشتیبانی</b>',
+        whoLine(ctx),
+        '',
+        servicesLine(ctx.userId),
+        '',
+        'برای پاسخ، دکمه‌ی زیر را بزنید یا روی همین پیام ریپلای کنید.'
+      ].join('\n'),
+      reply_markup: { inline_keyboard: styled([[{ text: '✍️ پاسخ به این کاربر', callback_data: `b:answer:${ctx.userId}` }]]) }
+    });
+    runtime.sent++;
+    runtime.adminError = '';
+  } catch (err) {
+    runtime.error = err.message;
+    runtime.adminError = err.message;
+    db.data.logs.unshift({ at: Date.now(), type: 'bot',
+      message: `a support message could not be delivered to the admin (${admin}): ${err.message}` });
+    if (db.data.logs.length > 500) db.data.logs.length = 500;
+    db.save();
+    await send(ctx.chatId, 'پیام شما فرستاده نشد — پشتیبانی در دسترس نیست. کمی بعد دوباره امتحان کنید.');
+    return false;
+  }
   rememberRelay(header && header.message_id, ctx.userId);
 
   /*
@@ -3096,6 +3130,7 @@ function stop() {
 }
 
 function status() {
+  const b = bot();
   return {
     running: runtime.running,
     username: runtime.me ? runtime.me.username : '',
@@ -3103,8 +3138,50 @@ function status() {
     startedAt: runtime.startedAt,
     updates: runtime.seen,
     sent: runtime.sent,
-    pendingOrders: bot().orders.filter((o) => o.status === 'pending').length
+    pendingOrders: b.orders.filter((o) => o.status === 'pending').length,
+    /* where support mail goes, and whether the last attempt to reach it
+       worked - an admin id the bot cannot message is the single most common
+       reason a panel looks like it is dropping support messages */
+    adminChat: adminChat(),
+    adminError: runtime.adminError || ''
   };
+}
+
+/**
+ * Can the bot actually message the admin?
+ *
+ * getChat is the cheap way to ask: it answers for a chat the bot is allowed
+ * to open and refuses for one it is not, without sending anybody anything.
+ * The refusal is the useful part - Telegram will not let a bot write to
+ * somebody who has never pressed Start on it, and that is a thing the admin
+ * has to go and do, not something the panel can fix for them.
+ */
+async function checkAdmin() {
+  const b = bot();
+  if (!b.token) return { ok: false, why: 'no bot token is set' };
+  const who = adminChat();
+  if (!who) {
+    return {
+      ok: false,
+      why: b.adminId
+        ? 'the admin is set by @username, which a bot cannot message. Put the numeric id here, or open the bot as the admin and press Start.'
+        : 'no admin has been set'
+    };
+  }
+  try {
+    const chat = await call('getChat', { chat_id: who });
+    runtime.adminError = '';
+    return { ok: true, who, name: chat.first_name || chat.title || chat.username || String(who) };
+  } catch (err) {
+    runtime.adminError = err.message;
+    return {
+      ok: false,
+      who,
+      why: /not found|chat not found|initiate/i.test(err.message)
+        ? `the bot cannot open a chat with ${who}. Open the bot as that account and press Start - Telegram does not let a bot message somebody who never has.`
+        : err.message
+    };
+  }
 }
 
 /** Bring the bot back up after a panel restart, if it was running before. */
@@ -3451,7 +3528,7 @@ function nextBackupAt() {
 }
 
 module.exports = {
-  bot, defaults, starterScreens, migrateStarter, migrateUsageButton, migrateHelp, start, stop, status, whoAmI, resume,
+  bot, defaults, starterScreens, checkAdmin, migrateStarter, migrateUsageButton, migrateHelp, start, stop, status, whoAmI, resume,
   resetTrials, trialsTaken, repairOrphanClients, dateUndatedClients, customTerms,
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
   sendBackup, backupStatus, backupSettings, backupTimes, watchBackups, minutesOf, nextBackupAt, backupTick,

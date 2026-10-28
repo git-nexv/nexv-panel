@@ -6057,8 +6057,37 @@ async function renderBot(view) {
     full: true,
     hint: data.hasToken ? `A token is saved (${data.tokenHint}). Type a new one to replace it.` : 'Talk to @BotFather, send /newbot, and paste the token here.'
   });
-  formField(setupGrid, 'Admin', admin, {
-    hint: 'Numeric id or @username. Send /id to your bot to learn your id.'
+  /*
+   * Whether the bot can actually write to that admin.
+   *
+   * Telegram will not let a bot open a chat with somebody who has never
+   * pressed Start on it, so an id typed in here and never used is a support
+   * inbox that silently goes nowhere. Asked on demand rather than on every
+   * page load, since it is a round trip to Telegram.
+   */
+  const adminState = el('div', { class: 'hint', style: 'margin-top:6px' });
+  const adminTest = el('button', { class: 'btn ghost', text: 'Can the bot reach you?' });
+  adminTest.onclick = async () => {
+    adminState.className = 'hint';
+    adminState.textContent = t('Asking Telegram\u2026');
+    try {
+      const out = await api.get('/bot/admin-check');
+      adminState.className = out.ok ? 'notice ok' : 'notice danger';
+      adminState.style.marginTop = '8px';
+      adminState.textContent = out.ok
+        ? `${t('Yes \u2014 support messages will reach')} ${out.name}`
+        : out.why;
+    } catch (err) {
+      adminState.className = 'notice danger';
+      adminState.textContent = err.message;
+    }
+  };
+  formField(setupGrid, 'Admin', el('div', { class: 'stack', style: 'gap:8px' }, [
+    admin,
+    el('div', { class: 'row' }, [adminTest]),
+    adminState
+  ]), {
+    hint: 'Numeric id or @username. Send /id to your bot to learn your id. A bot cannot message an @username, and cannot message anybody who has never pressed Start on it \u2014 so open your bot as yourself and press Start, then test it here.'
   });
   formField(setupGrid, 'Brand name', brand, { hint: 'Used wherever {brand} appears' });
   formField(setupGrid, 'Currency', currency);
@@ -6210,7 +6239,7 @@ async function renderBot(view) {
          when an inbound is replaced */
       plansBox.append(el('div', { class: 'card' }, [
         el('div', { class: 'between', style: 'margin-bottom:12px' }, [
-          el('strong', { text: plan.name || 'Plan' }),
+          el('strong', { class: 'user-text', text: plan.name || 'Plan' }),
           el('button', {
             class: 'btn icon danger', title: 'Remove', html: icon('trash'),
             onclick: () => { draft.plans.splice(index, 1); drawPlans(); }

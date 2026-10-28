@@ -325,6 +325,13 @@ const FA = {
   'Every other device was signed out': 'همه‌ی دستگاه‌های دیگر خارج شدند',
   'Signed in from': 'ورودش از',
   'but is being used from': 'بوده ولی الان از',
+  'Can the bot reach you?': 'ربات می‌تواند به شما پیام بدهد؟',
+  'Asking Telegram\u2026': 'در حال پرسیدن از تلگرام…',
+  'Yes \u2014 support messages will reach': 'بله — پیام‌های پشتیبانی می‌رسد به',
+  'Numeric id or @username. Send /id to your bot to learn your id. A bot cannot message an @username, and cannot message anybody who has never pressed Start on it \u2014 so open your bot as yourself and press Start, then test it here.': 'آیدی عددی یا @یوزرنیم. برای دیدن آیدی‌تان به ربات /id بفرستید. ربات نه به @یوزرنیم می‌تواند پیام بدهد و نه به کسی که تا حالا روی ربات Start نزده — پس ربات را با حساب خودتان باز کنید، Start بزنید، و بعد اینجا تستش کنید.',
+  'no admin has been set': 'هیچ ادمینی تنظیم نشده',
+  'no bot token is set': 'توکن ربات تنظیم نشده',
+  'the admin is set by @username, which a bot cannot message. Put the numeric id here, or open the bot as the admin and press Start.': 'ادمین با @یوزرنیم تنظیم شده و ربات نمی‌تواند به یوزرنیم پیام بدهد. آیدی عددی را اینجا بگذارید، یا ربات را با حساب ادمین باز کنید و Start بزنید.',
   'Files': 'فایل‌ها',
   'Scan again': 'بررسی دوباره',
   'Clean the selected': 'پاک کردن موارد انتخاب‌شده',
@@ -1313,6 +1320,11 @@ const HOW_DATED = {
 };
 
 const PATTERNS = [
+  [/^the bot cannot open a chat with (\d+)\. Open the bot as that account and press Start - Telegram does not let a bot message somebody who never has\.$/,
+    (m) => `ربات نمی‌تواند با ${m[1]} چت باز کند. ربات را با همان حساب باز کنید و Start بزنید — تلگرام اجازه نمی‌دهد رباتی به کسی پیام بدهد که هیچ‌وقت رویش Start نزده.`],
+  [/^a support message could not be delivered to the admin \((.+)\): (.+)$/,
+    (m) => `یک پیام پشتیبانی به ادمین (${m[1]}) نرسید: ${m[2]}`],
+
   [/^(\d+) account\(s\) besides root have user id 0 - they are root under another name$/,
     (m) => `${m[1]} حساب غیر از root شناسه‌ی کاربری ۰ دارند — یعنی با اسم دیگری root هستند`],
   [/^(\d+) SSH key\(s\) can log in\. Every one you do not recognise is a way in that a password change does not close\.$/,
