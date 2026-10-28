@@ -2255,12 +2255,26 @@ async function sendConfig(chatId, client, title, extra) {
    * there is, the picture goes first with a line of its own and the configs
    * follow as a real message - two bubbles, and the thing actually folds.
    */
-  const folds = text.includes('<blockquote');
+  /*
+   * One bubble: the QR and everything about the config in a single message.
+   *
+   * This is a straight trade and it is worth writing down, because it was
+   * made the other way round once already. Telegram renders a photo's caption
+   * flat - a quote in one keeps its bar but not its fold, since the caption
+   * already has a "show more" of its own. So the configs can be folded, or
+   * they can be in the same bubble as the picture, and not both. Together is
+   * what was asked for, so the quote stays in the markup and does whatever
+   * the client does with it, and the picture carries the words.
+   *
+   * Two messages only when the caption cannot hold it: Telegram caps one at
+   * 1024 characters of visible text, and a config too long for that is still
+   * a config that has to arrive.
+   */
   const deliver = async (body, withQr) => {
     if (withQr) {
       try {
         const png = await qrPng(url);
-        if (png && !folds && visibleLength(body) <= 1000) {
+        if (png && visibleLength(body) <= 1000) {
           return await uploadPhoto(chatId, 'sub.png', png, body, keys);
         }
         if (png) await uploadPhoto(chatId, 'sub.png', png, '🔗 لینک اشتراک شما');
