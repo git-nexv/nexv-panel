@@ -28,6 +28,7 @@ const paygate = require('../paygate');
 const payapi = require('../payapi');
 const rootpw = require('../rootpw');
 const leftovers = require('../leftovers');
+const audit = require('../audit');
 
 const router = express.Router();
 
@@ -1149,6 +1150,25 @@ async function statusView(req, res) {
 router.get('/status', statusView);
 
 router.get('/logs', (req, res) => res.json(db.data.logs.slice(0, 200)));
+
+/* ------------------------------ security check --------------------------- */
+
+/**
+ * Has somebody been in this server.
+ *
+ * Reads and reports; it never removes anything. On a box you suspect, the
+ * files are the evidence of how it was got into - deleting a backdoor on
+ * sight destroys the record, usually leaves the door open, and on a false
+ * positive takes a working system with it.
+ */
+router.get('/audit', (req, res) => res.json(audit.last()));
+
+router.post('/audit/scan', (req, res) => {
+  const deep = !!(req.body || {}).deep;
+  const out = audit.start({ deep, budgetMs: 240000 });
+  if (out.started) logEvent('system', deep ? 'a deep security check was started' : 'a security check was started');
+  res.json(Object.assign(out, audit.last()));
+});
 
 /* --------------------------------- sessions ------------------------------ */
 
