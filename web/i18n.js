@@ -310,6 +310,7 @@ const FA = {
   'Change how the automatic password is made': 'تغییر نحوه‌ی ساخت رمز خودکار',
   'This decides what the next automatic password will be.': 'این تعیین می‌کند رمز خودکار بعدی چه باشد.',
   'A password that is only the clock has 1440 possibilities and is written on every watch in the country \u2014 anyone who knows the pattern can log straight in. Put a secret word in front of it: you still work it out from the time, they still cannot.': 'رمزی که فقط ساعت باشد ۱۴۴۰ حالت بیشتر ندارد و روی ساعت همه نوشته شده — هرکس الگو را بداند مستقیم وارد می‌شود. یک کلمه‌ی رمزی جلویش بگذارید: شما همچنان از روی ساعت حسابش می‌کنید، او همچنان نمی‌تواند.',
+  'Forgotten it? You are not locked out. Press \"Random one\" and the server gets a new password straight away \u2014 the old one is not needed. It will be shown here from then on. (Nothing can read the password the server has now: Linux keeps only a one-way hash of it.)': 'فراموشش کرده‌اید؟ پشت در نمانده‌اید. دکمه‌ی «یک رمز تصادفی» را بزنید تا همان لحظه رمز تازه روی سرور بنشیند — به رمز قبلی هیچ نیازی نیست. از آن به بعد همین‌جا نشانتان داده می‌شود. (رمز فعلی سرور را هیچ برنامه‌ای نمی‌تواند بخواند: لینوکس فقط یک هش یک‌طرفه از آن دارد.)',
   'Server password': 'رمز سرور',
   'Server login': 'کاربر سرور',
   'Change it by itself every 5 hours': 'هر ۵ ساعت خودش عوض شود',

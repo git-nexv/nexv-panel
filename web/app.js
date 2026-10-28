@@ -1336,6 +1336,7 @@ function serverPasswordCard() {
   const styleRow = el('div', { class: 'row', style: 'margin-top:12px;flex-wrap:wrap;gap:10px' });
   const sampleLine = el('div', { class: 'hint' });
   const warnLine = el('div', { class: 'notice danger hidden', style: 'margin-top:10px' });
+  const lostLine = el('div', { class: 'notice hidden', style: 'margin-top:10px' });
   const styleSave = el('button', { class: 'btn', text: 'Save' });
 
   let state_ = null;
@@ -1367,10 +1368,21 @@ function serverPasswordCard() {
         : `${t('Set')} ${when}`;
     } else {
       secretRow.classList.add('hidden');
-      whenLine.textContent = can
-        ? t('The panel cannot read the password this server already has — Linux keeps only a one-way hash of it, so nothing on the machine can. Set a new one here and it will be shown from then on.')
-        : `${t('Cannot be changed from here')}: ${s.why}`;
+      whenLine.textContent = can ? '' : `${t('Cannot be changed from here')}: ${s.why}`;
     }
+    /*
+     * The forgotten-password case, which is most of the reason anybody opens
+     * this card. Leading with what cannot be done reads as a dead end, and
+     * the admin goes away still locked out - when the way back in is one key
+     * away and does not need the old password at all.
+     */
+    lostLine.classList.toggle('hidden', s.known || !can);
+    if (!s.known && can) {
+      lostLine.textContent = t('Forgotten it? You are not locked out. Press "Random one" and the server gets a new password straight away — the old one is not needed. It will be shown here from then on. (Nothing can read the password the server has now: Linux keeps only a one-way hash of it.)');
+    }
+    // the way out of a lockout is the obvious key while there is nothing to show
+    randomBtn.className = `btn ${s.known ? '' : 'primary'}`;
+    saveBtn.className = `btn ${s.known ? 'primary' : ''}`;
     auto.checked = !!s.autoRotate;
   };
 
@@ -1441,6 +1453,7 @@ function serverPasswordCard() {
       el('label', { class: 'switch' }, [auto, el('span', { class: 'track' }), autoLabel])
     ]),
     whoLine,
+    lostLine,
     el('div', { style: 'margin-top:10px' }, [secretRow]),
     whenLine,
     el('div', { class: 'row', style: 'margin-top:14px;flex-wrap:wrap;gap:10px' }, [field, saveBtn, randomBtn]),
