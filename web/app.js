@@ -1266,37 +1266,6 @@ async function drawCertWarning(host) {
 }
 
 /**
- * Ask for the admin's own panel password, for something worth confirming.
- *
- * Resolves with what they typed, or null if they walked away. Nothing in here
- * is remembered: it is sent once, with the one request it is confirming.
- */
-function askPanelPassword(title, subtitle, verb) {
-  return new Promise((resolve) => {
-    const field = el('input', { type: 'password', autocomplete: 'current-password' });
-    let answered = false;
-    const done = (value) => { if (!answered) { answered = true; resolve(value); } };
-    modal({
-      title,
-      subtitle,
-      body: el('div', { class: 'stack' }, [
-        el('div', { class: 'field' }, [el('label', { text: t('Your panel password') }), field]),
-        el('div', { class: 'hint', text: 'The password you signed in to this panel with — not the server’s.' })
-      ]),
-      actions: [{
-        label: verb || 'Confirm',
-        kind: 'primary',
-        /* answered before closed: close() now reports the dismissal, and a
-           dismissal arriving first would resolve this with nothing */
-        onClick: (close) => { done(field.value); close(); }
-      }],
-      onClose: () => done(null)
-    });
-    setTimeout(() => field.focus(), 60);
-  });
-}
-
-/**
  * The server's own login password.
  *
  * The honest part of this card is what it says when it has nothing to show.
@@ -1326,20 +1295,16 @@ function serverPasswordCard() {
   const auto = el('input', { type: 'checkbox' });
   const autoLabel = el('span', { class: 'muted', text: t('Change it by itself every 5 hours') });
 
-  /* what the automatic change makes: twenty random characters, or the Tehran
-     clock, which the admin can work out without opening the panel */
-  const styleSel = el('select', { class: 'input' }, [
-    el('option', { value: 'random', text: t('Twenty random characters') }),
-    el('option', { value: 'clock', text: t('The time in Iran, like 20/30') }),
-    el('option', { value: 'totp', text: t('An authenticator code, read off your phone') })
-  ]);
-  const totpBox = el('div', { class: 'notice hidden', style: 'margin-top:10px' });
-  const secret = el('input', { type: 'text', placeholder: t('secret word'), style: 'max-width:200px' });
-  const styleRow = el('div', { class: 'row', style: 'margin-top:12px;flex-wrap:wrap;gap:10px' });
-  const sampleLine = el('div', { class: 'hint' });
-  const warnLine = el('div', { class: 'notice danger hidden', style: 'margin-top:10px' });
+  /* shown only while the panel has no password to show, which is the state
+     somebody who has forgotten theirs arrives in */
   const lostLine = el('div', { class: 'notice hidden', style: 'margin-top:10px' });
-  const styleSave = el('button', { class: 'btn', text: 'Save' });
+
+  /* how often it changes itself; the switch above turns it on and off */
+  const hours = el('input', { type: 'number', min: '1', max: '720', style: 'max-width:110px' });
+  const hoursSave = el('button', { class: 'btn', text: 'Save' });
+  const hoursRow = el('div', { class: 'row', style: 'margin-top:12px;flex-wrap:wrap;gap:10px' }, [
+    hours, el('span', { class: 'muted', text: t('hours between changes') }), hoursSave
+  ]);
 
   let state_ = null;
 
@@ -1348,41 +1313,10 @@ function serverPasswordCard() {
     if (!s) return;
     whoLine.textContent = `${t('Server login')}: ${s.user}`;
     const can = s.manageable;
-    for (const node of [field, saveBtn, randomBtn, auto, styleSel, secret, styleSave]) node.disabled = !can;
-
-    styleSel.value = s.style;
-    if (document.activeElement !== secret) secret.value = s.secret;
-    secret.classList.toggle('hidden', s.style !== 'clock');
-    sampleLine.textContent = s.style === 'clock'
-      ? `${t('Right now that would be')}: ${s.sample}`
-      : '';
-    /*
-     * The authenticator side: the QR to scan, and the one thing that will
-     * otherwise waste an evening - Google's own app ignores the window length
-     * in the QR and always shows a thirty-second code, so it is the one app
-     * this cannot be used with. Said here rather than found at a login prompt.
-     */
-    totpBox.classList.toggle('hidden', s.style !== 'totp');
-    if (s.style === 'totp' && s.totp && s.totp.ready && totpBox.dataset.uri !== s.totp.uri) {
-      totpBox.dataset.uri = s.totp.uri;
-      totpBox.innerHTML = '';
-      const img = el('img', { alt: 'QR', src: s.totp.qr || '',
-        style: 'width:190px;height:190px;background:#fff;padding:8px;border-radius:12px' });
-      totpBox.append(
-        el('div', { style: 'margin-bottom:10px', text:
-          t('Scan this with Aegis, 2FAS or FreeOTP. Not with Google Authenticator — it ignores the window length and always shows a 30-second code, which will never match.') }),
-        img,
-        el('div', { class: 'hint', style: 'margin-top:10px', text:
-          `${t('Or type the key in by hand')}: ${s.totp.secret}` }),
-        el('div', { class: 'hint', text:
-          `${t('The code is the password for')} ${s.totp.periodHours} ${t('hours at a time')}.` })
-      );
-    }
-
-    warnLine.classList.toggle('hidden', !s.weak);
-    if (s.weak) {
-      warnLine.textContent = t('A password that is only the clock has 1440 possibilities and is written on every watch in the country — anyone who knows the pattern can log straight in. Put a secret word in front of it: you still work it out from the time, they still cannot.');
-    }
+    for (const node of [field, saveBtn, randomBtn, auto, hours, hoursSave]) node.disabled = !can;
+    // not while it is being typed in, or the cursor jumps on every refresh
+    if (document.activeElement !== hours) hours.value = s.everyHours;
+    autoLabel.textContent = `${t('Change it by itself every')} ${s.everyHours} ${t('hours')}`;
 
     if (s.known) {
       secretRow.classList.remove('hidden');
@@ -1418,11 +1352,9 @@ function serverPasswordCard() {
   reveal.addEventListener('change', paint);
   copyBtn.onclick = () => { if (state_ && state_.password) copy(state_.password); };
 
-  const change = async (payload, verb, title) => {
-    const confirmPw = await askPanelPassword(title, t('This changes the password of the server itself.'), verb);
-    if (confirmPw === null) return;
+  const change = async (payload) => {
     try {
-      state_ = await api.post('/server/password', Object.assign({ currentPassword: confirmPw }, payload));
+      state_ = await api.post('/server/password', payload);
       reveal.checked = true;
       paint();
       field.value = '';
@@ -1432,45 +1364,28 @@ function serverPasswordCard() {
 
   saveBtn.onclick = () => {
     if (!field.value) return toast(t('Type the new password first'), 'err');
-    return change({ password: field.value }, 'Set it', 'Set the server password');
+    return change({ password: field.value });
   };
+  randomBtn.onclick = () => change({ generate: true });
 
-  styleSel.addEventListener('change', () => {
-    // the secret-word box appears the moment the clock is chosen, before saving
-    secret.classList.toggle('hidden', styleSel.value !== 'clock');
-  });
-  styleSave.onclick = async () => {
-    const confirmPw = await askPanelPassword('Change how the automatic password is made',
-      t('This decides what the next automatic password will be.'), 'Save');
-    if (confirmPw === null) return;
+  /** Both the switch and the hours box save through the same call. */
+  const saveSchedule = async (on, everyHours) => {
     try {
-      state_ = await api.put('/server/style',
-        { style: styleSel.value, secret: secret.value, currentPassword: confirmPw });
+      state_ = await api.put('/server/auto-rotate', { on, everyHours });
       paint();
-      toast(t('Saved'));
-    } catch (err) { toast(err.message, 'err'); }
-  };
-  randomBtn.onclick = () => change({ generate: true }, 'Generate', 'Set a random server password');
-
-  auto.addEventListener('change', async () => {
-    const on = auto.checked;
-    let confirmPw = '';
-    if (on) {
-      const got = await askPanelPassword('Change the password by itself',
-        t('Every 5 hours the server gets a new password. Read it here when you need it.'), 'Turn it on');
-      if (got === null) { auto.checked = false; return; }
-      confirmPw = got;
-    }
-    try {
-      state_ = await api.put('/server/auto-rotate', { on, currentPassword: confirmPw });
-      if (on) reveal.checked = false;
-      paint();
-      toast(on ? t('It will change itself every 5 hours') : t('It will no longer change itself'));
+      toast(state_.autoRotate
+        ? `${t('It will change itself every')} ${state_.everyHours} ${t('hours')}`
+        : t('It will no longer change itself'));
     } catch (err) {
       auto.checked = !on;
       toast(err.message, 'err');
     }
-  });
+  };
+
+  auto.addEventListener('change', () => saveSchedule(auto.checked, hours.value));
+  hoursSave.onclick = () => saveSchedule(auto.checked, hours.value);
+  // Enter in the box is the same as pressing Save beside it
+  hours.addEventListener('keydown', (e) => { if (e.key === 'Enter') hoursSave.click(); });
 
   card.append(
     el('div', { class: 'between', style: 'margin-bottom:12px' }, [
@@ -1482,17 +1397,12 @@ function serverPasswordCard() {
     el('div', { style: 'margin-top:10px' }, [secretRow]),
     whenLine,
     el('div', { class: 'row', style: 'margin-top:14px;flex-wrap:wrap;gap:10px' }, [field, saveBtn, randomBtn]),
-    el('div', { class: 'hint', style: 'margin-top:16px', text: t('What the automatic change makes') }),
-    styleRow,
-    sampleLine,
-    totpBox,
-    warnLine,
+    hoursRow,
     el('div', { class: 'hint', style: 'margin-top:10px' }, [
       el('span', { text: t('This is the password you log in to the server with over SSH. If you turn on the automatic change, set up an SSH key first — otherwise the only way back in is this page.') })
     ])
   );
 
-  styleRow.append(styleSel, secret, styleSave);
   load();
   return card;
 }

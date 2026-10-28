@@ -22,12 +22,19 @@
  * What it would change is a backup: those leave the machine, they go to
  * Telegram, and one sitting in a chat must not carry the root password. The
  * backup strips it for exactly that reason.
+ *
+ * There was briefly a choice of what the automatic password should be made
+ * of - the Tehran clock, an authenticator code - and both are gone. The clock
+ * had 1440 possible values and was written on every watch in the country; the
+ * authenticator could not be a stored password at all, because a code lives
+ * for its window while /etc/shadow holds one value until something changes
+ * it. What is left is the one that was always right: a long random password,
+ * shown here, changed as often as the admin asks.
  */
 const crypto = require('crypto');
 const fs = require('fs');
 const { execFile } = require('child_process');
 const db = require('./db');
-const totp = require('./totp');
 
 /* No l/I/1 or O/0: this gets read off a phone screen and typed into a
    terminal, and a password nobody can transcribe is a lockout. */
@@ -39,9 +46,12 @@ const ZONE = 'Asia/Tehran';
 const FALLBACK_OFFSET_MINUTES = 210;
 const DEFAULT_LENGTH = 20;
 const MIN_LENGTH = 8;
-/* what the admin asked for; kept as a number so it can be changed later
-   without the stored settings meaning something different */
 const DEFAULT_EVERY_HOURS = 5;
+/* an hour at the short end and a month at the long: below an hour this stops
+   being a password and becomes a nuisance, and beyond a month "automatic" is
+   not really what is happening */
+const MIN_EVERY_HOURS = 1;
+const MAX_EVERY_HOURS = 24 * 30;
 
 /** Where this lives in the store, with its parents made if they are missing. */
 function settings() {
@@ -53,51 +63,11 @@ function settings() {
   if (!(Number(s.everyHours) > 0)) s.everyHours = DEFAULT_EVERY_HOURS;
   if (typeof s.password !== 'string') s.password = '';
   if (!(Number(s.setAt) >= 0)) s.setAt = 0;
-  /* 'random' is twenty unguessable characters; 'clock' is the Tehran time it
-     was set at; 'totp' is the authenticator code for the current window,
-     which the admin reads off their phone without opening the panel */
-  if (!['clock', 'random', 'totp'].includes(s.style)) s.style = 'random';
-  if (typeof s.secret !== 'string') s.secret = '';
-  if (typeof s.totpSecret !== 'string') s.totpSecret = '';
-  if (!(Number(s.totpDigits) >= 6)) s.totpDigits = 8;
+  /* settings written while the clock and authenticator styles existed carry
+     fields that mean nothing now; dropped on the first read rather than left
+     to puzzle whoever opens db.json next */
+  for (const gone of ['style', 'secret', 'totpSecret', 'totpDigits']) delete s[gone];
   return s;
-}
-
-/** The window length the authenticator is set up for, in seconds. */
-function totpPeriod() {
-  const s = settings();
-  return Math.max(1, Number(s.everyHours) || DEFAULT_EVERY_HOURS) * 3600;
-}
-
-/**
- * The code that is the password for the window holding this moment.
- *
- * Eight digits rather than six: this one stands for hours rather than thirty
- * seconds, so a hundred million beats a million by the only margin that
- * matters against somebody knocking on the SSH port.
- */
-function totpPassword(at) {
-  const s = settings();
-  if (!s.totpSecret) return '';
-  return totp.code(s.totpSecret, {
-    at: at || Date.now(), period: totpPeriod(), digits: Number(s.totpDigits) || 8
-  });
-}
-
-/** The hour and minute in Tehran, whatever this server's own clock is set to. */
-function tehranClock(at) {
-  const when = new Date(at || Date.now());
-  try {
-    const text = new Intl.DateTimeFormat('en-US', {
-      timeZone: ZONE, hour: 'numeric', minute: '2-digit', hourCycle: 'h23'
-    }).format(when);
-    const [h, m] = text.split(':');
-    return { hour: Number(h), minute: m };
-  } catch (_) {
-    // a Node without timezone data: do the arithmetic by hand
-    const shifted = new Date(when.getTime() + FALLBACK_OFFSET_MINUTES * 60000);
-    return { hour: shifted.getUTCHours(), minute: String(shifted.getUTCMinutes()).padStart(2, '0') };
-  }
 }
 
 /** The whole Tehran date and time, for the panel to show. */
@@ -112,29 +82,6 @@ function tehranStamp(at) {
     const shifted = new Date(Number(at) + FALLBACK_OFFSET_MINUTES * 60000);
     return shifted.toISOString().slice(0, 16).replace('T', ' ');
   }
-}
-
-/**
- * The clock as a password: the Tehran time it was set at, written the way a
- * watch shows it - 20/30, 2/38 - with no leading zero on the hour.
- *
- * This is worth being blunt about, because it is not a password in the sense
- * the rest of this file means. There are 1440 of them, the format is obvious
- * once anybody sees one, and the answer is written on every clock in the
- * country: somebody who knows the scheme does not have to guess at all. On a
- * server with a public address and password logins open, that is not a long
- * wait - it is the first thing an automated scan tries.
- *
- * The secret word is what makes it a password again. It sits in front of the
- * time and never changes, so the admin still works the whole thing out from
- * their own watch, while somebody who does not know the word gets nothing
- * from knowing the time. Empty, this is exactly what was asked for, and the
- * panel says plainly what that costs.
- */
-function clockPassword(at) {
-  const s = settings();
-  const { hour, minute } = tehranClock(at);
-  return `${s.secret || ''}${hour}/${minute}`;
 }
 
 /**
@@ -199,27 +146,17 @@ async function setPassword(password, user) {
   s.user = who;
   s.password = want;
   s.setAt = Date.now();
-  s.rotatedAt = 0;
   db.saveNow();
   return { user: who, at: s.setAt };
 }
 
-/**
- * Set it to the next one, whichever way the admin asked for.
- *
- * The length floor that setPassword enforces is not applied here: a clock
- * password is five characters by design and the admin chose that knowingly.
- */
+/** Set it to something nobody has ever seen, including whoever asked. */
 async function rotate() {
   const s = settings();
-  let next;
-  if (s.style === 'clock') next = clockPassword(Date.now());
-  else if (s.style === 'totp') next = totpPassword(Date.now()) || generate(DEFAULT_LENGTH);
-  else next = generate(DEFAULT_LENGTH);
+  const next = generate(DEFAULT_LENGTH);
   await apply(s.user || 'root', next);
   s.password = next;
   s.setAt = Date.now();
-  s.rotatedAt = s.setAt;
   db.saveNow();
   return { user: s.user, at: s.setAt };
 }
@@ -228,19 +165,18 @@ async function rotate() {
 function nextDue() {
   const s = settings();
   if (!s.autoRotate) return 0;
-  /*
-   * An authenticator's windows are counted from the Unix epoch, not from
-   * whenever this server last changed anything - so the change has to land on
-   * the window edge. Counting five hours from the last change instead would
-   * drift the server out of step with the phone, and the code on screen would
-   * stop being the password for minutes or hours at a time.
-   */
-  if (s.style === 'totp' && s.totpSecret) return totp.windowEnd(Date.now(), totpPeriod());
-  const every = Math.max(1, Number(s.everyHours) || DEFAULT_EVERY_HOURS) * 3600000;
+  const every = hoursOf(s.everyHours) * 3600000;
   /* counted from the last change of any kind, so setting one by hand puts the
      clock back to the start rather than being overwritten minutes later */
   const since = Number(s.setAt) || 0;
   return since ? since + every : Date.now();
+}
+
+/** A sane number of hours, whatever arrived. */
+function hoursOf(value) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_EVERY_HOURS;
+  return Math.min(MAX_EVERY_HOURS, Math.max(MIN_EVERY_HOURS, n));
 }
 
 /**
@@ -253,23 +189,8 @@ async function rotateIfDue() {
   const s = settings();
   if (!s.autoRotate) return { rotated: false };
   if (!canManage().ok) return { rotated: false };
-  const now = Date.now();
-  /*
-   * The stored password belongs to the window it was set in. If the panel was
-   * stopped across a window edge, waiting for the next one would leave the
-   * phone showing a code the server has never heard of for hours. So the
-   * window it was set in, not the clock, decides whether it is stale.
-   */
-  if (s.style === 'totp' && s.totpSecret) {
-    const period = totpPeriod();
-    if (totp.windowOf(Number(s.setAt) || 0, period) === totp.windowOf(now, period)) {
-      return { rotated: false };
-    }
-    await rotate();
-    return { rotated: true };
-  }
   const due = nextDue();
-  if (!due || now < due) return { rotated: false };
+  if (!due || Date.now() < due) return { rotated: false };
   await rotate();
   const d = db.data;
   d.logs = d.logs || [];
@@ -297,65 +218,30 @@ function status() {
     password: s.password || '',
     setAt: Number(s.setAt) || 0,
     autoRotate: !!s.autoRotate,
-    everyHours: Number(s.everyHours) || DEFAULT_EVERY_HOURS,
+    everyHours: hoursOf(s.everyHours),
+    minHours: MIN_EVERY_HOURS,
+    maxHours: MAX_EVERY_HOURS,
     nextAt: due,
-    style: s.style,
-    secret: s.secret || '',
-    /* the authenticator side: the secret to scan, what to scan it with, and
-       the code that is the password right now */
-    totp: {
-      ready: !!s.totpSecret,
-      secret: s.totpSecret || '',
-      digits: Number(s.totpDigits) || 8,
-      periodHours: Math.max(1, Number(s.everyHours) || DEFAULT_EVERY_HOURS),
-      uri: s.totpSecret ? totp.uri(s.totpSecret, {
-        label: `${s.user}@${require('os').hostname()}`,
-        issuer: 'NexV Panel',
-        digits: Number(s.totpDigits) || 8,
-        period: totpPeriod()
-      }) : '',
-      now: totpPassword(Date.now()),
-      windowEndsAt: s.totpSecret ? totp.windowEnd(Date.now(), totpPeriod()) : 0
-    },
-    /* what the next clock password would look like, so the choice can be
-       shown rather than described */
-    sample: clockPassword(Date.now()),
-    /* a clock password with no secret word in front of it is public: the
-       panel shows this as a warning rather than leaving it to be discovered */
-    weak: s.style === 'clock' && !s.secret,
     // the admin reads these on an Iranian clock, so they are written on one
     setAtText: tehranStamp(Number(s.setAt) || 0),
     nextAtText: tehranStamp(due)
   };
 }
 
-/** Turn the automatic change on or off. On, it starts counting from now. */
+/** Turn the automatic change on or off, and say how often. */
 function setAutoRotate(on, everyHours) {
   const s = settings();
   s.autoRotate = !!on;
-  if (Number(everyHours) > 0) s.everyHours = Math.min(24 * 30, Math.round(Number(everyHours)));
-  if (s.autoRotate && !s.setAt) s.setAt = Date.now();
-  db.saveNow();
-  return status();
-}
-
-/** Which kind of password the automatic change makes, and the secret word. */
-function setStyle(style, secret) {
-  const s = settings();
-  if (['clock', 'random', 'totp'].includes(style)) s.style = style;
-  // the authenticator needs something to be set up with, the moment it is picked
-  if (s.style === 'totp' && !s.totpSecret) s.totpSecret = totp.secret(20);
-  if (secret !== undefined && secret !== null) {
-    /* no colon or whitespace, for the same reason a typed password may not
-       have one: chpasswd reads a colon as the end of the user name */
-    s.secret = String(secret).replace(/[\s:]/g, '').slice(0, 32);
+  if (everyHours !== undefined && everyHours !== null && everyHours !== '') {
+    s.everyHours = hoursOf(everyHours);
   }
+  if (s.autoRotate && !s.setAt) s.setAt = Date.now();
   db.saveNow();
   return status();
 }
 
 module.exports = {
   settings, generate, canManage, setPassword, rotate, rotateIfDue,
-  setAutoRotate, setStyle, status, nextDue, clockPassword, totpPassword, totpPeriod, tehranClock, tehranStamp,
-  MIN_LENGTH, DEFAULT_EVERY_HOURS
+  setAutoRotate, status, nextDue, tehranStamp, hoursOf,
+  MIN_LENGTH, DEFAULT_EVERY_HOURS, MIN_EVERY_HOURS, MAX_EVERY_HOURS
 };
