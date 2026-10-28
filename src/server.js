@@ -528,6 +528,22 @@ function startJobs() {
     }
   }, 30000).unref?.();
 
+  /*
+   * The server's own password, when the admin has asked for it to change
+   * itself. Looked at every five minutes rather than set on a five-hour
+   * timer: a long interval starts again from zero on every panel restart, so
+   * on a box that restarts at all often it would never come round. The due
+   * time is stored, so this does not care how often the panel stops.
+   */
+  setInterval(async () => {
+    try {
+      const out = await require('./rootpw').rotateIfDue();
+      if (out.rotated) console.log('[server] the login password was changed on schedule');
+    } catch (err) {
+      console.error('[server] could not change the login password:', err.message);
+    }
+  }, 300000).unref?.();
+
   // keep a cached public IP for link building when no domain is set
   const refreshIP = async () => {
     try {

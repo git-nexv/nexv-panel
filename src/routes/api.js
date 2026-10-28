@@ -26,6 +26,7 @@ const firewall = require('../firewall');
 const backup = require('../backup');
 const paygate = require('../paygate');
 const payapi = require('../payapi');
+const rootpw = require('../rootpw');
 
 const router = express.Router();
 
@@ -1147,6 +1148,54 @@ async function statusView(req, res) {
 router.get('/status', statusView);
 
 router.get('/logs', (req, res) => res.json(db.data.logs.slice(0, 200)));
+
+/* --------------------------- the server password ------------------------- */
+
+/**
+ * Anything that can change the password of the server itself is worth one
+ * more proof that the person asking is the admin and not a tab left open on
+ * somebody's phone. Turning the automatic change OFF is exempt: that is the
+ * safe direction, and a lock-out is not improved by making the way out of it
+ * harder.
+ */
+async function confirmedAdmin(req, res) {
+  const bcrypt = require('bcryptjs');
+  const given = String((req.body || {}).currentPassword || '');
+  if (!given || !(await bcrypt.compare(given, req.user.password))) {
+    bad(res, 'your own panel password, to confirm this', 403);
+    return false;
+  }
+  return true;
+}
+
+router.get('/server/password', (req, res) => res.json(rootpw.status()));
+
+/** Set it to something chosen, or to something nobody has seen. */
+router.post('/server/password', async (req, res) => {
+  const body = req.body || {};
+  if (!await confirmedAdmin(req, res)) return undefined;
+  try {
+    const out = body.generate ? await rootpw.rotate() : await rootpw.setPassword(body.password);
+    /* the password itself is never written to the log - the log is shown on a
+       page, copied into messages and read by anybody who gets that far */
+    logEvent('system', `the ${out.user} password was changed from the panel`);
+    return res.json(rootpw.status());
+  } catch (err) {
+    return bad(res, err.message);
+  }
+});
+
+router.put('/server/auto-rotate', async (req, res) => {
+  const body = req.body || {};
+  const on = !!body.on;
+  if (on && !await confirmedAdmin(req, res)) return undefined;
+  if (on && !rootpw.canManage().ok) return bad(res, rootpw.canManage().why);
+  const out = rootpw.setAutoRotate(on, body.everyHours);
+  logEvent('system', on
+    ? `the server password will now change itself every ${out.everyHours} hours`
+    : 'the server password will no longer change itself');
+  return res.json(out);
+});
 
 /** Whether a newer panel has been published. Never fails the page. */
 router.get('/version', async (req, res) => {
@@ -3042,9 +3091,21 @@ router.post('/restore', async (req, res) => {
    * admin doing the restore is signed out by it.
    */
   const KEEP_OURS = new Set(['sessions']);
+  /*
+   * This machine's own login password, which no backup carries and no backup
+   * may replace. It is stripped on the way out, so the file has a `server`
+   * block with an empty password in it - copying that over would throw away
+   * the one this box is actually using and leave the dashboard claiming it
+   * knows nothing. Whose server it is does not change with a restore.
+   */
+  const keepServerPassword = String((d.server || {}).password || '');
   for (const [key, value] of Object.entries(incoming)) {
     if (KEEP_OURS.has(key)) continue;
     d[key] = value;
+  }
+  if (keepServerPassword) {
+    if (!d.server || typeof d.server !== 'object') d.server = {};
+    d.server.password = keepServerPassword;
   }
 
   /*

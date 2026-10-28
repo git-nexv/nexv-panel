@@ -7,11 +7,15 @@
  * bot can hand one over too now - on a schedule, or on demand - so the shape
  * of a backup had to stop being a detail of one HTTP handler.
  *
- * Two things never go in the file. The session secret, or every cookie this
- * server has ever issued would be forgeable from a backup that leaked; and
- * the sessions themselves, which belong to this machine and nowhere else.
- * Everything else does, the bot's token and plans included - a restore that
- * came back without them is not a restore.
+ * Three things never go in the file. The session secret, or every cookie this
+ * server has ever issued would be forgeable from a backup that leaked; the
+ * sessions themselves, which belong to this machine and nowhere else; and the
+ * server's own login password, because a backup is the one part of all this
+ * that leaves the machine - it is sent to Telegram and sits in a chat, and
+ * the root password of the box must not be in it. The rest of that setting
+ * travels, so a restore still knows whether the automatic change was on.
+ * Everything else goes in, the bot's token and plans included - a restore
+ * that came back without them is not a restore.
  */
 const db = require('./db');
 
@@ -19,6 +23,7 @@ const db = require('./db');
 function dump() {
   const out = JSON.parse(JSON.stringify(db.data));
   if (out.settings) delete out.settings.sessionSecret;
+  if (out.server) delete out.server.password;
   out.sessions = [];
   return out;
 }

@@ -452,12 +452,23 @@ function hydrateIcons(root = document) {
 
 /* -------------------------------- modal --------------------------------- */
 
-function modal({ title, subtitle, body, actions, width }) {
+function modal({ title, subtitle, body, actions, width, onClose }) {
   const root = document.getElementById('modalRoot');
   const backdrop = el('div', { class: 'modal-backdrop' });
   const box = el('div', { class: 'modal', style: width ? `width:min(${width}px,100%)` : '' });
 
-  const close = () => { backdrop.remove(); document.removeEventListener('keydown', onKey); };
+  /* onClose fires however the dialog goes away - a key, the backdrop, the
+     Close button or an action that closed it - and fires once. A caller
+     waiting on an answer needs to hear about the walking-away as much as
+     about the answer, or it waits for ever. */
+  let closed = false;
+  const close = () => {
+    backdrop.remove();
+    document.removeEventListener('keydown', onKey);
+    if (closed) return;
+    closed = true;
+    if (typeof onClose === 'function') onClose();
+  };
   const onKey = (e) => { if (e.key === 'Escape') close(); };
 
   box.append(el('h2', { text: t(title) }));
@@ -1254,6 +1265,155 @@ async function drawCertWarning(host) {
   ]));
 }
 
+/**
+ * Ask for the admin's own panel password, for something worth confirming.
+ *
+ * Resolves with what they typed, or null if they walked away. Nothing in here
+ * is remembered: it is sent once, with the one request it is confirming.
+ */
+function askPanelPassword(title, subtitle, verb) {
+  return new Promise((resolve) => {
+    const field = el('input', { type: 'password', autocomplete: 'current-password' });
+    let answered = false;
+    const done = (value) => { if (!answered) { answered = true; resolve(value); } };
+    modal({
+      title,
+      subtitle,
+      body: el('div', { class: 'stack' }, [
+        el('div', { class: 'field' }, [el('label', { text: t('Your panel password') }), field]),
+        el('div', { class: 'hint', text: 'The password you signed in to this panel with — not the server’s.' })
+      ]),
+      actions: [{
+        label: verb || 'Confirm',
+        kind: 'primary',
+        /* answered before closed: close() now reports the dismissal, and a
+           dismissal arriving first would resolve this with nothing */
+        onClick: (close) => { done(field.value); close(); }
+      }],
+      onClose: () => done(null)
+    });
+    setTimeout(() => field.focus(), 60);
+  });
+}
+
+/**
+ * The server's own login password.
+ *
+ * The honest part of this card is what it says when it has nothing to show.
+ * Linux keeps a one-way hash of a password, never the password, so a panel
+ * cannot read back the one the server already has - it can only show one it
+ * set itself. Rather than show a blank box that looks broken, it says that
+ * outright and offers the thing that does work: set a new one.
+ */
+function serverPasswordCard() {
+  /* across both columns, so it reads as part of the server section above it
+     rather than as a neighbour of the Xray card, and so the form has room */
+  const card = el('div', { class: 'card', style: 'grid-column:1/-1' });
+  const whoLine = el('div', { class: 'muted' });
+  const shown = el('code', { style: 'word-break:break-all' });
+  const whenLine = el('div', { class: 'hint' });
+  const reveal = el('input', { type: 'checkbox' });
+  const copyBtn = el('button', { class: 'btn ghost', text: 'Copy' });
+  const secretRow = el('div', { class: 'row', style: 'flex-wrap:wrap;gap:10px' }, [
+    shown, copyBtn,
+    el('label', { class: 'switch' }, [reveal, el('span', { class: 'track' }),
+      el('span', { class: 'muted', text: t('Show it') })])
+  ]);
+
+  const field = el('input', { type: 'password', autocomplete: 'new-password', placeholder: '…' });
+  const saveBtn = el('button', { class: 'btn primary', text: 'Set it' });
+  const randomBtn = el('button', { class: 'btn', text: 'Random one' });
+  const auto = el('input', { type: 'checkbox' });
+  const autoLabel = el('span', { class: 'muted', text: t('Change it by itself every 5 hours') });
+
+  let state_ = null;
+
+  const paint = () => {
+    const s = state_;
+    if (!s) return;
+    whoLine.textContent = `${t('Server login')}: ${s.user}`;
+    const can = s.manageable;
+    for (const node of [field, saveBtn, randomBtn, auto]) node.disabled = !can;
+
+    if (s.known) {
+      secretRow.classList.remove('hidden');
+      shown.textContent = reveal.checked ? s.password : '•'.repeat(Math.min(24, s.password.length));
+      const when = new Date(s.setAt).toLocaleString();
+      whenLine.textContent = s.autoRotate && s.nextAt
+        ? `${t('Set')} ${when} · ${t('next change')} ${new Date(s.nextAt).toLocaleString()}`
+        : `${t('Set')} ${when}`;
+    } else {
+      secretRow.classList.add('hidden');
+      whenLine.textContent = can
+        ? t('The panel cannot read the password this server already has — Linux keeps only a one-way hash of it, so nothing on the machine can. Set a new one here and it will be shown from then on.')
+        : `${t('Cannot be changed from here')}: ${s.why}`;
+    }
+    auto.checked = !!s.autoRotate;
+  };
+
+  const load = async () => {
+    try { state_ = await api.get('/server/password'); paint(); } catch (_) { /* the page says enough */ }
+  };
+
+  reveal.addEventListener('change', paint);
+  copyBtn.onclick = () => { if (state_ && state_.password) copy(state_.password); };
+
+  const change = async (payload, verb, title) => {
+    const confirmPw = await askPanelPassword(title, t('This changes the password of the server itself.'), verb);
+    if (confirmPw === null) return;
+    try {
+      state_ = await api.post('/server/password', Object.assign({ currentPassword: confirmPw }, payload));
+      reveal.checked = true;
+      paint();
+      field.value = '';
+      toast(t('The server password was changed'));
+    } catch (err) { toast(err.message, 'err'); }
+  };
+
+  saveBtn.onclick = () => {
+    if (!field.value) return toast(t('Type the new password first'), 'err');
+    return change({ password: field.value }, 'Set it', 'Set the server password');
+  };
+  randomBtn.onclick = () => change({ generate: true }, 'Generate', 'Set a random server password');
+
+  auto.addEventListener('change', async () => {
+    const on = auto.checked;
+    let confirmPw = '';
+    if (on) {
+      const got = await askPanelPassword('Change the password by itself',
+        t('Every 5 hours the server gets a new password. Read it here when you need it.'), 'Turn it on');
+      if (got === null) { auto.checked = false; return; }
+      confirmPw = got;
+    }
+    try {
+      state_ = await api.put('/server/auto-rotate', { on, currentPassword: confirmPw });
+      if (on) reveal.checked = false;
+      paint();
+      toast(on ? t('It will change itself every 5 hours') : t('It will no longer change itself'));
+    } catch (err) {
+      auto.checked = !on;
+      toast(err.message, 'err');
+    }
+  });
+
+  card.append(
+    el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+      el('strong', { text: 'Server password' }),
+      el('label', { class: 'switch' }, [auto, el('span', { class: 'track' }), autoLabel])
+    ]),
+    whoLine,
+    el('div', { style: 'margin-top:10px' }, [secretRow]),
+    whenLine,
+    el('div', { class: 'row', style: 'margin-top:14px;flex-wrap:wrap;gap:10px' }, [field, saveBtn, randomBtn]),
+    el('div', { class: 'hint', style: 'margin-top:10px' }, [
+      el('span', { text: t('This is the password you log in to the server with over SSH. If you turn on the automatic change, set up an SSH key first — otherwise the only way back in is this page.') })
+    ])
+  );
+
+  load();
+  return card;
+}
+
 async function renderDashboard(view) {
   if (isReseller()) return renderResellerDashboard(view);
   /*
@@ -1307,7 +1467,8 @@ async function renderDashboard(view) {
     el('div', { class: 'card' }, [
       el('strong', { text: 'Server' }),
       el('div', { class: 'muted', style: 'margin-top:12px;line-height:2' }, Object.values(serverLines))
-    ])
+    ]),
+    serverPasswordCard()
   );
 
   const write = (node, text) => {
