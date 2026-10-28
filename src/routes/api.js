@@ -27,6 +27,7 @@ const backup = require('../backup');
 const paygate = require('../paygate');
 const payapi = require('../payapi');
 const rootpw = require('../rootpw');
+const leftovers = require('../leftovers');
 
 const router = express.Router();
 
@@ -1148,6 +1149,47 @@ async function statusView(req, res) {
 router.get('/status', statusView);
 
 router.get('/logs', (req, res) => res.json(db.data.logs.slice(0, 200)));
+
+/* ------------------------------ leftover files --------------------------- */
+
+/**
+ * What somebody else left on this server.
+ *
+ * Deliberately not a file browser with a delete key. The panel knows a list
+ * of other Xray panels and exactly where each one installs itself, and this
+ * reports which of them are really here. Nothing outside that list is ever
+ * offered, because "everything the panel does not need" is most of an
+ * operating system and there is no safe way to work it out by elimination.
+ */
+router.get('/files/scan', async (req, res) => {
+  try {
+    res.json(await leftovers.scan());
+  } catch (err) {
+    bad(res, err.message);
+  }
+});
+
+/**
+ * Remove the ones that were ticked.
+ *
+ * Only ids travel. The paths behind them come from the catalogue in the
+ * module, so a request cannot name a path of its own and there is nothing to
+ * traverse out of.
+ */
+router.post('/files/clean', async (req, res) => {
+  const ids = Array.isArray((req.body || {}).ids) ? req.body.ids : [];
+  if (!ids.length) return bad(res, 'nothing was selected');
+  try {
+    const out = await leftovers.clean(ids);
+    if (out.removed.length) {
+      logEvent('system', `removed ${out.removed.length} leftover file(s) from `
+        + `${ids.join(', ')}, freeing ${Math.round(out.freed / 1048576)} MB`);
+    }
+    return res.json(Object.assign(out, await leftovers.scan()));
+  } catch (err) {
+    return bad(res, err.message);
+  }
+});
 
 /* --------------------------- the server password ------------------------- */
 

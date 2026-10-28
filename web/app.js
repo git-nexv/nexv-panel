@@ -1266,6 +1266,101 @@ async function drawCertWarning(host) {
 }
 
 /**
+ * What somebody else left on this server.
+ *
+ * The ask behind this card was "show me every file that is not the panel and
+ * let me delete it". That button cannot exist: on a Linux server everything
+ * the panel does not need is most of an operating system - libc, systemd,
+ * sshd and its host keys - and a sweep by elimination ends with a box that
+ * does not boot. So the question is turned round. The panel knows where a
+ * list of other Xray panels install themselves, reports the ones really here,
+ * and removes only those. Nothing it has not been taught to recognise is ever
+ * offered, which is why the card says what it looked for when it finds none.
+ */
+function leftoverFilesCard() {
+  const card = el('div', { class: 'card', style: 'grid-column:1/-1' });
+  const list = el('div', { class: 'stack', style: 'margin-top:12px' });
+  const summary = el('div', { class: 'muted' });
+  const cleanBtn = el('button', { class: 'btn danger', text: 'Clean the selected' });
+  const rescan = el('button', { class: 'btn ghost', text: 'Scan again' });
+  const picked = new Set();
+  let found = [];
+
+  const paint = () => {
+    list.innerHTML = '';
+    cleanBtn.disabled = !picked.size;
+    if (!found.length) {
+      summary.textContent = t('Nothing left behind by anybody else.');
+      list.append(el('div', { class: 'hint', text:
+        t('Checked the places 3x-ui, s-ui, v2-ui, Marzban, Marzneshin, Hiddify, x-ui and v2rayA install themselves. Only those are ever removed — the panel never deletes a file it does not recognise.') }));
+      return;
+    }
+    const total = found.reduce((n, f) => n + f.bytes, 0);
+    summary.textContent = `${found.length} ${t('other panel(s) found on this server')} · ${bytes(total)}`;
+    for (const f of found) {
+      const box = el('input', { type: 'checkbox' });
+      box.checked = picked.has(f.id);
+      box.addEventListener('change', () => {
+        if (box.checked) picked.add(f.id); else picked.delete(f.id);
+        cleanBtn.disabled = !picked.size;
+      });
+      list.append(el('div', { class: 'notice' }, [
+        el('div', { class: 'between' }, [
+          el('label', { class: 'row', style: 'gap:10px;cursor:pointer;flex-wrap:nowrap' }, [
+            box, el('strong', { text: f.name })
+          ]),
+          el('span', { class: 'muted', text: bytes(f.bytes) + (f.capped ? '+' : '') })
+        ]),
+        el('div', { class: 'hint', style: 'margin-top:6px', text: f.about }),
+        f.running
+          ? el('div', { class: 'hint', style: 'margin-top:6px', text:
+            `⚠️ ${t('Its service is running right now — somebody may still be using it. It will be stopped first.')}` })
+          : null,
+        // one path per line; a joined string would run them together
+        el('div', { class: 'hint', style: 'margin-top:6px;white-space:pre-line', text:
+          f.items.map((i) => i.path).join('\n') })
+      ]));
+    }
+  };
+
+  const load = async () => {
+    try {
+      found = (await api.get('/files/scan')).found || [];
+      for (const id of [...picked]) if (!found.some((f) => f.id === id)) picked.delete(id);
+      paint();
+    } catch (err) { summary.textContent = err.message; }
+  };
+
+  rescan.onclick = async () => { summary.textContent = t('Looking…'); await load(); };
+  cleanBtn.onclick = () => {
+    const names = found.filter((f) => picked.has(f.id)).map((f) => f.name).join(', ');
+    confirmDialog(
+      `${t('Remove')} ${names}? ${t('Their files and services go for good. Nothing else on the server is touched.')}`,
+      async () => {
+        try {
+          const out = await api.post('/files/clean', { ids: [...picked] });
+          found = out.found || [];
+          picked.clear();
+          paint();
+          toast(`${t('Removed')} ${out.removed.length} ${t('item(s)')}, ${bytes(out.freed)} ${t('freed')}`);
+        } catch (err) { toast(err.message, 'err'); }
+      }
+    );
+  };
+
+  card.append(
+    el('div', { class: 'between', style: 'margin-bottom:4px' }, [
+      el('strong', { text: 'Files' }),
+      el('div', { class: 'row', style: 'gap:8px' }, [rescan, cleanBtn])
+    ]),
+    summary,
+    list
+  );
+  load();
+  return card;
+}
+
+/**
  * The server's own login password.
  *
  * The honest part of this card is what it says when it has nothing to show.
@@ -1461,7 +1556,8 @@ async function renderDashboard(view) {
       el('strong', { text: 'Server' }),
       el('div', { class: 'muted', style: 'margin-top:12px;line-height:2' }, Object.values(serverLines))
     ]),
-    serverPasswordCard()
+    serverPasswordCard(),
+    leftoverFilesCard()
   );
 
   const write = (node, text) => {

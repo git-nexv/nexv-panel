@@ -306,6 +306,19 @@ const FA = {
   'hours': 'ساعت',
   'hours between changes': 'ساعت بین هر تغییر',
   'It will change itself every': 'خودش عوض می‌شود هر',
+  'Files': 'فایل‌ها',
+  'Scan again': 'بررسی دوباره',
+  'Clean the selected': 'پاک کردن موارد انتخاب‌شده',
+  'Looking\u2026': 'در حال بررسی…',
+  'Nothing left behind by anybody else.': 'چیزی از کس دیگری روی این سرور نمانده.',
+  'other panel(s) found on this server': 'پنل دیگر روی این سرور پیدا شد',
+  'Checked the places 3x-ui, s-ui, v2-ui, Marzban, Marzneshin, Hiddify, x-ui and v2rayA install themselves. Only those are ever removed \u2014 the panel never deletes a file it does not recognise.': 'جاهایی که 3x-ui و s-ui و v2-ui و Marzban و Marzneshin و Hiddify و x-ui و v2rayA خودشان را نصب می‌کنند بررسی شد. فقط همین‌ها حذف می‌شوند — پنل هیچ فایلی را که نشناسد پاک نمی‌کند.',
+  'Its service is running right now \u2014 somebody may still be using it. It will be stopped first.': 'سرویسش همین الان روشن است — شاید کسی هنوز دارد ازش استفاده می‌کند. اول متوقف می‌شود.',
+  'Remove': 'حذف شود',
+  'Their files and services go for good. Nothing else on the server is touched.': 'فایل‌ها و سرویس‌هایشان برای همیشه می‌روند. به هیچ چیز دیگری روی سرور دست زده نمی‌شود.',
+  'Removed': 'حذف شد',
+  'item(s)': 'مورد',
+  'freed': 'آزاد شد',
   'Server password': 'رمز سرور',
   'Server login': 'کاربر سرور',
   'Set it': 'ثبت',
@@ -1281,6 +1294,10 @@ const HOW_DATED = {
 };
 
 const PATTERNS = [
+  [/^removed (\d+) leftover file\(s\) from (.+), freeing (\d+) MB$/,
+    (m) => `${m[1]} فایل باقی‌مانده از ${m[2]} حذف شد و ${m[3]} مگابایت آزاد شد`],
+  [/^nothing was selected$/, () => 'چیزی انتخاب نشده بود'],
+
 
 
   [/^a password of at least (\d+) characters, please$/, (m) => `رمزی با حداقل ${m[1]} کاراکتر بگذارید`],
