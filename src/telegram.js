@@ -2242,11 +2242,26 @@ async function sendConfig(chatId, client, title, extra) {
    * a retry rather than a refusal: a buyer who has paid and received nothing
    * is a different kind of problem from a message that looks bulky.
    */
+  /*
+   * A caption is not a message, and that is why the fold never appeared.
+   *
+   * Telegram gives a photo's whole caption its own "show more" and renders
+   * what is inside it flat: an expandable quote in a caption comes out as
+   * ordinary text with no bar and nothing to tap. The fold only works when it
+   * is a top-level entity of a message of its own.
+   *
+   * So the single bubble is kept only when there is nothing to fold. Once
+   * there is, the picture goes first with a line of its own and the configs
+   * follow as a real message - two bubbles, and the thing actually folds.
+   */
+  const folds = text.includes('<blockquote');
   const deliver = async (body, withQr) => {
     if (withQr) {
       try {
         const png = await qrPng(url);
-        if (png && visibleLength(body) <= 1000) return await uploadPhoto(chatId, 'sub.png', png, body, keys);
+        if (png && !folds && visibleLength(body) <= 1000) {
+          return await uploadPhoto(chatId, 'sub.png', png, body, keys);
+        }
         if (png) await uploadPhoto(chatId, 'sub.png', png, '🔗 لینک اشتراک شما');
       } catch (err) {
         if (process.env.NEXV_TG_DEBUG) console.error('[bot] qr:', err.message);
