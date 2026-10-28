@@ -69,7 +69,7 @@ router.post('/login', async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return bad(res, 'username and password are required');
   const ip = netfilter.clientIp(req);
-  const result = await auth.login(username, password, ip);
+  const result = await auth.login(username, password, ip, auth.deviceOf(req));
   if (!result) {
     logEvent('auth', `failed login for "${username}" from ${ip}`);
     return bad(res, 'invalid credentials', 401);
@@ -108,7 +108,7 @@ router.post('/register', async (req, res) => {
   db.saveNow();
 
   const ip = netfilter.clientIp(req);
-  const result = await auth.login(name, String(password), ip);
+  const result = await auth.login(name, String(password), ip, auth.deviceOf(req));
   if (result) res.cookie(auth.COOKIE, result.token, auth.cookieOptions(req));
   logEvent('admin', `"${reseller.name}" opened their panel and made an account`);
   res.json({ ok: true, user: { username: name, role: 'reseller' } });
@@ -1149,6 +1149,72 @@ async function statusView(req, res) {
 router.get('/status', statusView);
 
 router.get('/logs', (req, res) => res.json(db.data.logs.slice(0, 200)));
+
+/* --------------------------------- sessions ------------------------------ */
+
+/**
+ * Every device signed in to this panel.
+ *
+ * The point of the page is one question - is any of these not mine - so it
+ * answers it with the things that make a session recognisable: where it signed
+ * in from, where it is being used from now, what the browser calls itself, and
+ * when it was last active. The session's own id never leaves the server as
+ * anything but a short handle, because it is the cookie value: printing it
+ * would put a working key to the panel on the panel's own page.
+ */
+function sessionsView(req) {
+  const d = db.data;
+  const now = Date.now();
+  const mine = auth.sessionFor(req);
+  const users = new Map(d.users.map((u) => [u.id, u.username]));
+  return (d.sessions || [])
+    .filter((s) => Number(s.expiresAt || 0) > now)
+    .sort((a, b) => Number(b.lastSeenAt || b.createdAt || 0) - Number(a.lastSeenAt || a.createdAt || 0))
+    .map((s) => ({
+      /* a handle, not the cookie: enough to name one for revoking, useless
+         to anybody who reads it off the screen */
+      ref: crypto.createHash('sha256').update(String(s.id)).digest('hex').slice(0, 16),
+      username: users.get(s.userId) || 'gone',
+      device: s.device || '',
+      ip: s.ip || '',
+      lastIp: s.lastIp || s.ip || '',
+      moved: !!(s.lastIp && s.ip && s.lastIp !== s.ip),
+      createdAt: Number(s.createdAt) || 0,
+      lastSeenAt: Number(s.lastSeenAt) || Number(s.createdAt) || 0,
+      expiresAt: Number(s.expiresAt) || 0,
+      current: !!(mine && mine.id === s.id)
+    }));
+}
+
+router.get('/sessions', (req, res) => res.json(sessionsView(req)));
+
+/** Sign one device out. The current one is refused: use Sign out for that. */
+router.delete('/sessions/:ref', (req, res) => {
+  const ref = String(req.params.ref || '');
+  const mine = auth.sessionFor(req);
+  const d = db.data;
+  const match = (d.sessions || []).find(
+    (s) => crypto.createHash('sha256').update(String(s.id)).digest('hex').slice(0, 16) === ref
+  );
+  if (!match) return bad(res, 'that session is already gone', 404);
+  if (mine && match.id === mine.id) return bad(res, 'that is this device - use Sign out');
+  d.sessions = d.sessions.filter((s) => s.id !== match.id);
+  db.saveNow();
+  logEvent('auth', `signed out a session from ${match.lastIp || match.ip || 'an unknown address'}`);
+  return res.json(sessionsView(req));
+});
+
+/** Sign out everything except this device. */
+router.post('/sessions/revoke-others', (req, res) => {
+  const mine = auth.sessionFor(req);
+  const d = db.data;
+  const before = (d.sessions || []).length;
+  d.sessions = (d.sessions || []).filter((s) => mine && s.id === mine.id);
+  db.saveNow();
+  const gone = before - d.sessions.length;
+  if (gone) logEvent('auth', `signed out ${gone} other device(s)`);
+  return res.json(sessionsView(req));
+});
 
 /* ------------------------------ leftover files --------------------------- */
 

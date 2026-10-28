@@ -1266,6 +1266,94 @@ async function drawCertWarning(host) {
 }
 
 /**
+ * Who is signed in to this panel, and from where.
+ *
+ * One question, really: is any of these not mine. So each row carries the
+ * things that answer it - the address it signed in from, the address it is
+ * being used from now when that has changed, what the browser calls itself,
+ * and when it was last active - and a key to end any of them on the spot.
+ *
+ * The browser string is printed as the browser sent it rather than tidied
+ * into "Chrome on Android". A guess reads better and is worth less: the raw
+ * string is the evidence, and the admin comparing it against their own
+ * devices is the one who can tell.
+ */
+function sessionsCard() {
+  const card = el('div', { class: 'card', style: 'grid-column:1/-1' });
+  const list = el('div', { class: 'stack', style: 'margin-top:12px' });
+  const summary = el('div', { class: 'muted' });
+  const othersBtn = el('button', { class: 'btn', text: 'Sign out every other device' });
+  let rows = [];
+
+  const paint = () => {
+    list.innerHTML = '';
+    const others = rows.filter((r) => !r.current).length;
+    othersBtn.disabled = !others;
+    summary.textContent = rows.length === 1
+      ? t('Only this device is signed in.')
+      : `${rows.length} ${t('devices signed in')} · ${others} ${t('besides this one')}`;
+
+    for (const r of rows) {
+      const bin = el('button', { class: 'btn ghost', text: r.current ? t('This device') : t('Sign out') });
+      bin.disabled = r.current;
+      if (!r.current) {
+        bin.onclick = () => confirmDialog(
+          `${t('Sign this device out?')} ${r.lastIp}`,
+          async () => {
+            try {
+              rows = await api.del(`/sessions/${r.ref}`);
+              paint();
+              toast(t('That device was signed out'));
+            } catch (err) { toast(err.message, 'err'); }
+          }
+        );
+      }
+      list.append(el('div', { class: `notice ${r.moved ? 'warn' : ''}` }, [
+        el('div', { class: 'between' }, [
+          el('div', { class: 'row', style: 'gap:8px;flex-wrap:nowrap' }, [
+            el('strong', { text: r.lastIp || t('address unknown') }),
+            r.current ? el('span', { class: 'chip ok', html: '<i></i>' + t('now') }) : null
+          ]),
+          bin
+        ]),
+        el('div', { class: 'hint', style: 'margin-top:6px' , text:
+          `${t('Signed in as')} ${r.username} · ${t('last used')} ${ago(r.lastSeenAt)} · ${t('since')} ${ago(r.createdAt)}` }),
+        r.moved
+          ? el('div', { class: 'hint', style: 'margin-top:4px', text:
+            `⚠️ ${t('Signed in from')} ${r.ip} ${t('but is being used from')} ${r.lastIp}` })
+          : null,
+        el('div', { class: 'hint', style: 'margin-top:4px;word-break:break-all', text: r.device || t('no browser name') })
+      ]));
+    }
+  };
+
+  const load = async () => {
+    try { rows = await api.get('/sessions'); paint(); } catch (err) { summary.textContent = err.message; }
+  };
+
+  othersBtn.onclick = () => confirmDialog(
+    t('Sign out every device except this one? They will each have to sign in again.'),
+    async () => {
+      try {
+        rows = await api.post('/sessions/revoke-others', {});
+        paint();
+        toast(t('Every other device was signed out'));
+      } catch (err) { toast(err.message, 'err'); }
+    }
+  );
+
+  card.append(
+    el('div', { class: 'between', style: 'margin-bottom:4px' }, [
+      el('strong', { text: 'Sessions' }), othersBtn
+    ]),
+    summary,
+    list
+  );
+  load();
+  return card;
+}
+
+/**
  * What somebody else left on this server.
  *
  * The ask behind this card was "show me every file that is not the panel and
@@ -1557,6 +1645,7 @@ async function renderDashboard(view) {
       el('div', { class: 'muted', style: 'margin-top:12px;line-height:2' }, Object.values(serverLines))
     ]),
     serverPasswordCard(),
+    sessionsCard(),
     leftoverFilesCard()
   );
 

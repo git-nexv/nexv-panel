@@ -86,7 +86,20 @@ async function setPassword(userId, password) {
   return true;
 }
 
-async function login(username, password, ip) {
+/**
+ * What a browser says it is, trimmed to something a person can read.
+ *
+ * Kept verbatim rather than parsed into "Chrome on Android": the string is
+ * the only evidence of which device this was, and a tidier guess made from it
+ * is worth less than the thing itself when the question is "is one of these
+ * not mine". Capped, because a user agent is attacker-controlled text that
+ * ends up on the admin's own page.
+ */
+function deviceOf(req) {
+  return String((req && req.headers && req.headers['user-agent']) || '').slice(0, 200);
+}
+
+async function login(username, password, ip, device) {
   const user = db.data.users.find((u) => u.username === String(username).trim());
   // compare against a dummy hash when the user is unknown so timing does not leak existence
   const hash = user ? user.password : '$2a$10$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidi';
@@ -98,7 +111,13 @@ async function login(username, password, ip) {
     id: crypto.randomBytes(24).toString('base64url'),
     userId: user.id,
     ip,
+    /* where it is now as well as where it started: a session that signed in
+       from one address and is being used from another is the thing worth
+       seeing, and only the first was ever recorded */
+    lastIp: ip,
+    device: String(device || '').slice(0, 200),
     createdAt: Date.now(),
+    lastSeenAt: Date.now(),
     expiresAt: Date.now() + sessionTtl()
   };
   db.data.sessions.push(session);
@@ -114,13 +133,45 @@ function logout(req) {
   db.saveNow();
 }
 
-function currentUser(req) {
+/**
+ * How stale a session's "last seen" may get before it is written again.
+ *
+ * This runs on every authenticated request, and the dashboard polls every
+ * eight seconds - so writing the store each time would be a disk write per
+ * poll per open tab, for a number nobody reads to the second. A minute is
+ * close enough to answer "is this session being used right now".
+ */
+const TOUCH_EVERY_MS = 60000;
+
+/** The session behind this request, or null. */
+function sessionFor(req) {
   const token = parseCookies(req)[COOKIE];
   const sid = unsign(token || '');
   if (!sid) return null;
   const session = db.data.sessions.find((s) => s.id === sid);
   if (!session || session.expiresAt < Date.now()) return null;
-  return db.data.users.find((u) => u.id === session.userId) || null;
+  return session;
+}
+
+function currentUser(req) {
+  const session = sessionFor(req);
+  if (!session) return null;
+  const user = db.data.users.find((u) => u.id === session.userId) || null;
+  if (user) touch(session, req);
+  return user;
+}
+
+/** Record that this session is still in use, and from where. */
+function touch(session, req) {
+  const now = Date.now();
+  const where = require('./netfilter').clientIp(req);
+  const moved = where && where !== session.lastIp;
+  if (!moved && now - Number(session.lastSeenAt || 0) < TOUCH_EVERY_MS) return;
+  session.lastSeenAt = now;
+  if (where) session.lastIp = where;
+  if (!session.device) session.device = deviceOf(req);
+  // debounced: this is a note about activity, not something to flush at once
+  db.save();
 }
 
 function cookieOptions(req) {
@@ -142,5 +193,6 @@ function requireAuth(req, res, next) {
 
 module.exports = {
   COOKIE, createUser, setPassword, login, logout,
-  currentUser, requireAuth, cookieOptions, parseCookies
+  currentUser, requireAuth, cookieOptions, parseCookies,
+  sessionFor, deviceOf
 };
