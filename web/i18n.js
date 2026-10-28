@@ -300,6 +300,16 @@ const FA = {
   'The server itself (direct)': 'خود همین سرور (مستقیم)',
   'Leave this on the server itself unless the server cannot reach Telegram. Where it cannot \u2014 an Iranian server, where the bot otherwise never starts \u2014 pick an outbound that can, and the bot goes out through it. Xray must be running for that.': 'تا وقتی سرور به تلگرام دسترسی دارد همین «خود سرور» بماند. جایی که دسترسی ندارد \u2014 مثل سرور ایران که ربات اصلاً بالا نمی‌آید \u2014 یک اوت‌باند که دسترسی دارد انتخاب کنید تا ربات از آن بیرون برود. برای این کار Xray باید روشن باشد.',
   'The bot asks the buyer for a name, then makes the config and sends the link. It goes on every inbound that is switched on, the same as a sale, so there is nothing to pick here. When the days start follows the setting on the Setup tab.': 'ربات از خریدار یک اسم می‌پرسد، بعد کانفیگ را می‌سازد و لینک را می‌فرستد. مثل یک فروش عادی روی همه‌ی اینباندهای فعال ساخته می‌شود، پس اینجا چیزی برای انتخاب نیست. اینکه روزها از کی شروع شوند از تنظیم تب Setup پیروی می‌کند.',
+  'What the automatic change makes': 'تغییر خودکار چه رمزی بسازد',
+  'Twenty random characters': 'بیست کاراکتر تصادفی',
+  'The time in Iran, like 20/30': 'ساعت به وقت ایران، مثل ۲۰/۳۰',
+  'secret word': 'کلمه‌ی رمزی',
+  'Right now that would be': 'همین الان می‌شود',
+  'Save': 'ذخیره',
+  'Saved': 'ذخیره شد',
+  'Change how the automatic password is made': 'تغییر نحوه‌ی ساخت رمز خودکار',
+  'This decides what the next automatic password will be.': 'این تعیین می‌کند رمز خودکار بعدی چه باشد.',
+  'A password that is only the clock has 1440 possibilities and is written on every watch in the country \u2014 anyone who knows the pattern can log straight in. Put a secret word in front of it: you still work it out from the time, they still cannot.': 'رمزی که فقط ساعت باشد ۱۴۴۰ حالت بیشتر ندارد و روی ساعت همه نوشته شده — هرکس الگو را بداند مستقیم وارد می‌شود. یک کلمه‌ی رمزی جلویش بگذارید: شما همچنان از روی ساعت حسابش می‌کنید، او همچنان نمی‌تواند.',
   'Server password': 'رمز سرور',
   'Server login': 'کاربر سرور',
   'Change it by itself every 5 hours': 'هر ۵ ساعت خودش عوض شود',
@@ -1287,6 +1297,13 @@ const HOW_DATED = {
 };
 
 const PATTERNS = [
+  [/^the automatic password is now the Tehran clock, with no secret word in front of it$/,
+    () => 'رمز خودکار از این به بعد ساعت تهران است، بدون هیچ کلمه‌ی رمزی جلویش'],
+  [/^the automatic password is now the Tehran clock, behind a secret word$/,
+    () => 'رمز خودکار از این به بعد ساعت تهران است، پشت یک کلمه‌ی رمزی'],
+  [/^the automatic password is now twenty random characters$/,
+    () => 'رمز خودکار از این به بعد بیست کاراکتر تصادفی است'],
+
   [/^your own panel password, to confirm this$/, () => 'برای تایید، رمز ورود خودتان به پنل را بزنید'],
   [/^a password of at least (\d+) characters, please$/, (m) => `رمزی با حداقل ${m[1]} کاراکتر بگذارید`],
   [/^no spaces or colons: chpasswd reads a colon as the end of the name$/,

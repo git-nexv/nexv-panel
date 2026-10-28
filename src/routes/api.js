@@ -1185,6 +1185,23 @@ router.post('/server/password', async (req, res) => {
   }
 });
 
+/**
+ * Which kind of password the automatic change makes.
+ *
+ * Confirmed like the rest: choosing the clock with no secret word in front of
+ * it is a decision about how easy this server is to log into, and it should
+ * take the admin's own password to make it.
+ */
+router.put('/server/style', async (req, res) => {
+  const body = req.body || {};
+  if (!await confirmedAdmin(req, res)) return undefined;
+  const out = rootpw.setStyle(body.style, body.secret);
+  logEvent('system', out.style === 'clock'
+    ? `the automatic password is now the Tehran clock${out.weak ? ', with no secret word in front of it' : ', behind a secret word'}`
+    : 'the automatic password is now twenty random characters');
+  return res.json(out);
+});
+
 router.put('/server/auto-rotate', async (req, res) => {
   const body = req.body || {};
   const on = !!body.on;

@@ -1326,6 +1326,18 @@ function serverPasswordCard() {
   const auto = el('input', { type: 'checkbox' });
   const autoLabel = el('span', { class: 'muted', text: t('Change it by itself every 5 hours') });
 
+  /* what the automatic change makes: twenty random characters, or the Tehran
+     clock, which the admin can work out without opening the panel */
+  const styleSel = el('select', { class: 'input' }, [
+    el('option', { value: 'random', text: t('Twenty random characters') }),
+    el('option', { value: 'clock', text: t('The time in Iran, like 20/30') })
+  ]);
+  const secret = el('input', { type: 'text', placeholder: t('secret word'), style: 'max-width:200px' });
+  const styleRow = el('div', { class: 'row', style: 'margin-top:12px;flex-wrap:wrap;gap:10px' });
+  const sampleLine = el('div', { class: 'hint' });
+  const warnLine = el('div', { class: 'notice danger hidden', style: 'margin-top:10px' });
+  const styleSave = el('button', { class: 'btn', text: 'Save' });
+
   let state_ = null;
 
   const paint = () => {
@@ -1333,14 +1345,25 @@ function serverPasswordCard() {
     if (!s) return;
     whoLine.textContent = `${t('Server login')}: ${s.user}`;
     const can = s.manageable;
-    for (const node of [field, saveBtn, randomBtn, auto]) node.disabled = !can;
+    for (const node of [field, saveBtn, randomBtn, auto, styleSel, secret, styleSave]) node.disabled = !can;
+
+    styleSel.value = s.style;
+    if (document.activeElement !== secret) secret.value = s.secret;
+    secret.classList.toggle('hidden', s.style !== 'clock');
+    sampleLine.textContent = s.style === 'clock'
+      ? `${t('Right now that would be')}: ${s.sample}`
+      : '';
+    warnLine.classList.toggle('hidden', !s.weak);
+    if (s.weak) {
+      warnLine.textContent = t('A password that is only the clock has 1440 possibilities and is written on every watch in the country — anyone who knows the pattern can log straight in. Put a secret word in front of it: you still work it out from the time, they still cannot.');
+    }
 
     if (s.known) {
       secretRow.classList.remove('hidden');
       shown.textContent = reveal.checked ? s.password : '•'.repeat(Math.min(24, s.password.length));
-      const when = new Date(s.setAt).toLocaleString();
+      const when = s.setAtText || new Date(s.setAt).toLocaleString();
       whenLine.textContent = s.autoRotate && s.nextAt
-        ? `${t('Set')} ${when} · ${t('next change')} ${new Date(s.nextAt).toLocaleString()}`
+        ? `${t('Set')} ${when} · ${t('next change')} ${s.nextAtText || new Date(s.nextAt).toLocaleString()}`
         : `${t('Set')} ${when}`;
     } else {
       secretRow.classList.add('hidden');
@@ -1374,6 +1397,22 @@ function serverPasswordCard() {
     if (!field.value) return toast(t('Type the new password first'), 'err');
     return change({ password: field.value }, 'Set it', 'Set the server password');
   };
+
+  styleSel.addEventListener('change', () => {
+    // the secret-word box appears the moment the clock is chosen, before saving
+    secret.classList.toggle('hidden', styleSel.value !== 'clock');
+  });
+  styleSave.onclick = async () => {
+    const confirmPw = await askPanelPassword('Change how the automatic password is made',
+      t('This decides what the next automatic password will be.'), 'Save');
+    if (confirmPw === null) return;
+    try {
+      state_ = await api.put('/server/style',
+        { style: styleSel.value, secret: secret.value, currentPassword: confirmPw });
+      paint();
+      toast(t('Saved'));
+    } catch (err) { toast(err.message, 'err'); }
+  };
   randomBtn.onclick = () => change({ generate: true }, 'Generate', 'Set a random server password');
 
   auto.addEventListener('change', async () => {
@@ -1405,11 +1444,16 @@ function serverPasswordCard() {
     el('div', { style: 'margin-top:10px' }, [secretRow]),
     whenLine,
     el('div', { class: 'row', style: 'margin-top:14px;flex-wrap:wrap;gap:10px' }, [field, saveBtn, randomBtn]),
+    el('div', { class: 'hint', style: 'margin-top:16px', text: t('What the automatic change makes') }),
+    styleRow,
+    sampleLine,
+    warnLine,
     el('div', { class: 'hint', style: 'margin-top:10px' }, [
       el('span', { text: t('This is the password you log in to the server with over SSH. If you turn on the automatic change, set up an SSH key first — otherwise the only way back in is this page.') })
     ])
   );
 
+  styleRow.append(styleSel, secret, styleSave);
   load();
   return card;
 }

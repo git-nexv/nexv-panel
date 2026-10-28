@@ -31,6 +31,11 @@ const db = require('./db');
 /* No l/I/1 or O/0: this gets read off a phone screen and typed into a
    terminal, and a password nobody can transcribe is a lockout. */
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+
+const ZONE = 'Asia/Tehran';
+/* Iran stopped putting its clocks forward in 2022, so +03:30 is right all
+   year. Only used if this Node was built without the timezone data. */
+const FALLBACK_OFFSET_MINUTES = 210;
 const DEFAULT_LENGTH = 20;
 const MIN_LENGTH = 8;
 /* what the admin asked for; kept as a number so it can be changed later
@@ -47,7 +52,64 @@ function settings() {
   if (!(Number(s.everyHours) > 0)) s.everyHours = DEFAULT_EVERY_HOURS;
   if (typeof s.password !== 'string') s.password = '';
   if (!(Number(s.setAt) >= 0)) s.setAt = 0;
+  /* 'random' is twenty unguessable characters; 'clock' is the Tehran time it
+     was set at, which the admin can work out from their own watch */
+  if (s.style !== 'clock' && s.style !== 'random') s.style = 'random';
+  if (typeof s.secret !== 'string') s.secret = '';
   return s;
+}
+
+/** The hour and minute in Tehran, whatever this server's own clock is set to. */
+function tehranClock(at) {
+  const when = new Date(at || Date.now());
+  try {
+    const text = new Intl.DateTimeFormat('en-US', {
+      timeZone: ZONE, hour: 'numeric', minute: '2-digit', hourCycle: 'h23'
+    }).format(when);
+    const [h, m] = text.split(':');
+    return { hour: Number(h), minute: m };
+  } catch (_) {
+    // a Node without timezone data: do the arithmetic by hand
+    const shifted = new Date(when.getTime() + FALLBACK_OFFSET_MINUTES * 60000);
+    return { hour: shifted.getUTCHours(), minute: String(shifted.getUTCMinutes()).padStart(2, '0') };
+  }
+}
+
+/** The whole Tehran date and time, for the panel to show. */
+function tehranStamp(at) {
+  if (!at) return '';
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: ZONE, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+    }).format(new Date(at));
+  } catch (_) {
+    const shifted = new Date(Number(at) + FALLBACK_OFFSET_MINUTES * 60000);
+    return shifted.toISOString().slice(0, 16).replace('T', ' ');
+  }
+}
+
+/**
+ * The clock as a password: the Tehran time it was set at, written the way a
+ * watch shows it - 20/30, 2/38 - with no leading zero on the hour.
+ *
+ * This is worth being blunt about, because it is not a password in the sense
+ * the rest of this file means. There are 1440 of them, the format is obvious
+ * once anybody sees one, and the answer is written on every clock in the
+ * country: somebody who knows the scheme does not have to guess at all. On a
+ * server with a public address and password logins open, that is not a long
+ * wait - it is the first thing an automated scan tries.
+ *
+ * The secret word is what makes it a password again. It sits in front of the
+ * time and never changes, so the admin still works the whole thing out from
+ * their own watch, while somebody who does not know the word gets nothing
+ * from knowing the time. Empty, this is exactly what was asked for, and the
+ * panel says plainly what that costs.
+ */
+function clockPassword(at) {
+  const s = settings();
+  const { hour, minute } = tehranClock(at);
+  return `${s.secret || ''}${hour}/${minute}`;
 }
 
 /**
@@ -117,10 +179,15 @@ async function setPassword(password, user) {
   return { user: who, at: s.setAt };
 }
 
-/** Set it to something nobody has ever seen, including whoever asked. */
+/**
+ * Set it to the next one, whichever way the admin asked for.
+ *
+ * The length floor that setPassword enforces is not applied here: a clock
+ * password is five characters by design and the admin chose that knowingly.
+ */
 async function rotate() {
   const s = settings();
-  const next = generate(DEFAULT_LENGTH);
+  const next = s.style === 'clock' ? clockPassword(Date.now()) : generate(DEFAULT_LENGTH);
   await apply(s.user || 'root', next);
   s.password = next;
   s.setAt = Date.now();
@@ -170,6 +237,7 @@ async function rotateIfDue() {
 function status() {
   const s = settings();
   const can = canManage();
+  const due = nextDue();
   return {
     user: s.user,
     manageable: can.ok,
@@ -179,7 +247,18 @@ function status() {
     setAt: Number(s.setAt) || 0,
     autoRotate: !!s.autoRotate,
     everyHours: Number(s.everyHours) || DEFAULT_EVERY_HOURS,
-    nextAt: nextDue()
+    nextAt: due,
+    style: s.style,
+    secret: s.secret || '',
+    /* what the next clock password would look like, so the choice can be
+       shown rather than described */
+    sample: clockPassword(Date.now()),
+    /* a clock password with no secret word in front of it is public: the
+       panel shows this as a warning rather than leaving it to be discovered */
+    weak: s.style === 'clock' && !s.secret,
+    // the admin reads these on an Iranian clock, so they are written on one
+    setAtText: tehranStamp(Number(s.setAt) || 0),
+    nextAtText: tehranStamp(due)
   };
 }
 
@@ -193,7 +272,21 @@ function setAutoRotate(on, everyHours) {
   return status();
 }
 
+/** Which kind of password the automatic change makes, and the secret word. */
+function setStyle(style, secret) {
+  const s = settings();
+  if (style === 'clock' || style === 'random') s.style = style;
+  if (secret !== undefined && secret !== null) {
+    /* no colon or whitespace, for the same reason a typed password may not
+       have one: chpasswd reads a colon as the end of the user name */
+    s.secret = String(secret).replace(/[\s:]/g, '').slice(0, 32);
+  }
+  db.saveNow();
+  return status();
+}
+
 module.exports = {
   settings, generate, canManage, setPassword, rotate, rotateIfDue,
-  setAutoRotate, status, nextDue, MIN_LENGTH, DEFAULT_EVERY_HOURS
+  setAutoRotate, setStyle, status, nextDue, clockPassword, tehranClock, tehranStamp,
+  MIN_LENGTH, DEFAULT_EVERY_HOURS
 };
