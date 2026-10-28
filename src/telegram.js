@@ -10,6 +10,7 @@
  */
 const https = require('https');
 const http = require('http');
+const crypto = require('crypto');
 const db = require('./db');
 const membership = require('./membership');
 const paygate = require('./paygate');
@@ -3391,7 +3392,89 @@ function backupSettings() {
   const s = b.backup;
   if (!Array.isArray(s.times)) s.times = [];
   if (!Number.isFinite(Number(s.tzOffset))) s.tzOffset = 210;
+  if (typeof s.onChange !== 'boolean') s.onChange = false;
   return s;
+}
+
+/*
+ * How long a change is left alone before the backup goes, and the shortest
+ * gap between two of them.
+ *
+ * Saving a plan touches the store three or four times in as many seconds, and
+ * a buyer going through checkout touches it again at every step. Sending on
+ * each one would be a dozen files for one piece of work, in a chat where the
+ * useful thing is being able to find the latest. So a change waits for things
+ * to go quiet, and a burst arrives as one file.
+ */
+const CHANGE_QUIET_MS = 90000;
+const CHANGE_FLOOR_MS = 300000;
+
+/**
+ * A fingerprint of everything worth backing up.
+ *
+ * Everything in the store changes constantly - traffic counters tick on every
+ * poll, a client's last-seen moves whenever somebody connects, the log grows.
+ * A backup on every one of those is a backup every thirty seconds and nobody
+ * reads any of them. What counts as a change here is what an admin or a buyer
+ * did: an inbound, a client, a plan, a setting, an order, a reseller, an
+ * account. The volatile fields are dropped before the hash, so a quiet server
+ * carrying traffic produces the same fingerprint all day.
+ */
+function stateFingerprint() {
+  const d = db.data;
+  const b = d.bot || {};
+  const clients = (d.clients || []).map((c) => Object.assign({}, c, {
+    up: 0, down: 0, ips: undefined, lastSeen: 0, lastSeenAt: 0, onlineAt: 0
+  }));
+  const server = Object.assign({}, d.server || {});
+  // the login password rotates on a timer and is stripped from the file
+  // anyway, so a rotation is not a reason to send one
+  delete server.password;
+  delete server.setAt;
+  const slim = {
+    settings: d.settings,
+    users: d.users,
+    inbounds: d.inbounds,
+    clients,
+    outbounds: d.outbounds,
+    routing: d.routing,
+    resellers: d.resellers,
+    server,
+    bot: Object.assign({}, b, { backup: undefined })
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(slim)).digest('hex');
+}
+
+/**
+ * Send one when something has actually changed and then settled.
+ *
+ * Returns quietly when it is switched off, when nothing has moved, while a
+ * burst is still arriving, or while the floor since the last one has not
+ * passed - so this is safe to call on a short timer.
+ */
+async function backupOnChange() {
+  const s = backupSettings();
+  if (!s.onChange) return false;
+  const now = Date.now();
+  const fp = stateFingerprint();
+
+  // the first run after it is switched on only learns where things stand
+  if (!s.changeFp) { s.changeFp = fp; db.save(); return false; }
+  if (fp === s.changeFp) {
+    if (s.changedAt) { s.changedAt = 0; db.save(); }
+    return false;
+  }
+
+  if (!s.changedAt) { s.changedAt = now; db.save(); return false; }
+  if (now - s.changedAt < CHANGE_QUIET_MS) return false;
+  if (now - Number(s.changeSentAt || 0) < CHANGE_FLOOR_MS) return false;
+
+  await sendBackup('پشتیبان خودکار - بعد از تغییر');
+  s.changeFp = fp;
+  s.changedAt = 0;
+  s.changeSentAt = Date.now();
+  db.saveNow();
+  return true;
 }
 
 /**
@@ -3506,9 +3589,23 @@ async function backupTick() {
   }
 }
 
+/* the scheduled slots and the after-a-change one share the same minute tick;
+   each decides for itself whether anything is due */
+async function backupBeat() {
+  await backupTick();
+  try {
+    await backupOnChange();
+  } catch (err) {
+    const s = backupSettings();
+    s.lastError = err.message;
+    db.save();
+    if (process.env.NEXV_TG_DEBUG) console.error('[bot] change backup:', err);
+  }
+}
+
 function watchBackups() {
   if (backupTimer) return backupTimer;
-  backupTimer = setInterval(backupTick, 60000);
+  backupTimer = setInterval(backupBeat, 60000);
   if (typeof backupTimer.unref === 'function') backupTimer.unref();
   return backupTimer;
 }
@@ -3518,6 +3615,8 @@ function backupStatus() {
   const s = backupSettings();
   return {
     enable: !!s.enable,
+    onChange: !!s.onChange,
+    changeSentAt: Number(s.changeSentAt) || 0,
     times: s.times.slice(),
     tzOffset: Number(s.tzOffset) || 0,
     lastAt: Number(s.lastAt) || 0,
@@ -3547,6 +3646,7 @@ module.exports = {
   resetTrials, trialsTaken, repairOrphanClients, dateUndatedClients, customTerms,
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
   sendBackup, backupStatus, backupSettings, backupTimes, watchBackups, minutesOf, nextBackupAt, backupTick,
+  backupOnChange, stateFingerprint, backupBeat,
   payLabel, customLabel, picksTerm, settleGateway, sweepGateway, watchGateway, orderByToken,
   /* the entry point for one update: what the polling loop feeds, and what a
      webhook would feed if this ever grows one */

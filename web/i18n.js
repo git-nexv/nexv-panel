@@ -332,6 +332,8 @@ const FA = {
   'no admin has been set': 'هیچ ادمینی تنظیم نشده',
   'no bot token is set': 'توکن ربات تنظیم نشده',
   'the admin is set by @username, which a bot cannot message. Put the numeric id here, or open the bot as the admin and press Start.': 'ادمین با @یوزرنیم تنظیم شده و ربات نمی‌تواند به یوزرنیم پیام بدهد. آیدی عددی را اینجا بگذارید، یا ربات را با حساب ادمین باز کنید و Start بزنید.',
+  'Also send one whenever something changes': 'هر وقت چیزی عوض شد هم یکی بفرست',
+  'Anything an admin or a buyer does \u2014 a new client, an edited plan, a sale through the bot, a settings change. Traffic counters and people coming online do not count, or there would be a file every half minute. A burst of edits arrives as one file about a minute after you stop, and never more often than one every five minutes.': 'هر کاری که ادمین یا خریدار انجام بدهد — کلاینت تازه، پلن ویرایش‌شده، فروش از طریق ربات، تغییر تنظیمات. شمارنده‌های ترافیک و آنلاین شدن کاربرها حساب نمی‌شوند، وگرنه هر نیم دقیقه یک فایل می‌آمد. چند ویرایش پشت‌سرهم حدود یک دقیقه بعد از تمام شدنشان به صورت یک فایل می‌آید، و هیچ‌وقت بیشتر از هر ۵ دقیقه یک بار.',
   'Files': 'فایل‌ها',
   'Scan again': 'بررسی دوباره',
   'Clean the selected': 'پاک کردن موارد انتخاب‌شده',
@@ -1320,6 +1322,8 @@ const HOW_DATED = {
 };
 
 const PATTERNS = [
+  [/^could not put back (.+): (.+)$/, (m) => `${m[1]} برگردانده نشد: ${m[2]}`],
+
   [/^the bot cannot open a chat with (\d+)\. Open the bot as that account and press Start - Telegram does not let a bot message somebody who never has\.$/,
     (m) => `ربات نمی‌تواند با ${m[1]} چت باز کند. ربات را با همان حساب باز کنید و Start بزنید — تلگرام اجازه نمی‌دهد رباتی به کسی پیام بدهد که هیچ‌وقت رویش Start نزده.`],
   [/^a support message could not be delivered to the admin \((.+)\): (.+)$/,

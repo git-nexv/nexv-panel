@@ -6513,6 +6513,11 @@ async function renderBot(view) {
         el('div', { class: 'hint', text: 'The times below are read in this zone, not the server’s.' })]),
       el('div', { class: 'field' }, [el('label', { text: 'Times of day' }), timesBox])
     ]),
+    /* the other way to get one: whenever anything is actually changed */
+    el('div', { class: 'field full', style: 'margin-top:4px' }, [
+      switchFor(backup, 'onChange', 'Also send one whenever something changes'),
+      el('div', { class: 'hint', text: 'Anything an admin or a buyer does — a new client, an edited plan, a sale through the bot, a settings change. Traffic counters and people coming online do not count, or there would be a file every half minute. A burst of edits arrives as one file about a minute after you stop, and never more often than one every five minutes.' })
+    ]),
     lastLine,
     el('div', { class: 'row', style: 'margin-top:12px' }, [
       el('button', { class: 'btn primary', text: 'Save', onclick: () => save() }),

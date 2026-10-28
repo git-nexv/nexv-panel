@@ -546,6 +546,13 @@ router.put('/bot', async (req, res) => {
   if (body.backup && typeof body.backup === 'object') {
     const bk = telegram.backupSettings();
     if (body.backup.enable !== undefined) bk.enable = !!body.backup.enable;
+    if (body.backup.onChange !== undefined) {
+      const want = !!body.backup.onChange;
+      /* switching it on starts from where things stand now, so turning it on
+         does not immediately send one for everything that came before */
+      if (want && !bk.onChange) { bk.changeFp = ''; bk.changedAt = 0; }
+      bk.onChange = want;
+    }
     if (body.backup.tzOffset !== undefined) {
       // -720..+840 covers every real zone, and nothing else is a zone
       const off = num(body.backup.tzOffset);
@@ -3211,6 +3218,16 @@ router.post('/restore', async (req, res) => {
   }
 
   /*
+   * The certificates that travelled with the file. They are written into the
+   * panel's own directory under fixed names - the backup never says where
+   * anything goes - and the restored settings are pointed at those copies,
+   * since the old server's paths may not exist on this one.
+   */
+  const certsBack = backup.restoreCerts(incoming);
+  for (const { key, path: where } of certsBack) d.settings[key] = where;
+  delete d.files;
+
+  /*
    * ...except the handful of settings that are not about the service at all,
    * but about how you reach *this* machine.
    *
@@ -3295,6 +3312,7 @@ router.post('/restore', async (req, res) => {
     restarted: !!botNote,
     accountsChanged: !!accountsChanged,
     keptOurAddress: kept,
+    certsRestored: certsBack.length,
     restored: {
       inbounds: (d.inbounds || []).length,
       clients: (d.clients || []).length,
