@@ -220,16 +220,22 @@ async function status(db) {
   const rules = which === 'none' ? new Map() : await openRules();
   const needed = [];
   const d = db.data;
-  const add = (p, what, proto) => {
+  /* `kind` says what the port is for, so a reader can tell which program
+     ought to be holding it: the panel is node, an inbound is Xray, and the
+     certificate ports are whatever is answering http at the time */
+  const add = (p, what, proto, who) => {
     const n = portOf(p);
-    if (n) needed.push({ port: n, what, proto: proto || 'tcp' });
+    if (n) needed.push({ port: n, what, proto: proto || 'tcp', kind: who });
   };
-  add(d.settings.panelPort || 2087, 'the panel');
-  add(d.settings.subPort, 'subscriptions');
-  if (d.settings.domain) { add(80, 'certificates'); add(443, 'certificates'); }
+  add(d.settings.panelPort || 2087, 'the panel', 'tcp', 'panel');
+  add(d.settings.subPort, 'subscriptions', 'tcp', 'panel');
+  if (d.settings.domain) {
+    add(80, 'certificates', 'tcp', 'cert');
+    add(443, 'certificates', 'tcp', 'cert');
+  }
   for (const inb of (d.inbounds || [])) {
     if (inb.enable === false) continue;
-    add(inb.port, inb.remark || inb.protocol, protoOf(inb));
+    add(inb.port, inb.remark || inb.protocol, protoOf(inb), 'inbound');
   }
   return {
     firewall: which,
@@ -240,4 +246,79 @@ async function status(db) {
   };
 }
 
-module.exports = { kind, forget, allow, deny, openPorts, openRules, sync, status, protoOf };
+/**
+ * What is actually holding a port, by name.
+ *
+ * A rule list says what is allowed through; it says nothing about what is
+ * sitting on the port already. "443 is in use and I do not know by what" is
+ * not a firewall question at all, and the firewall page is where people go
+ * looking for it, so it is answered here.
+ *
+ * Read out of /proc rather than by running ss or netstat, because neither is
+ * on a minimal Ubuntu image and a panel that answers only when an optional
+ * package happens to be installed is a panel that answers sometimes.
+ */
+function listening() {
+  const socks = [];
+  const parse = (file) => {
+    let text = '';
+    try { text = fs.readFileSync(file, 'utf8'); } catch (_) { return; }
+    for (const line of text.split('\n').slice(1)) {
+      const bits = line.trim().split(/\s+/);
+      if (bits.length < 10) continue;
+      if (bits[3] !== '0A') continue;                 // 0A is LISTEN
+      const port = parseInt((bits[1].split(':')[1] || ''), 16);
+      if (port) socks.push({ port, inode: bits[9] });
+    }
+  };
+  parse('/proc/net/tcp');
+  parse('/proc/net/tcp6');
+  if (!socks.length) return [];
+
+  /* which process holds which socket: every open file descriptor that is a
+     socket points at an inode, and that is the only link between the two */
+  const byInode = new Map();
+  let pids = [];
+  try { pids = fs.readdirSync('/proc').filter((n) => /^\d+$/.test(n)); } catch (_) { return []; }
+  for (const pid of pids) {
+    let fds = [];
+    try { fds = fs.readdirSync(`/proc/${pid}/fd`); } catch (_) { continue; }
+    for (const fd of fds) {
+      let link = '';
+      try { link = fs.readlinkSync(`/proc/${pid}/fd/${fd}`); } catch (_) { continue; }
+      const m = /^socket:\[(\d+)\]$/.exec(link);
+      if (m && !byInode.has(m[1])) byInode.set(m[1], pid);
+    }
+  }
+
+  const seen = new Map();
+  for (const s of socks) {
+    const pid = byInode.get(s.inode) || '';
+    let cmd = '';
+    let name = '';
+    if (pid) {
+      try {
+        cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ').trim();
+      } catch (_) { /* it exited while we were looking */ }
+      try {
+        name = fs.readFileSync(`/proc/${pid}/comm`, 'utf8').trim();
+      } catch (_) { /* same */ }
+    }
+    const was = seen.get(s.port);
+    // prefer the entry we could actually name
+    if (!was || (!was.pid && pid)) seen.set(s.port, { port: s.port, pid, name, cmd: cmd.slice(0, 300) });
+  }
+  return [...seen.values()].sort((a, b) => a.port - b.port);
+}
+
+/** Whichever process holds this port, or null when nothing does. */
+function whoHas(port) {
+  const n = portOf(port);
+  if (!n) return null;
+  return listening().find((l) => l.port === n) || null;
+}
+
+module.exports = {
+  kind, forget, allow, deny, openPorts, openRules, sync, status, protoOf,
+  listening, whoHas
+};

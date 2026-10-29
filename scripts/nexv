@@ -57,12 +57,16 @@ firewall_kind() {
 
 # Open one port in whichever firewall is running. A no-op when none is active,
 # which is the common case on a fresh VPS.
+# The protocol matters: a wireguard inbound listens on udp only, and opening
+# it on tcp leaves it shut while the rule list says it is open.
 allow_port() {
   local port="$1"
+  local proto="${2:-tcp}"
   case "$(firewall_kind)" in
-    ufw)       ufw allow "$port"/tcp >/dev/null 2>&1 && ok "Opened port $port in ufw" ;;
-    firewalld) firewall-cmd --permanent --add-port="$port"/tcp >/dev/null 2>&1 &&
-               firewall-cmd --reload >/dev/null 2>&1 && ok "Opened port $port in firewalld" ;;
+    ufw)       ufw allow "$port"/"$proto" >/dev/null 2>&1 &&
+               ok "Opened $port/$proto in ufw" ;;
+    firewalld) firewall-cmd --permanent --add-port="$port"/"$proto" >/dev/null 2>&1 &&
+               firewall-cmd --reload >/dev/null 2>&1 && ok "Opened $port/$proto in firewalld" ;;
     *)         : ;;
   esac
 }
@@ -84,6 +88,41 @@ panel_path() {
     try {
       const db = require(process.env.DATA_DIR + "/db.json");
       process.stdout.write(String((db.settings && db.settings.webBasePath) || ""));
+    } catch (e) { process.stdout.write(""); }
+  ' 2>/dev/null || echo ""
+}
+
+# Every port this panel actually needs: its own, the subscription port, the
+# certificate ports when a domain is set, and one for every inbound that is
+# switched on. The inbounds were the ones missing - the firewall actions here
+# carried a hardcoded list of panel ports, so "open the ports" opened four of
+# them and left every inbound shut, on a server where the panel's own page was
+# reporting them as needing to be open.
+panel_needed_ports() {
+  DATA_DIR="$DATA_DIR" node -e '
+    try {
+      const db = require(process.env.DATA_DIR + "/db.json");
+      const s = db.settings || {};
+      const want = new Map();
+      const add = (p, proto) => {
+        const n = Math.round(Number(p));
+        if (!Number.isFinite(n) || n < 1 || n > 65535) return;
+        const have = want.get(n);
+        if (have && have !== proto) want.set(n, "both");
+        else want.set(n, have || proto);
+      };
+      add(s.panelPort || 2087, "tcp");
+      if (s.subPort) add(s.subPort, "tcp");
+      if (s.domain) { add(80, "tcp"); add(443, "tcp"); }
+      for (const inb of (db.inbounds || [])) {
+        if (inb.enable === false) continue;
+        const net = inb.network || "tcp";
+        const proto = (inb.protocol === "wireguard" || net === "kcp" || net === "quic")
+          ? "udp" : "tcp";
+        add(inb.port, proto);
+      }
+      const rows = [...want.entries()].sort((a, b) => a[0] - b[0]);
+      process.stdout.write(rows.map(([p, proto]) => p + "/" + proto).join(" "));
     } catch (e) { process.stdout.write(""); }
   ' 2>/dev/null || echo ""
 }
@@ -606,9 +645,6 @@ act_reset_username() {
 }
 
 act_firewall_open_panel_ports() {
-  local port
-  port="$(panel_port)"
-  local ports=("$port" 80 443 2096)
   local kind
   kind="$(firewall_kind)"
   if [[ $kind == none ]]; then
@@ -616,8 +652,29 @@ act_firewall_open_panel_ports() {
     echo "  The panel ports are already reachable, unless your provider filters them."
     return 0
   fi
-  for p in "${ports[@]}"; do allow_port "$p"; done
-  ok "Panel ports opened in $kind: ${ports[*]}"
+
+  local spec
+  spec="$(panel_needed_ports)"
+  if [[ -z $spec ]]; then
+    err "Could not read the panel's ports from $DATA_DIR/db.json"
+    return 1
+  fi
+
+  local opened=()
+  local entry port proto
+  for entry in $spec; do
+    port="${entry%%/*}"
+    proto="${entry##*/}"
+    if [[ $proto == both ]]; then
+      allow_port "$port" tcp
+      allow_port "$port" udp
+    else
+      allow_port "$port" "$proto"
+    fi
+    opened+=("$entry")
+  done
+  ok "Opened in $kind: ${opened[*]}"
+  echo "  The panel, the subscription port, and every inbound that is switched on."
 }
 
 act_firewall_enable() {
@@ -629,10 +686,18 @@ act_firewall_enable() {
   # Enabling ufw without an SSH rule locks you out of your own server.
   ufw allow ssh >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null 2>&1
   ok "SSH allowed (so enabling the firewall cannot lock you out)"
-  local port
-  port="$(panel_port)"
-  for p in "$port" 80 443 2096; do ufw allow "$p"/tcp >/dev/null 2>&1; done
-  ok "Panel ports allowed: $port 80 443 2096"
+  local spec entry
+  spec="$(panel_needed_ports)"
+  [[ -z $spec ]] && spec="$(panel_port)/tcp 80/tcp 443/tcp 2096/tcp"
+  for entry in $spec; do
+    if [[ ${entry##*/} == both ]]; then
+      ufw allow "${entry%%/*}"/tcp >/dev/null 2>&1
+      ufw allow "${entry%%/*}"/udp >/dev/null 2>&1
+    else
+      ufw allow "$entry" >/dev/null 2>&1
+    fi
+  done
+  ok "Allowed: $spec"
   ufw --force enable && ok "Firewall enabled"
 }
 

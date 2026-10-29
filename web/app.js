@@ -5162,6 +5162,50 @@ function renderFirewall(panel) {
       el('label', { text: 'Open now' }), openList
     ]));
 
+    /*
+     * What is sitting on each port, which is a different question from what
+     * the firewall allows through and the one people actually arrive with:
+     * a port is "in use" and nothing on the page said by what. Every inbound
+     * runs inside Xray, so a port held by anything else is the interesting
+     * row - it is called out rather than left to be spotted.
+     */
+    const live = info.listening || [];
+    const usedList = el('div', { class: 'stack', style: 'gap:6px' });
+    if (live.length) {
+      for (const l of live) {
+        /* an inbound's own entry beats the generic certificate one on 80/443,
+           because "Xray should be here" is the useful thing to say about it */
+        const forPort = (info.needed || []).filter((n) => n.port === l.port);
+        const wanted = forPort.find((n) => n.kind === 'inbound') || forPort[0];
+        const name = l.name || l.cmd || '';
+        /* the panel is node and an inbound is Xray; a certificate port can be
+           either, so nothing is claimed about it */
+        const expect = wanted && wanted.kind === 'inbound' ? /xray/i
+          : wanted && wanted.kind === 'panel' ? /node|nexv/i : null;
+        const wrong = !!(expect && name && !expect.test(name));
+        usedList.append(el('div', { class: `notice ${wrong ? 'warn' : ''}`, style: 'padding:8px 10px' }, [
+          el('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' }, [
+            el('strong', { text: String(l.port) }),
+            el('span', { class: 'muted', text: name || t('could not tell which program') })
+          ]),
+          wrong
+            ? el('div', { class: 'hint', style: 'margin-top:4px', text:
+              `\u26a0\ufe0f ${t('This port is wanted for')} ${t(wanted.what)}, ${t('but something else is already on it.')}` })
+            : null,
+          l.cmd && l.cmd !== name
+            ? el('div', { class: 'hint', style: 'margin-top:4px;word-break:break-all', text: l.cmd })
+            : null
+        ]));
+      }
+    } else {
+      usedList.append(el('span', { class: 'muted', text: t('Nothing is listening.') }));
+    }
+    body.append(el('div', { class: 'field full' }, [
+      el('label', { text: 'What is using each port' }),
+      el('div', { class: 'hint', style: 'margin-bottom:8px', text: t('Open is what the firewall allows through. This is what is actually sitting on the port \u2014 which is what to look at when a port says it is already in use.') }),
+      usedList
+    ]));
+
     const row = el('div', { class: 'row', style: 'margin-top:14px;flex-wrap:wrap;align-items:flex-end;gap:10px' }, [
       el('div', { class: 'field', style: 'margin:0;min-width:120px' }, [el('label', { text: 'Port' }), portInput]),
       el('div', { class: 'field', style: 'margin:0;min-width:150px' }, [el('label', { text: 'Protocol' }), protoSel]),

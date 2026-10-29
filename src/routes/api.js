@@ -1433,7 +1433,14 @@ function firewallNote(fw, port) {
  */
 router.get('/firewall', async (req, res) => {
   try {
-    res.json(await firewall.status(db));
+    const out = await firewall.status(db);
+    /*
+     * What is sitting on each port, as well as what is allowed through it.
+     * "443 is in use and I do not know by what" is the question people bring
+     * to this page, and a list of rules does not answer it.
+     */
+    out.listening = firewall.listening();
+    res.json(out);
   } catch (err) {
     bad(res, err.message || 'could not read the firewall');
   }
