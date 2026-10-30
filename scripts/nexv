@@ -45,6 +45,116 @@ port_owner() {
   fi
 }
 
+# Every pid listening on a port, v4 and v6 both. ss prints the pid inside
+# users:(("nginx",pid=812,fd=6)) and there can be several of them on one line,
+# which is why this pulls every pid= it finds rather than the last field.
+port_pids() {
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnpH 2>/dev/null | awk -v p=":${port}$" '$4 ~ p { print }' \
+      | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -un
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"${port}" -sTCP:LISTEN -t 2>/dev/null | sort -un
+  fi
+}
+
+# The systemd unit a pid belongs to, or nothing when it belongs to none.
+unit_of_pid() {
+  local pid="$1" unit=""
+  [[ -r /proc/$pid/cgroup ]] || return 0
+  unit="$(grep -o '[^/]*\.service' /proc/"$pid"/cgroup 2>/dev/null | head -1)"
+  [[ -n $unit ]] && echo "$unit"
+}
+
+name_of_pid() {
+  local pid="$1"
+  [[ -r /proc/$pid/comm ]] && tr -d '\n' < /proc/"$pid"/comm
+}
+
+# Where we write down what we stopped, so it can be started again afterwards.
+STOPPED_FILE="/run/nexv-port80-stopped"
+
+# Get off port 80 so the standalone challenge can bind it.
+#
+# certbot --standalone opens port 80 itself and asks Let's Encrypt to come and
+# read what it serves there. Anything else holding the port means it never
+# binds and the issue fails with "Could not bind TCP port 80" - and the panel's
+# own advice was to go and find the offender by hand, on a server the admin had
+# just been handed and had never looked inside.
+#
+# So it is cleared here. Whatever holds it is stopped - by its systemd unit
+# when it has one, so it stays stopped properly rather than being restarted a
+# second later by systemd, and by signal when it has none. The list is kept and
+# everything goes back up afterwards: freeing the port for twenty seconds is
+# not the same as uninstalling somebody's web server, and a panel that silently
+# left nginx dead would be a worse bug than the one it fixed.
+free_port_80() {
+  local port="${1:-80}"
+  : > "$STOPPED_FILE"
+  is_port_in_use "$port" || { ok "Port $port is free"; return 0; }
+
+  warn "Port $port is in use - clearing it for the certificate check."
+  local pid unit name mine
+  mine=$$
+  for pid in $(port_pids "$port"); do
+    [[ -z $pid || $pid == "$mine" ]] && continue
+    name="$(name_of_pid "$pid")"
+    unit="$(unit_of_pid "$pid")"
+    # ssh is how the admin is here at all
+    if [[ $name == sshd || $unit == ssh.service || $unit == sshd.service ]]; then
+      warn "  port $port is held by ssh - leaving it alone"
+      continue
+    fi
+    if [[ -n $unit ]]; then
+      # stopping the unit, not the pid: systemd would only bring the pid back
+      echo "  $port is held by ${name:-?} (pid $pid, $unit) - stopping $unit"
+      if systemctl stop "$unit" >/dev/null 2>&1; then
+        echo "$unit" >> "$STOPPED_FILE"
+      else
+        warn "  could not stop $unit"
+      fi
+    else
+      echo "  $port is held by ${name:-?} (pid $pid, no service) - stopping it"
+      kill "$pid" 2>/dev/null || true
+    fi
+  done
+
+  # a service takes a moment to let go of its socket
+  local tries=0
+  while (( tries < 10 )) && is_port_in_use "$port"; do sleep 1; tries=$((tries + 1)); done
+
+  if is_port_in_use "$port"; then
+    # one holder left and it did not listen: nothing to do but say so plainly
+    for pid in $(port_pids "$port"); do
+      [[ -z $pid || $pid == "$mine" ]] && continue
+      warn "  $(name_of_pid "$pid") (pid $pid) will not let go of port $port - forcing it"
+      kill -9 "$pid" 2>/dev/null || true
+    done
+    sleep 1
+  fi
+
+  if is_port_in_use "$port"; then
+    err "Port $port is still in use by: $(port_owner "$port")"
+    return 1
+  fi
+  ok "Port $port is free now"
+}
+
+# Put back whatever free_port_80 stopped.
+restore_port_80() {
+  [[ -s $STOPPED_FILE ]] || { rm -f "$STOPPED_FILE"; return 0; }
+  local unit
+  while read -r unit; do
+    [[ -n $unit ]] || continue
+    systemctl start "$unit" >/dev/null 2>&1 \
+      && ok "Started $unit again" \
+      || warn "Could not start $unit again - start it with: systemctl start $unit"
+  done < "$STOPPED_FILE"
+  rm -f "$STOPPED_FILE"
+}
+
+# Which firewall is RUNNING. "none" here means nothing is filtering anything,
+# which is not the same as nothing being installed - see firewall_tool below.
 firewall_kind() {
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
     echo ufw
@@ -55,6 +165,35 @@ firewall_kind() {
   fi
 }
 
+# Which firewall is INSTALLED, running or not.
+#
+# These were the same function, and everything that changes a rule asked the
+# running one. On a server where ufw is installed but switched off - which is
+# every fresh Ubuntu box - that answered "none", so opening or closing a port
+# did nothing at all, said nothing at all, and the rule list came back
+# unchanged. ufw keeps its rules whether it is up or not: a rule added while it
+# is off is there waiting the moment it is enabled, so this is what the rule
+# commands use, and the running state only decides what we tell the admin
+# afterwards.
+firewall_tool() {
+  if command -v ufw >/dev/null 2>&1; then
+    echo ufw
+  elif command -v firewall-cmd >/dev/null 2>&1; then
+    echo firewalld
+  else
+    echo none
+  fi
+}
+
+# "the rule is in, but nothing is enforcing it yet" - said once, where it is
+# true, rather than left for the admin to discover by testing the port.
+warn_if_firewall_off() {
+  [[ $(firewall_kind) == none ]] || return 0
+  [[ $(firewall_tool) == none ]] && return 0
+  warn "The firewall is not switched on, so this rule is saved but not active yet."
+  echo "  Turn it on with option 2 when you are ready."
+}
+
 # Open one port in whichever firewall is running. A no-op when none is active,
 # which is the common case on a fresh VPS.
 # The protocol matters: a wireguard inbound listens on udp only, and opening
@@ -62,13 +201,49 @@ firewall_kind() {
 allow_port() {
   local port="$1"
   local proto="${2:-tcp}"
-  case "$(firewall_kind)" in
-    ufw)       ufw allow "$port"/"$proto" >/dev/null 2>&1 &&
-               ok "Opened $port/$proto in ufw" ;;
-    firewalld) firewall-cmd --permanent --add-port="$port"/"$proto" >/dev/null 2>&1 &&
-               firewall-cmd --reload >/dev/null 2>&1 && ok "Opened $port/$proto in firewalld" ;;
+  case "$(firewall_tool)" in
+    ufw)       ufw allow "$port"/"$proto" >/dev/null 2>&1 \
+                 && ok "Opened $port/$proto in ufw" \
+                 || err "ufw refused to open $port/$proto" ;;
+    firewalld) firewall-cmd --permanent --add-port="$port"/"$proto" >/dev/null 2>&1 \
+                 && { firewall-cmd --reload >/dev/null 2>&1; ok "Opened $port/$proto in firewalld"; } \
+                 || err "firewalld refused to open $port/$proto" ;;
     *)         : ;;
   esac
+}
+
+# Close one port, both protocols, v4 and v6.
+#
+# `ufw delete allow 443/tcp` removes exactly the rule that was written that
+# way and nothing else, so a port opened as a bare `ufw allow 443` - which is
+# what option 5 used to do, and what ufw's own examples do - survived being
+# closed and went on showing up in the list. Each spelling is deleted, and
+# "no such rule" is not a failure: there was nothing to remove.
+deny_port() {
+  local port="$1"
+  local closed=0 spec
+  case "$(firewall_tool)" in
+    ufw)
+      local tries
+      for spec in "$port" "$port/tcp" "$port/udp"; do
+        # the same rule can be in more than once - deleting until ufw says
+        # there is nothing left to delete, and never more than a few times,
+        # so a stubborn rule cannot turn this into a loop that never ends
+        for tries in 1 2 3 4; do
+          ufw delete allow "$spec" >/dev/null 2>&1 || break
+          closed=1
+        done
+      done
+      ;;
+    firewalld)
+      for spec in tcp udp; do
+        firewall-cmd --permanent --remove-port="$port"/"$spec" >/dev/null 2>&1 && closed=1
+      done
+      firewall-cmd --reload >/dev/null 2>&1
+      ;;
+    *) warn "No firewall is installed; there is nothing to close."; return 0 ;;
+  esac
+  if [[ $closed == 1 ]]; then ok "Closed $port"; else warn "Port $port was not open in the firewall."; fi
 }
 
 panel_port() {
@@ -537,16 +712,27 @@ act_cert() {
     warn "If that is a proxy (Cloudflare's orange cloud), turn it off until the certificate is issued."
   fi
 
-  # port 80 must be free for the standalone challenge
-  systemctl stop nginx 2>/dev/null || true
+  # the firewall has to let Let's Encrypt in, and the port has to be free for
+  # certbot to bind - in that order, because opening a port nothing can bind
+  # is no use and clearing one the firewall drops is no use either
+  allow_port 80 tcp
+  if ! free_port_80 80; then
+    CERT_ERROR="something else is already using port 80"
+    remember_cert_error "$CERT_ERROR"
+    restore_port_80
+    return 1
+  fi
+
   local log="/var/log/nexv-certbot.log"
   if ! certbot certonly --standalone --non-interactive --agree-tos \
        --register-unsafely-without-email -d "$domain" >"$log" 2>&1; then
     explain_cert_failure "$log" "$domain"
     echo "  The full output is in $log"
     remember_cert_error "$CERT_ERROR"
+    restore_port_80
     return 1
   fi
+  restore_port_80
 
   local cert="/etc/letsencrypt/live/$domain/fullchain.pem"
   local key="/etc/letsencrypt/live/$domain/privkey.pem"
@@ -558,7 +744,7 @@ act_cert() {
 
   # renew unattended, and restart both services so they pick up the new files
   cat > /etc/cron.d/nexv-cert-renew <<EOF
-0 3 * * * root certbot renew --quiet --deploy-hook "systemctl restart xray nexv"
+0 3 * * * root certbot renew --quiet --pre-hook "nexv free80" --post-hook "nexv free80-undo" --deploy-hook "systemctl restart xray nexv"
 EOF
   ok "Automatic renewal installed (daily check at 03:00)"
 
@@ -646,9 +832,9 @@ act_reset_username() {
 
 act_firewall_open_panel_ports() {
   local kind
-  kind="$(firewall_kind)"
+  kind="$(firewall_tool)"
   if [[ $kind == none ]]; then
-    warn "No active firewall found; nothing to open."
+    warn "No firewall is installed; nothing to open."
     echo "  The panel ports are already reachable, unless your provider filters them."
     return 0
   fi
@@ -675,6 +861,7 @@ act_firewall_open_panel_ports() {
   done
   ok "Opened in $kind: ${opened[*]}"
   echo "  The panel, the subscription port, and every inbound that is switched on."
+  warn_if_firewall_off
 }
 
 act_firewall_enable() {
@@ -698,7 +885,15 @@ act_firewall_enable() {
     fi
   done
   ok "Allowed: $spec"
-  ufw --force enable && ok "Firewall enabled"
+  ufw --force enable >/dev/null 2>&1 || { err "ufw refused to start"; return 1; }
+  # a firewall that is gone after the next reboot is not a firewall
+  systemctl enable ufw >/dev/null 2>&1 || true
+  if [[ $(firewall_kind) == ufw ]]; then
+    ok "Firewall enabled (and set to start on boot)"
+  else
+    err "ufw says it is enabled but is not filtering - check: ufw status verbose"
+    return 1
+  fi
 }
 
 act_firewall_install() {
@@ -723,17 +918,30 @@ act_firewall_install() {
   command -v ufw >/dev/null 2>&1 && ok "ufw installed" || { err "ufw installation failed"; return 1; }
 }
 
+# What the firewall holds, which is not the same question as what it is
+# enforcing. `ufw status` on a switched-off ufw prints "Status: inactive" and
+# not one rule, so the admin who had just opened a port was shown a list it was
+# not in and concluded, reasonably, that opening it had not worked. The rules
+# are there; `ufw show added` is what prints them.
 act_firewall_status() {
   case "$(firewall_kind)" in
     ufw)       ufw status verbose ;;
     firewalld) firewall-cmd --list-all ;;
     *)
-      if command -v ufw >/dev/null 2>&1; then
-        echo "ufw is installed but not active."
-        ufw status
-      else
-        echo "No firewall is active on this server."
-      fi
+      case "$(firewall_tool)" in
+        ufw)
+          warn "ufw is installed but switched off - nothing is being filtered."
+          echo "  These rules are saved and start working the moment you enable it:"
+          echo
+          ufw show added 2>/dev/null | sed 's/^/  /'
+          ;;
+        firewalld)
+          warn "firewalld is installed but not running."
+          echo "  Saved rules:"
+          firewall-cmd --permanent --list-all 2>/dev/null | sed 's/^/  /'
+          ;;
+        *) echo "No firewall is installed on this server." ;;
+      esac
       ;;
   esac
 }
@@ -742,7 +950,15 @@ act_firewall() {
   need_root
   while true; do
     echo
-    echo "  ${BOLD}Firewall${RESET}   (currently: $(firewall_kind))"
+    local running installed
+    running="$(firewall_kind)"; installed="$(firewall_tool)"
+    if [[ $running == none && $installed != none ]]; then
+      echo "  ${BOLD}Firewall${RESET}   ($installed is installed but OFF - rules are saved, not enforced)"
+    elif [[ $running == none ]]; then
+      echo "  ${BOLD}Firewall${RESET}   (none installed)"
+    else
+      echo "  ${BOLD}Firewall${RESET}   (currently: $running)"
+    fi
     echo "    1. Install ufw"
     echo "    2. Enable firewall (allows SSH and the panel ports first)"
     echo "    3. Disable firewall"
@@ -758,18 +974,35 @@ act_firewall() {
       0) return 0 ;;
       1) act_firewall_install ;;
       2) act_firewall_enable ;;
-      3) confirm "Disable the firewall?" && { ufw disable && ok "Firewall disabled"; } ;;
+      3) if ! command -v ufw >/dev/null 2>&1; then
+           err "ufw is not installed."
+         elif confirm "Disable the firewall?"; then
+           ufw disable >/dev/null 2>&1 && ok "Firewall disabled (its rules are kept)" \
+             || err "ufw refused to stop"
+         fi ;;
       4) act_firewall_open_panel_ports ;;
       5) read -rp "  Port to open: " port
-         [[ $port =~ ^[0-9]+$ ]] && allow_port "$port" || err "Not a port number" ;;
+         if [[ $port =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )); then
+           if [[ $(firewall_tool) == none ]]; then
+             warn "No firewall is installed, so every port is already open."
+           else
+             # both protocols, because the admin asked for a port and does not
+             # mean "tcp only" by it
+             allow_port "$port" tcp
+             allow_port "$port" udp
+             warn_if_firewall_off
+             echo
+             act_firewall_status
+           fi
+         else
+           err "Not a port number"
+         fi ;;
       6) read -rp "  Port to close: " port
-         if [[ $port =~ ^[0-9]+$ ]]; then
-           case "$(firewall_kind)" in
-             ufw)       ufw delete allow "$port"/tcp >/dev/null 2>&1 && ok "Closed $port" ;;
-             firewalld) firewall-cmd --permanent --remove-port="$port"/tcp >/dev/null 2>&1 &&
-                        firewall-cmd --reload >/dev/null 2>&1 && ok "Closed $port" ;;
-             *)         warn "No active firewall" ;;
-           esac
+         if [[ $port =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )); then
+           deny_port "$port"
+           warn_if_firewall_off
+           echo
+           act_firewall_status
          else
            err "Not a port number"
          fi ;;
@@ -1530,6 +1763,10 @@ case "${1:-menu}" in
   port)            act_port "${2:-}" ;;
   settings)        act_settings ;;
   cert)            act_cert "${2:-}" ;;
+  # what the renewal cron calls around certbot, so a renewal at three in the
+  # morning clears port 80 the same way the first issue did
+  free80)          need_root; free_port_80 "${2:-80}" ;;
+  free80-undo)     need_root; restore_port_80 ;;
   reset-password)  act_reset_password "${2:-}" ;;
   reset-username)  act_reset_username "${2:-}" ;;
   firewall)        act_firewall ;;

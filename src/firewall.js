@@ -54,8 +54,47 @@ async function kind() {
   return found;
 }
 
+/**
+ * Which firewall is INSTALLED, running or not.
+ *
+ * The rule commands used to ask `kind()`, which answers only about a firewall
+ * that is up. On a box where ufw is installed and switched off - every fresh
+ * Ubuntu server - that meant opening a port from the panel did nothing and
+ * reported success as "skipped", and the open-ports list came back empty, so
+ * a port the admin had just opened was not in it. ufw keeps its rules whether
+ * it is up or down, and a rule added while it is down is in force the moment
+ * it is enabled, which is the whole point of adding it. So rules go to the
+ * tool, and `kind()` is left to answer the different question of what is
+ * being enforced right now.
+ */
+let toolCache = { at: 0, value: null };
+
+async function tool() {
+  if (process.env.NEXV_FIREWALL_TOOL) return process.env.NEXV_FIREWALL_TOOL;
+  if (process.env.NEXV_FIREWALL) return process.env.NEXV_FIREWALL;
+  if (toolCache.value && Date.now() - toolCache.at < KIND_TTL) return toolCache.value;
+
+  let found = 'none';
+  // `ufw status` needs root; `--version` answers for anybody and only says
+  // whether the thing is on the box, which is what is being asked
+  const ufw = await run('ufw', ['--version']);
+  if (ufw.ok || /ufw/i.test(ufw.stdout)) found = 'ufw';
+  else {
+    const fwd = await run('firewall-cmd', ['--version']);
+    if (fwd.ok) found = 'firewalld';
+  }
+  toolCache = { at: Date.now(), value: found };
+  return found;
+}
+
+/** Is the installed firewall actually filtering anything? */
+async function isActive() { return (await kind()) !== 'none'; }
+
 /** Forget what we think is running - after installing or enabling one. */
-function forget() { kindCache = { at: 0, value: null }; }
+function forget() {
+  kindCache = { at: 0, value: null };
+  toolCache = { at: 0, value: null };
+}
 
 function portOf(value) {
   const n = Math.round(Number(value));
@@ -87,6 +126,22 @@ async function openRules() {
       const m = /^\s*(\d{1,5})(?:\/(tcp|udp))?\s+ALLOW/i.exec(line);
       if (m) add(Number(m[1]), m[2] ? m[2].toLowerCase() : '');
     }
+  } else if (which === 'none' && (await tool()) === 'ufw') {
+    /* switched off, so `ufw status` prints one line and no rules at all. The
+       rules are still there and are what the admin is being shown, so they are
+       read from where they are kept - `ufw show added` prints them as the
+       commands that made them. */
+    const res = await run('ufw', ['show', 'added']);
+    for (const line of res.stdout.split('\n')) {
+      const m = /^\s*ufw\s+allow\s+(?:.*\s)?(\d{1,5})(?:\/(tcp|udp))?\s*$/i.exec(line);
+      if (m) add(Number(m[1]), m[2] ? m[2].toLowerCase() : '');
+    }
+  } else if (which === 'none' && (await tool()) === 'firewalld') {
+    const res = await run('firewall-cmd', ['--permanent', '--list-ports']);
+    for (const entry of res.stdout.trim().split(/\s+/)) {
+      const m = /^(\d{1,5})\/(tcp|udp)$/.exec(entry);
+      if (m) add(Number(m[1]), m[2]);
+    }
   } else if (which === 'firewalld') {
     const res = await run('firewall-cmd', ['--list-ports']);
     for (const entry of res.stdout.trim().split(/\s+/)) {
@@ -117,8 +172,9 @@ function covers(rules, port, proto) {
 async function allow(value, proto) {
   const port = portOf(value);
   if (!port) return { ok: false, reason: 'that is not a port number' };
-  const which = await kind();
-  if (which === 'none') return { ok: true, skipped: true, reason: 'no firewall is running' };
+  const which = await tool();
+  if (which === 'none') return { ok: true, skipped: true, reason: 'no firewall is installed' };
+  const enforced = await isActive();
 
   const kinds = proto === 'udp' ? ['udp'] : proto === 'both' ? ['tcp', 'udp'] : ['tcp'];
   for (const p of kinds) {
@@ -128,28 +184,35 @@ async function allow(value, proto) {
     if (!res.ok) return { ok: false, reason: (res.stderr || res.error || 'the firewall refused').trim().slice(0, 200) };
   }
   if (which === 'firewalld') await run('firewall-cmd', ['--reload']);
-  return { ok: true, firewall: which, port };
+  return { ok: true, firewall: which, port, enforced };
 }
 
 /** Close one port, by the same rules. */
 async function deny(value, proto) {
   const port = portOf(value);
   if (!port) return { ok: false, reason: 'that is not a port number' };
-  const which = await kind();
-  if (which === 'none') return { ok: true, skipped: true, reason: 'no firewall is running' };
+  const which = await tool();
+  if (which === 'none') return { ok: true, skipped: true, reason: 'no firewall is installed' };
+  const enforced = await isActive();
 
+  /* a port opened as a bare `ufw allow 443` - which is how ufw's own examples
+     do it - is not removed by deleting 443/tcp, and went on showing in the
+     list after being closed. Every spelling of the rule goes. */
   const kinds = proto === 'udp' ? ['udp'] : proto === 'both' ? ['tcp', 'udp'] : ['tcp'];
+  if (which === 'ufw') kinds.push('');
   for (const p of kinds) {
     const res = which === 'ufw'
-      ? await run('ufw', ['delete', 'allow', `${port}/${p}`])
+      ? await run('ufw', ['delete', 'allow', p ? `${port}/${p}` : String(port)])
       : await run('firewall-cmd', ['--permanent', `--remove-port=${port}/${p}`]);
-    // a rule that was not there is not a failure
-    if (!res.ok && !/could not delete|no.*match|NOT_ENABLED/i.test(res.stderr + res.error)) {
+    /* a rule that was not there is not a failure - and ufw says so on
+       stdout, not stderr, which is why closing a port that had been opened
+       the bare way failed here instead of going on to delete the bare rule */
+    if (!res.ok && !/could not delete|no.*match|NOT_ENABLED/i.test(res.stdout + res.stderr + res.error)) {
       return { ok: false, reason: (res.stderr || res.error || 'the firewall refused').trim().slice(0, 200) };
     }
   }
   if (which === 'firewalld') await run('firewall-cmd', ['--reload']);
-  return { ok: true, firewall: which, port };
+  return { ok: true, firewall: which, port, enforced };
 }
 
 /**
@@ -173,8 +236,10 @@ function protoOf(inb) {
  * `udp` matters: a wireguard or a QUIC inbound is useless over tcp alone.
  */
 async function sync(db) {
-  const which = await kind();
-  if (which === 'none') return { ok: true, skipped: true, opened: [], reason: 'no firewall is running' };
+  /* the installed one, not the running one: rules saved into a switched-off
+     ufw are what makes enabling it safe later */
+  const which = await tool();
+  if (which === 'none') return { ok: true, skipped: true, opened: [], reason: 'no firewall is installed' };
 
   const d = db.data;
   const wanted = new Map();          // port -> 'tcp' | 'udp' | 'both'
@@ -217,7 +282,11 @@ async function sync(db) {
 /** What the panel can tell the admin about the firewall right now. */
 async function status(db) {
   const which = await kind();
-  const rules = which === 'none' ? new Map() : await openRules();
+  const installed = await tool();
+  /* read the rules even when nothing is enforcing them: they are what the
+     admin opened and the list that used to come back empty here is what made
+     a port they had just opened look like it had not been */
+  const rules = installed === 'none' ? new Map() : await openRules();
   const needed = [];
   const d = db.data;
   /* `kind` says what the port is for, so a reader can tell which program
@@ -239,11 +308,41 @@ async function status(db) {
   }
   return {
     firewall: which,
+    installed,
     running: which !== 'none',
+    /* installed but switched off: the rules are saved and will apply the
+       moment it is enabled, and nothing is being blocked in the meantime */
+    savedOnly: which === 'none' && installed !== 'none',
     open: [...rules.keys()].sort((a, b) => a - b),
     needed,
     shut: which === 'none' ? [] : needed.filter((n) => !covers(rules, n.port, n.proto))
   };
+}
+
+/**
+ * Switch the firewall on without locking anybody out.
+ *
+ * Enabling ufw with no rules in it drops ssh and the panel's own port, and the
+ * admin finds out by losing the session they were doing it from. So everything
+ * the panel needs is opened first, ssh with it, and only then is it enabled -
+ * and enabled for the next boot too, because a firewall that is gone after a
+ * reboot is not one.
+ */
+async function enable(db) {
+  const which = await tool();
+  if (which !== 'ufw') {
+    return { ok: false, reason: which === 'none' ? 'ufw is not installed on this server' : `${which} is not switched on from here` };
+  }
+
+  // ssh first, and before anything that could fail
+  await run('ufw', ['allow', '22/tcp']);
+  const opened = await sync(db);
+  const on = await run('ufw', ['--force', 'enable']);
+  if (!on.ok) return { ok: false, reason: (on.stderr || on.stdout || on.error || 'ufw refused to start').trim().slice(0, 200) };
+  if (hasSystemd()) await run('systemctl', ['enable', 'ufw']);
+  forget();
+  if (!(await isActive())) return { ok: false, reason: 'ufw says it is enabled but is not filtering' };
+  return { ok: true, firewall: 'ufw', opened: opened.opened || [] };
 }
 
 /**
@@ -319,6 +418,6 @@ function whoHas(port) {
 }
 
 module.exports = {
-  kind, forget, allow, deny, openPorts, openRules, sync, status, protoOf,
+  kind, tool, isActive, forget, allow, deny, enable, openPorts, openRules, sync, status, protoOf,
   listening, whoHas
 };

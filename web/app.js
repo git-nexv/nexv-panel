@@ -5118,12 +5118,27 @@ function renderFirewall(panel) {
       body.append(el('div', { class: 'hint', text: 'Could not read the firewall.' }));
       return;
     }
-    state.className = info.running ? 'chip ok' : 'chip';
-    state.textContent = info.running ? info.firewall : 'not running';
+    state.className = info.running ? 'chip ok' : info.savedOnly ? 'chip warn' : 'chip';
+    state.textContent = info.running ? info.firewall
+      : info.savedOnly ? `${info.installed} — switched off` : 'not installed';
 
-    if (!info.running) {
+    /* installed but off is its own state, and saying "not running" about it
+       made the rules below look like they had not been saved - which is how an
+       admin who had just opened a port came to think the panel had ignored
+       them */
+    if (info.savedOnly) {
+      body.append(el('div', { class: 'notice warn', style: 'margin-bottom:12px' }, [
+        `${info.installed} is installed but switched off, so nothing is being filtered and every port is reachable from outside. The rules below are saved and start working the moment it is enabled:`,
+        el('div', { class: 'row', style: 'margin-top:10px' }, [
+          el('button', {
+            class: 'btn', text: 'Enable the firewall',
+            onclick: () => act(() => api.post('/firewall/enable', {}), 'Firewall enabled')
+          })
+        ])
+      ]));
+    } else if (!info.running) {
       body.append(el('div', { class: 'hint', style: 'margin-bottom:12px' }, [
-        'No firewall is running on this server, so every port is already reachable from outside and there is nothing here to open. Install and enable ufw if you would rather only the ports below were.'
+        'No firewall is installed on this server, so every port is already reachable from outside and there is nothing here to open. Install and enable ufw if you would rather only the ports below were.'
       ]));
     }
 
@@ -5155,7 +5170,7 @@ function renderFirewall(panel) {
         openList.append(el('span', { class: `chip ${wanted ? 'ok' : ''}`, text: wanted ? `${port} — ${t(wanted.what)}` : String(port) }));
       }
     } else {
-      openList.append(el('span', { class: 'muted', text: info.running ? 'Nothing is open.' : '—' }));
+      openList.append(el('span', { class: 'muted', text: (info.running || info.savedOnly) ? 'Nothing is open.' : '—' }));
     }
 
     body.append(el('div', { class: 'field full' }, [

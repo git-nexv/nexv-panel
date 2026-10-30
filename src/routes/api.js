@@ -1477,6 +1477,22 @@ router.post('/firewall/deny', async (req, res) => {
   res.json(Object.assign({ ok: true }, out, await firewall.status(db)));
 });
 
+/**
+ * Switch the firewall on, having opened what has to stay reachable first.
+ *
+ * The page could say the firewall was off and offer nothing to do about it
+ * but go to the terminal, which is a long way round for one command that has
+ * to be got right.
+ */
+router.post('/firewall/enable', async (req, res) => {
+  firewall.forget();
+  const out = await firewall.enable(db);
+  if (!out.ok) return bad(res, out.reason || 'could not enable the firewall');
+  logEvent('firewall', `firewall enabled${(out.opened || []).length ? ` (opened ${out.opened.join(', ')})` : ''}`);
+  firewall.forget();
+  res.json(Object.assign({ ok: true }, out, await firewall.status(db)));
+});
+
 /** Open everything the panel needs, in one go. */
 router.post('/firewall/sync', async (req, res) => {
   firewall.forget();
