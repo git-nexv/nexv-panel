@@ -85,7 +85,52 @@ function freeSlug() {
   throw new Error('could not find a free address');
 }
 
-function create({ name, inboundId, balance, pricePerGB, note }) {
+/**
+ * Which inbounds a reseller may sell on.
+ *
+ * It used to be one, a single `inboundId`, and that was the wrong shape twice
+ * over: a leader with four inbounds could only hand over one of them, and the
+ * reseller's customers each got a single way in - so the day that inbound was
+ * blocked, every client that panel had ever sold went dark at once. The list
+ * is what is stored now, and the single id is kept in step with its first
+ * entry so that an older build, and the leader's own summary line, still read
+ * something sensible.
+ *
+ * Order matters: the first is the primary, the one a single pasted link points
+ * at, exactly as it is for a client.
+ */
+function inboundIdsOf(reseller) {
+  if (!reseller) return [];
+  const list = Array.isArray(reseller.inboundIds) ? reseller.inboundIds : [];
+  const clean = [];
+  for (const id of list) {
+    const key = String(id || '').trim();
+    if (key && !clean.includes(key)) clean.push(key);
+  }
+  // nothing in the list: a panel made before this, which has the one field
+  if (!clean.length && reseller.inboundId) clean.push(String(reseller.inboundId));
+  return clean;
+}
+
+/** Write the list, keeping the legacy single field pointing at its first. */
+function setInbounds(reseller, ids) {
+  const clean = [];
+  for (const id of (Array.isArray(ids) ? ids : [ids])) {
+    const key = String(id || '').trim();
+    if (key && !clean.includes(key)) clean.push(key);
+  }
+  reseller.inboundIds = clean;
+  reseller.inboundId = clean[0] || '';
+  return clean;
+}
+
+/** The ones that are both theirs and still exist, in the leader's order. */
+function inboundsOf(reseller, inbounds) {
+  const mine = new Set(inboundIdsOf(reseller));
+  return (inbounds || []).filter((i) => mine.has(i.id));
+}
+
+function create({ name, inboundId, inboundIds, balance, pricePerGB, note }) {
   const reseller = {
     id: db.id(),
     name: String(name || '').trim() || 'reseller',
@@ -94,13 +139,15 @@ function create({ name, inboundId, balance, pricePerGB, note }) {
     balance: Number(balance) || 0,
     // 0 means "follow the panel-wide price", which is what most should do
     pricePerGB: Number(pricePerGB) > 0 ? Number(pricePerGB) : 0,
-    inboundId: inboundId || '',
+    inboundId: '',
+    inboundIds: [],
     enable: true,
     note: String(note || ''),
     spent: 0,
     createdAt: Date.now(),
     lastLoginAt: 0
   };
+  setInbounds(reseller, Array.isArray(inboundIds) && inboundIds.length ? inboundIds : [inboundId]);
   all().push(reseller);
   db.saveNow();
   return reseller;
@@ -426,6 +473,7 @@ function summary(reseller) {
     // what is stored rather than what it works out to: 0 means "follow the panel"
     priceOverride: Number(reseller.pricePerGB) || 0,
     inboundId: reseller.inboundId || '',
+    inboundIds: inboundIdsOf(reseller),
     note: reseller.note || '',
     createdAt: reseller.createdAt,
     lastLoginAt: reseller.lastLoginAt || 0,
@@ -443,5 +491,6 @@ module.exports = {
   costOf, charge, adjust, issueCode, redeem, makeCode, KINDS, kindOf,
   priceFor, defaultPrice, refundValue, refundClient,
   readBot, writeBot, botFile, clientsOf, summary,
+  inboundIdsOf, setInbounds, inboundsOf,
   userOf, usernameOf, setCredentials, clearCredentials, suggestPassword
 };

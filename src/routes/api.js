@@ -182,6 +182,9 @@ const RESELLER_ALLOWS = [
   [/^\/account$/, ['POST']],
   [/^\/status$/, ['GET']],
   [/^\/protocols$/, ['GET']],
+  /* the list is filtered to the ones the leader gave them, with their own
+     clients' counts - which is how they choose between them for a client */
+  [/^\/inbounds$/, ['GET']],
   [/^\/clients$/, ['GET', 'POST']],
   [/^\/clients\/[^/]+$/, ['PUT', 'DELETE']],
   [/^\/clients\/[^/]+\/(toggle|reset-traffic|forget-ips)$/, ['POST']],
@@ -1698,8 +1701,20 @@ function normalizeInbound(body, existing) {
 
 router.get('/inbounds', (req, res) => {
   const d = db.data;
-  res.json(d.inbounds.map((inb) => {
-    const clients = membership.clientsOn(d.clients, inb.id);
+  /*
+   * A reseller is shown the inbounds the leader gave them and no others, with
+   * the counts worked out over their own clients. They were being handed the
+   * whole list - every inbound on the server, how many clients were on it and
+   * how much traffic it had moved - which is the leader's business and not
+   * theirs. It is also what the client form reads, so this is what makes
+   * "which of my inbounds" a question they can answer.
+   */
+  const mine = req.reseller
+    ? resellers.inboundsOf(req.reseller, d.inbounds)
+    : d.inbounds;
+  const pool = req.reseller ? resellers.clientsOf(req.reseller) : d.clients;
+  res.json(mine.map((inb) => {
+    const clients = membership.clientsOn(pool, inb.id);
     return Object.assign({}, inb, {
       clientCount: clients.length,
       up: clients.reduce((a, c) => a + (c.up || 0), 0),
@@ -2308,10 +2323,21 @@ router.post('/clients', async (req, res) => {
   if (req.reseller) {
     const gb = Number(body.totalGB) || 0;
     if (gb <= 0) return bad(res, 'set a quota - an unlimited client cannot be sold from this panel');
-    /* a reseller's client goes on the one inbound the leader put them on -
-       the list in the form is not theirs to choose */
-    delete body.inboundIds;
-    body.inboundId = req.reseller.inboundId;
+    /*
+     * A reseller sells on the inbounds the leader gave them, and on no others.
+     * Which of those a client goes on is theirs to choose - a customer on two
+     * inbounds has a second way in when the first is blocked, which is the
+     * whole reason a client can be on several - but the choice is intersected
+     * with their own list here rather than trusted from the form, because the
+     * form is the one place it cannot be settled safely.
+     */
+    const theirs = resellers.inboundIdsOf(req.reseller);
+    const asked = Array.isArray(body.inboundIds) ? body.inboundIds
+      : (body.inboundId ? [body.inboundId] : []);
+    const allowed = asked.filter((id) => theirs.includes(String(id)));
+    // asked for none of theirs, or asked for nothing: all of theirs
+    body.inboundIds = allowed.length ? allowed : theirs;
+    body.inboundId = body.inboundIds[0] || '';
     body.resellerId = req.reseller.id;
     const bill = resellers.charge(req.reseller, gb, `client ${body.email || ''}`.trim());
     if (!bill.ok) return bad(res, bill.error);
@@ -2323,7 +2349,7 @@ router.post('/clients', async (req, res) => {
   const inb = db.data.inbounds.find((i) => i.id === wantedInbounds(body, null)[0]);
   if (!inb) {
     if (charged) resellers.adjust(req.reseller, charged, 'refund - inbound missing');
-    return bad(res, req.reseller ? 'this panel has no inbound set up yet - talk to whoever sold it to you' : 'inbound not found', 404);
+    return bad(res, req.reseller ? 'this panel has no inbounds set up yet - talk to whoever sold it to you' : 'inbound not found', 404);
   }
 
   try {
@@ -2361,8 +2387,14 @@ router.put('/clients/:id', async (req, res) => {
       resellers.adjust(req.reseller, back, `${before.email}: quota lowered`);
       req.body.cost = Math.max(0, Math.round((Number(before.cost) || 0) - back));
     }
-    delete req.body.inboundIds;
-    req.body.inboundId = req.reseller.inboundId;
+    /* the same intersection on an edit: they may move a client between their
+       own inbounds, and nowhere else */
+    const theirs = resellers.inboundIdsOf(req.reseller);
+    const asked = Array.isArray(req.body.inboundIds) ? req.body.inboundIds
+      : (req.body.inboundId ? [req.body.inboundId] : membership.inboundIdsOf(before));
+    const allowed = asked.filter((id) => theirs.includes(String(id)));
+    req.body.inboundIds = allowed.length ? allowed : theirs;
+    req.body.inboundId = req.body.inboundIds[0] || '';
     req.body.resellerId = req.reseller.id;
   }
   const inb = d.inbounds.find((i) => i.id === wantedInbounds(req.body || {}, before)[0]);
@@ -3091,7 +3123,8 @@ router.put('/admins/:id', leaderOnly, (req, res) => {
   const body = req.body || {};
   if (body.name !== undefined) reseller.name = String(body.name).trim() || reseller.name;
   if (body.note !== undefined) reseller.note = String(body.note);
-  if (body.inboundId !== undefined) reseller.inboundId = String(body.inboundId);
+  if (Array.isArray(body.inboundIds)) resellers.setInbounds(reseller, body.inboundIds);
+  else if (body.inboundId !== undefined) resellers.setInbounds(reseller, [body.inboundId]);
   // 0 or blank is not "free", it is "follow the panel-wide price"
   if (body.pricePerGB !== undefined) reseller.pricePerGB = Math.max(0, Number(body.pricePerGB) || 0);
   if (body.enable !== undefined) reseller.enable = !!body.enable;

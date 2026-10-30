@@ -3295,10 +3295,11 @@ async function renderClients(view) {
   view.append(wrap);
 
   await loadProtocols();
-  /* a reseller may not read the inbound list - they are on one the leader
-     chose and never pick it, so the page does not ask for what it cannot have */
+  /* a reseller reads the inbound list too now: it comes back as the ones the
+     leader gave them and nothing else, and it is what lets them put a client
+     on two of their inbounds instead of being stuck with one */
   const [inbounds, clients] = await Promise.all([
-    isReseller() ? Promise.resolve([]) : api.get('/inbounds'),
+    api.get('/inbounds').catch(() => []),
     api.get('/clients')
   ]);
   state.inbounds = inbounds;
@@ -3920,9 +3921,13 @@ function clientForm(existing) {
       [box, `${inb.remark} · ${inb.protocol}:${inb.port}`]));
   }
   const pickedIds = () => Array.from(inboundPick.querySelectorAll('input:checked')).map((i) => i.value);
-  /* a reseller has one inbound, chosen for them by the leader; the field would
-     be a list of one they cannot change, so it is simply not there */
-  if (!isReseller()) {
+  /*
+   * The leader always sees this. A reseller sees it once they have more than
+   * one inbound to choose between - the list they are shown is already only
+   * theirs - and does not when they have one, where it would be a list of one
+   * they cannot change.
+   */
+  if (!isReseller() || state.inbounds.length > 1) {
     formField(form, 'Inbounds', state.inbounds.length ? inboundPick : el('div', { class: 'hint', text: 'No inbounds yet.' }),
       { full: true, hint: 'Tick every inbound this client should be able to connect through. The subscription carries one config per inbound.' });
   }
@@ -4089,7 +4094,9 @@ function clientForm(existing) {
           return toast('Set a quota — this panel cannot sell an unlimited client', 'err');
         }
         const chosenInbounds = pickedIds();
-        if (!isReseller() && !chosenInbounds.length) {
+        /* asked for whenever the picker is on the form, which for a reseller
+           is whenever they have more than one inbound to choose between */
+        if (!chosenInbounds.length && (!isReseller() || state.inbounds.length > 1)) {
           return toast('Tick at least one inbound — a client with none has no way in', 'err');
         }
         /* waiting for first use means no expiry is written yet - the days are
@@ -5436,12 +5443,28 @@ function adminForm(existing) {
   const form = el('div', { class: 'form-grid' });
 
   const name = formField(form, 'Panel name', el('input', { value: v.name || '', placeholder: 'reseller-1' }));
-  const inbound = selectOf(
-    [{ value: '', label: 'Pick one' }].concat(data.inbounds.map((i) => ({ value: i.id, label: i.label }))),
-    v.inboundId || ''
-  );
-  formField(form, 'Their inbound', inbound, {
-    hint: 'Every client they make goes on this inbound. They never see the choice.'
+  /*
+   * Which inbounds this panel may sell on - a list, not one.
+   *
+   * It was a single picker, which meant a leader with four inbounds could hand
+   * over one of them, and every customer that reseller ever sold had a single
+   * way in: the day that inbound was blocked, all of them went dark together.
+   * Ticked here, the reseller chooses among these for each client and can
+   * reach none of the others.
+   */
+  const theirs = Array.isArray(v.inboundIds) && v.inboundIds.length
+    ? v.inboundIds
+    : (v.inboundId ? [v.inboundId] : []);
+  const inboundPick = el('div', { class: 'chips' });
+  for (const i of data.inbounds) {
+    const box = el('input', { type: 'checkbox', value: i.id });
+    box.checked = existing ? theirs.includes(i.id) : false;
+    inboundPick.append(el('label', {}, [box, i.label]));
+  }
+  const pickedInbounds = () => Array.from(inboundPick.querySelectorAll('input:checked')).map((b) => b.value);
+  formField(form, 'Their inbounds', data.inbounds.length ? inboundPick : el('div', { class: 'hint', text: 'No inbounds yet.' }), {
+    full: true,
+    hint: 'Tick every inbound this panel may sell on. They pick among these for each client and cannot see the rest.'
   });
   const price = formField(form, 'Price per GB', el('input', {
     type: 'number', min: '0',
@@ -5490,7 +5513,7 @@ function adminForm(existing) {
       onClick: async (close) => {
         const payload = {
           name: name.value.trim(),
-          inboundId: inbound.value,
+          inboundIds: pickedInbounds(),
           // empty means "follow the panel price"; the server reads 0 that way
           pricePerGB: price.value.trim() === '' ? 0 : Number(price.value),
           note: note.value
