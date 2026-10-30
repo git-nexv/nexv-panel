@@ -2575,22 +2575,38 @@ async function deliverOrder(order) {
 
   /*
    * A top-up lands on the config the buyer was looking at when they pressed
-   * renew: the volume is added to what is left rather than replacing it, and
-   * the days are added to whatever is still to run. Nothing about the config
-   * changes - same link, same name - so the app on their phone keeps working
-   * and simply has more in it.
+   * renew: the volume is added to what is left, the time is replaced by the
+   * term they just bought. Nothing about the config changes - same link, same
+   * name - so the app on their phone keeps working and simply has more in it.
+   *
+   * The config is found by its id and nothing else. It used to have to match
+   * the buyer's Telegram id as well, which reads like a sensible check and is
+   * not one: the id in the order came from this buyer's own list of configs in
+   * the first place, so the only thing the second half could do was fail on a
+   * config whose tgId had since been edited in the panel - and failing here
+   * does not stop the delivery, it cuts a brand new config instead. That is
+   * exactly the "I renewed and got a second service" that this is about.
    */
   if (order.renewClientId) {
-    const client = db.data.clients.find((c) => c.id === order.renewClientId
-      && String(c.tgId || '') === String(order.userId));
+    const client = db.data.clients.find((c) => c.id === order.renewClientId);
     if (client) {
       try {
+        // whoever paid owns it now, so a renewed config answers to their id
+        if (!client.tgId) client.tgId = String(order.userId);
+        if (!client.tgUsername && order.username) client.tgUsername = order.username;
         return { ok: true, renewed: true, plan, client: await topUp(client, plan) };
       } catch (err) {
         return { ok: false, error: err.message };
       }
     }
-    // the config went away between buying and delivering; cut a new one instead
+    /* the config really is gone - deleted between buying and delivering. A new
+       one is the only thing left to hand over, and the admin is told, because
+       from the buyer's side this looks like the bug we just fixed. */
+    await tellAdmin([
+      '<b>تمدید روی کانفیگ قبلی انجام نشد</b>',
+      'کانفیگی که خریدار تمدیدش کرده بود پیدا نشد (حذف شده) — یک کانفیگ تازه تحویل داده شد.',
+      ...buyerLines(order)
+    ].join('\n')).catch(() => {});
   }
 
   try {
@@ -2620,11 +2636,18 @@ async function deliverOrder(order) {
 }
 
 /**
- * Add a plan's worth of volume and days to a config that already exists.
+ * Put a plan onto a config that already exists.
  *
- * Both are added rather than set: somebody who tops up with a week still to
- * run keeps that week. An expired or used-up config starts its new allowance
- * from now, which is the only reading that is not a cheat either way.
+ * Volume is added and time is replaced, which is not an inconsistency - it is
+ * what each of the two is. Gigabytes a buyer paid for and did not use are
+ * theirs, so five left over plus ten bought is fifteen. A month is not a
+ * quantity like that: it is how long the service runs for, and somebody who
+ * buys a month gets a month. Adding the ten days still on the old clock to it
+ * would mean the same thousand tomans bought a different amount of time
+ * depending on when it was spent, and would pay anybody who renews early.
+ *
+ * So one month bought with ten days left is one month from now, two months is
+ * two, three is three.
  */
 async function topUp(client, plan) {
   const now = Date.now();
@@ -2640,11 +2663,13 @@ async function topUp(client, plan) {
     client.totalGB = 0;
   }
   if (plan.days) {
-    if (client.expiryTime && client.expiryTime > now) client.expiryTime += plan.days * 86400000;
-    else if (!client.expiryTime && client.startAfterFirstUse && !client.startedAt) {
-      client.expiryDays = (Number(client.expiryDays) || 0) + plan.days;
+    if (!client.expiryTime && client.startAfterFirstUse && !client.startedAt) {
+      /* never opened, so there is no clock running to replace - the new term
+         simply becomes the term it will start with on first use */
+      client.expiryDays = plan.days;
     } else {
       client.expiryTime = now + plan.days * 86400000;
+      client.expiryDays = plan.days;
     }
   }
   // a top-up is also a reprieve: whatever had switched it off is settled now
@@ -3661,7 +3686,7 @@ module.exports = {
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
   sendBackup, backupStatus, backupSettings, backupTimes, watchBackups, minutesOf, nextBackupAt, backupTick,
   backupOnChange, stateFingerprint, backupBeat,
-  payLabel, customLabel, picksTerm, settleGateway, sweepGateway, watchGateway, orderByToken,
+  payLabel, customLabel, picksTerm, deliverOrder, topUp, settleGateway, sweepGateway, watchGateway, orderByToken,
   /* the entry point for one update: what the polling loop feeds, and what a
      webhook would feed if this ever grows one */
   handle
