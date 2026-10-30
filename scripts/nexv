@@ -360,18 +360,205 @@ lock_sum() {
 # Settings the unit file needs that an older install was written without. The
 # panel is updated far more often than it is reinstalled, so a line added to
 # the installer would otherwise never reach a machine that already has it.
+# ------------------------------------------------------ the delete lock --
+#
+# The panel's own files, marked so the kernel refuses to remove them.
+#
+# A server that has been cracked once can be cracked again, and the thing the
+# admin is actually afraid of is coming back to a box with no panel on it. So
+# the install directory, the launcher and the service unit are given ext4's
+# immutable flag: with it set, unlink, rename, truncate and write are refused
+# for everybody - `rm -rf /opt/nexv-panel` fails for root, not just for an
+# intruder. It is cleared in exactly two places: an update, which puts it back
+# when it is done, and the uninstall in this menu.
+#
+# What this is NOT: protection from somebody who already has root. Root can run
+# `chattr -i` the same way this does, and nothing a file flag can say will stop
+# them. What it does stop is every rm that was not aimed at this specifically -
+# a cleanup script, another panel's installer, a careless one-liner, and the
+# kind of smash-and-grab that deletes what it finds and moves on. Treat it as a
+# lock on the door, not as a wall: the backups going to the bot are what gets
+# the panel back if somebody really means it.
+PROTECT_FLAG="${NEXV_PROTECT_FLAG:-/var/lib/nexv/protected}"
+
+# What gets locked, and how far down.
+#
+# "tree" means the path and everything under it; "self" means that one
+# directory entry and nothing inside it. The difference is the whole design:
+#
+#   the code      tree - nothing in it is written while the panel runs, so
+#                 locking all of it costs nothing and is what stops the panel
+#                 from being deleted or quietly edited
+#   the launcher  the one file `nexv` is run from
+#   the unit      what systemd starts at boot; without it the panel does not
+#                 come back after a reboot even if the code is all there
+#   /etc/nexv     self only. Locked as a tree it would include db.json, and
+#                 the panel saves by writing a temporary file next to it and
+#                 renaming it over - both refused on an immutable file or in
+#                 an immutable directory, so the panel could not save at all.
+#                 Locked as itself, `rm -rf /etc/nexv` fails and the data
+#                 directory cannot be removed, while db.json stays writable.
+#
+# So the admin's data is the one part a determined rm can still reach, and the
+# backups going to the bot are what covers it. The panel itself comes back.
+protect_paths() {
+  echo "tree:$INSTALL_DIR"
+  echo "self:${LAUNCHER:-/usr/local/bin/nexv}"
+  echo "self:${UNIT_FILE:-/etc/systemd/system/${SERVICE}.service}"
+  echo "self:${CONF_DIR:-/etc/nexv}"
+}
+
+protect_tool() { command -v chattr >/dev/null 2>&1; }
+
+# Does the filesystem under the panel actually honour the flag? ext4 and xfs
+# do; overlayfs and some container filesystems do not, and saying "protected"
+# on one of those would be a lie the admin only finds out about afterwards.
+protect_supported() {
+  protect_tool || return 1
+  local probe="$INSTALL_DIR/.nexv-chattr-probe"
+  [[ -d $INSTALL_DIR ]] || return 1
+  : > "$probe" 2>/dev/null || return 1
+  if chattr +i "$probe" >/dev/null 2>&1; then
+    chattr -i "$probe" >/dev/null 2>&1
+    rm -f "$probe"
+    return 0
+  fi
+  rm -f "$probe" 2>/dev/null
+  return 1
+}
+
+protect_is_on() { [[ -f $PROTECT_FLAG ]]; }
+
+# The flag lives outside every path that gets locked, so that turning the lock
+# off is never a question of writing into something that is locked.
+protect_remember() { mkdir -p "$(dirname "$PROTECT_FLAG")" && : > "$PROTECT_FLAG"; }
+protect_forget()   { rm -f "$PROTECT_FLAG"; }
+
+# Set or clear the flag over one entry from the list above. A directory always
+# needs its own call as well as -R: it is the directory's own flag that makes
+# `rm -rf` on it fail.
+protect_mark() {
+  local how="$1" spec="$2"
+  local depth="${spec%%:*}" target="${spec#*:}"
+  [[ -e $target ]] || return 0
+  if [[ $depth == tree && -d $target ]]; then
+    chattr -R "$how" "$target" >/dev/null 2>&1 || true
+  fi
+  chattr "$how" "$target" >/dev/null 2>&1 || true
+}
+
+protect_on() {
+  protect_tool || { warn "chattr is not installed (apt-get install e2fsprogs) - files are not locked."; return 1; }
+  local spec
+  while read -r spec; do protect_mark +i "$spec"; done < <(protect_paths)
+  protect_remember
+  # said from what the kernel reports, not from what we just tried to do
+  if lsattr -d "$INSTALL_DIR" 2>/dev/null | grep -q '^....i'; then
+    ok "Panel files are locked - they cannot be deleted, even by root."
+    echo "  Updating and uninstalling from this menu still work; they unlock first."
+  else
+    protect_forget
+    err "This filesystem does not support the immutable flag, so nothing was locked."
+    return 1
+  fi
+}
+
+protect_off() {
+  protect_tool || return 0
+  local spec
+  while read -r spec; do protect_mark -i "$spec"; done < <(protect_paths)
+  protect_forget
+}
+
+# Unlock for the length of one operation, and put it back exactly as it was.
+# Returns 1 when it was not locked, so the caller knows whether to re-lock.
+protect_suspend() {
+  protect_is_on || return 1
+  echo "Unlocking the panel files for this..."
+  protect_off
+  return 0
+}
+
+protect_resume() {
+  echo "Locking the panel files again..."
+  local spec
+  while read -r spec; do protect_mark +i "$spec"; done < <(protect_paths)
+  protect_remember
+  ok "Panel files are locked again."
+}
+
+act_protect() {
+  need_root
+  while true; do
+    echo
+    if protect_is_on; then
+      echo "  ${BOLD}Delete lock${RESET}   (currently: ${GREEN}on${RESET})"
+    else
+      echo "  ${BOLD}Delete lock${RESET}   (currently: ${RED}off${RESET})"
+    fi
+    echo "    The panel's files carry the immutable flag, so nothing can delete"
+    echo "    them - not an intruder, not a stray rm, not root. Updating and"
+    echo "    uninstalling from this menu unlock them first, so both keep working."
+    echo
+    echo "    It does not stop somebody who already has root from unlocking it"
+    echo "    the same way this does. Keep the bot backups on."
+    echo
+    echo "    1. Turn the lock on"
+    echo "    2. Turn the lock off"
+    echo "    3. Show what is locked"
+    echo "    0. Back"
+    local choice
+    read -rp "  Choose an option: " choice
+    echo
+    case "$choice" in
+      0) return 0 ;;
+      1) if protect_is_on; then
+           ok "It is already on."
+         elif protect_supported; then
+           protect_on
+         else
+           err "This server cannot lock files this way."
+           echo "  Either chattr is missing (apt-get install e2fsprogs), or the panel is"
+           echo "  on a filesystem that has no immutable flag (overlayfs, some containers)."
+         fi ;;
+      2) protect_off; ok "Lock removed - the panel's files can be deleted again." ;;
+      3) local spec target
+         while read -r spec; do
+           target="${spec#*:}"
+           [[ -e $target ]] || continue
+           if [[ -d $target ]]; then lsattr -d "$target" 2>/dev/null; else lsattr "$target" 2>/dev/null; fi
+         done < <(protect_paths)
+         echo
+         echo "  An 'i' in the flags means that path is locked." ;;
+      *) err "Choose a number between 0 and 3" ;;
+    esac
+  done
+}
+
 refresh_unit() {
   local unit="/etc/systemd/system/${SERVICE}.service"
   [[ -f $unit ]] || return 0
   grep -q '^TimeoutStopSec=' "$unit" && return 0
+  # the unit may be locked against deletion; sed cannot write through that
+  local locked=0
+  if lsattr "$unit" 2>/dev/null | grep -q '^....i'; then
+    chattr -i "$unit" >/dev/null 2>&1 && locked=1
+  fi
   # after the last Restart/Limit line, before [Install]
   sed -i 's/^\[Install\]$/TimeoutStopSec=15\n\n[Install]/' "$unit"
+  [[ $locked == 1 ]] && chattr +i "$unit" >/dev/null 2>&1
   systemctl daemon-reload 2>/dev/null || true
 }
 
 act_update() {
   need_root
-  local before after rc
+  local before after rc relock=0
+
+  # an update replaces the very files the lock protects, so it comes off for
+  # the duration and goes back on at the end - including when the update fails,
+  # because leaving the panel unlocked after a failed update is the one outcome
+  # nobody asked for
+  protect_suspend && relock=1
 
   # Every step is announced, because the panel shows this output while it waits
   # and a silent five minutes is indistinguishable from a hang.
@@ -397,11 +584,17 @@ act_update() {
     else
       err "Could not reach the repository (git exited $rc)."
     fi
+    [[ $relock == 1 ]] && protect_resume
     echo "UPDATE-FAILED"
     return 1
   fi
 
-  git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH" -q || { err "Could not apply the new files"; echo "UPDATE-FAILED"; return 1; }
+  if ! git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH" -q; then
+    err "Could not apply the new files"
+    [[ $relock == 1 ]] && protect_resume
+    echo "UPDATE-FAILED"
+    return 1
+  fi
   after="$(lock_sum)"
 
   # npm install is nearly all of the time an update takes, and nearly every
@@ -415,6 +608,7 @@ act_update() {
     if [[ $rc -ne 0 ]]; then
       [[ $rc -eq 124 ]] && err "npm install gave up after fifteen minutes - the registry is not answering." \
                        || err "npm install failed (exit $rc)."
+      [[ $relock == 1 ]] && protect_resume
       echo "UPDATE-FAILED"
       return 1
     fi
@@ -424,6 +618,7 @@ act_update() {
 
   install -m 755 "$INSTALL_DIR/scripts/nexv" /usr/local/bin/nexv
   refresh_unit
+  [[ $relock == 1 ]] && protect_resume
   echo "Restarting the panel..."
   systemctl restart "$SERVICE"
 
@@ -1596,6 +1791,11 @@ EOF
 act_uninstall() {
   need_root
   confirm "Remove the panel from this server?" || { echo "Cancelled"; return 0; }
+  # this is the sanctioned way out, so the lock comes off here and nowhere else
+  if protect_is_on; then
+    echo "Unlocking the panel files..."
+    protect_off
+  fi
   systemctl disable --now "$SERVICE" 2>/dev/null || true
   rm -f /etc/systemd/system/${SERVICE}.service /etc/cron.d/nexv-cert-renew
   systemctl daemon-reload
@@ -1664,11 +1864,18 @@ show_menu() {
   menu_rule
   menu_row 24 "Diagnose problems"
   menu_row 25 "Change the panel port"
+  menu_rule
+  menu_row 26 "Lock the panel files (anti-delete)"
   menu_end
   echo
   printf "  Panel state        : %s\n" "$(state_of "$SERVICE")"
   printf "  Start automatically: %s\n" "$(enabled_of "$SERVICE")"
   printf "  Xray state         : %s\n" "$(state_of xray)"
+  if protect_is_on; then
+    printf "  Files locked       : %s\n" "${GREEN}Yes${RESET}"
+  else
+    printf "  Files locked       : %s\n" "${RED}No${RESET}"
+  fi
   echo
 }
 
@@ -1676,7 +1883,7 @@ run_menu() {
   while true; do
     show_menu
     local choice domain file port name repeat
-    read -rp "  Please enter your selection [0-25]: " choice
+    read -rp "  Please enter your selection [0-26]: " choice
     echo
     case "$choice" in
       0) exit 0 ;;
@@ -1716,7 +1923,8 @@ run_menu() {
       24) act_doctor; pause ;;
       25) read -rp "  New panel port (empty = just report): " port
           act_fix "$port"; pause ;;
-      *) err "Please choose a number between 0 and 27"; pause ;;
+      26) act_protect; pause ;;
+      *) err "Please choose a number between 0 and 26"; pause ;;
     esac
   done
 }
@@ -1745,6 +1953,7 @@ ${BOLD}nexv${RESET} - NexV Panel management
   nexv geo                      update geoip.dat and geosite.dat
   nexv doctor                   diagnose why the panel is not answering
   nexv fix [port]               change the panel port and verify it answers
+  nexv lock                     lock the panel's files against deletion
   nexv uninstall                remove the panel
 HELP
 }
@@ -1777,6 +1986,10 @@ case "${1:-menu}" in
   xray-fix)        act_xray_fix ;;
   cert-fix)        act_cert_fix ;;
   uninstall)       act_uninstall ;;
+  lock)            act_protect ;;
+  # what the installer and the updater call, so the lock survives both
+  lock-on)         need_root; protect_supported && protect_on || { err "This filesystem cannot lock files."; exit 1; } ;;
+  lock-off)        need_root; protect_off; ok "Panel files unlocked" ;;
   help|-h|--help)  usage ;;
   *)               err "Unknown command: $1"; echo; usage; exit 1 ;;
 esac

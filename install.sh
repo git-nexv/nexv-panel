@@ -697,8 +697,17 @@ setup_ssl() {
     warn "If that is a proxy (Cloudflare's orange cloud), turn it off until the certificate is issued."
   fi
 
-  # port 80 must be free for the standalone challenge
-  systemctl stop nginx 2>/dev/null || true
+  # port 80 must be free for the standalone challenge, and on a server that
+  # came with something already on it - a stray nginx, another panel's
+  # leftovers - that is the install's most common reason for ending without
+  # HTTPS. The management script knows how to clear it; it is already on disk
+  # by this point, so this does not have to learn the same trick twice.
+  local freed=0
+  if bash "$INSTALL_DIR/scripts/nexv" free80 >/dev/null 2>&1; then
+    freed=1
+  else
+    systemctl stop nginx 2>/dev/null || true
+  fi
   local log="/var/log/nexv-certbot.log"
   if step "Requesting a certificate for $DOMAIN" \
        bash -c 'certbot certonly --standalone --non-interactive --agree-tos \
@@ -715,6 +724,8 @@ EOF
     explain_cert_failure "$log" "$DOMAIN"
     echo "  The full output is in $log"
   fi
+  # whatever was holding port 80 goes back up, certificate or no certificate
+  [[ $freed == 1 ]] && bash "$INSTALL_DIR/scripts/nexv" free80-undo >/dev/null 2>&1 || true
 }
 
 seed_settings() {
@@ -836,10 +847,30 @@ summary() {
     fi
   fi
   echo
+  if [[ ${LOCKED:-0} == 1 ]]; then
+    echo "  The panel's files are locked: nothing can delete them, not even root."
+    echo "  Updating and uninstalling from the nexv menu still work."
+  fi
   echo "  Type ${BOLD}nexv${RESET} for the management menu."
   echo "${GREEN}${BOLD}=====================================================${RESET}"
   echo
   warn "Store the password somewhere safe."
+}
+
+# The panel's files, marked so nothing can delete them.
+#
+# This is on from the first minute because the minute it is wanted is the one
+# after somebody has already been on the server, and a protection nobody
+# switched on protects nothing. Updating and uninstalling through the nexv menu
+# both unlock first, so neither is affected; `nexv lock` turns it off.
+lock_panel_files() {
+  if bash "$INSTALL_DIR/scripts/nexv" lock-on >/dev/null 2>&1; then
+    LOCKED=1
+    ok "Panel files locked against deletion (nexv -> 26 to change)"
+  else
+    LOCKED=0
+    warn "Could not lock the panel's files on this filesystem - skipping."
+  fi
 }
 
 main() {
@@ -855,6 +886,7 @@ main() {
   seed_settings
   install_service
   open_firewall
+  lock_panel_files
   summary
 }
 
