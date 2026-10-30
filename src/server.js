@@ -594,6 +594,18 @@ async function bootstrap() {
   // a bot that was running before the restart starts polling again on its own
   try { require('./telegram').resume(); } catch (err) { console.error('[bot] could not resume:', err.message); }
   /*
+   * Deadlines written by another panel, in seconds or as a negative duration.
+   * Read as milliseconds a second-timestamp is a date in 1970, so the client
+   * showed up as Expired with nothing on the page to explain why.
+   */
+  try {
+    const fixed = require('./xray').repairClocks(require('./db'));
+    if (fixed.seconds || fixed.durations) {
+      console.log(`[panel] fixed ${fixed.seconds + fixed.durations} expiry date(s) in another `
+        + "panel's format");
+    }
+  } catch (err) { console.error('[panel] could not check the expiry dates:', err.message); }
+  /*
    * Configs the bot sold while they were coming out attached to no inbound at
    * all. They do not work and cannot be imported, so they are put back on the
    * inbound their plan names. Does nothing once there are none left.
@@ -608,6 +620,10 @@ async function bootstrap() {
       if (r && r.rebuilt) {
         console.log(`[bot] ${r.rebuilt} config(s) had no time limit at all - their term was read `
           + 'back from the orders that sold them');
+      }
+      if (r && r.noted) {
+        console.log(`[bot] ${r.noted} config(s) were sold with no time limit and their term has `
+          + 'already run out - left running, see the log on the panel');
       }
     })
     .catch((err) => console.error('[bot] could not date sold configs:', err.message));

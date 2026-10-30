@@ -3321,6 +3321,8 @@ async function dateUndatedClients() {
   const waiting = startsOnFirstUse();
   let dated = 0;
   let rebuilt = 0;
+  /* ones whose term had already run out: reported, never backdated */
+  let noted = 0;
 
   for (const c of d.clients) {
     if (!String(c.tgId || '').trim()) continue;
@@ -3344,25 +3346,43 @@ async function dateUndatedClients() {
      * Sold with no length at all, which no setting and no first use can ever
      * repair: there is nothing to count. The term is read back off the order
      * and the deadline put where it always should have been - the day it was
-     * sold plus what was paid for. One already past that comes out expired,
-     * which is the true answer: it is a config that has been running free.
+     * sold plus what was paid for.
+     *
+     * Unless that deadline is already behind us. This used to write it anyway,
+     * on the grounds that it was the true answer for a config that had been
+     * running free - and the result was a client the admin had deliberately
+     * left without a limit, or one sold long enough ago, turning up in the
+     * list as Expired with no quota and no date the admin had ever set. The
+     * config was working; the panel decided on its own that it was not.
+     *
+     * A date in the past is not a repair, it is a deletion with extra steps.
+     * So it is left alone and said out loud instead, and whoever reads the log
+     * decides whether that config should end or be renewed.
      */
     if (Number(c.expiryDays) > 0) continue;
     const term = soldTerm(c);
     if (!term) continue;
     const from = Number(c.createdAt) || now;
+    const until = from + term.days * 86400000;
+    if (until <= now) {
+      noted++;
+      d.logs.unshift({ at: now, type: 'client',
+        message: `${c.email} was sold with no time limit; the ${term.days} days from `
+          + `${term.how} ran out on ${new Date(until).toISOString().slice(0, 10)}. `
+          + 'Left running - set a date on it or renew it if it should end.' });
+      continue;
+    }
     c.expiryDays = term.days;
-    c.expiryTime = from + term.days * 86400000;
+    c.expiryTime = until;
     c.startAfterFirstUse = false;
     c.startedAt = c.startedAt || from;
     rebuilt++;
     d.logs.unshift({ at: now, type: 'client',
       message: `${c.email} was sold with no time limit at all; ${term.days} days read back from `
-        + `${term.how}, counting from the day it was sold`
-        + (c.expiryTime < now ? ' - which has already passed' : '') });
+        + `${term.how}, counting from the day it was sold` });
   }
 
-  if (!dated && !rebuilt) return { dated: 0, rebuilt: 0 };
+  if (!dated && !rebuilt && !noted) return { dated: 0, rebuilt: 0, noted: 0 };
   db.saveNow();
   if (dated) {
     d.logs.unshift({ at: now, type: 'client',
@@ -3373,8 +3393,9 @@ async function dateUndatedClients() {
       message: `${rebuilt} config(s) had no time limit at all; their term was read back from the orders that sold them` });
   }
   if (d.logs.length > 500) d.logs.length = 500;
-  await require('./xray').apply();
-  return { dated, rebuilt };
+  // nothing to push at Xray when all we did was write in the log
+  if (dated || rebuilt) await require('./xray').apply();
+  return { dated, rebuilt, noted };
 }
 
 async function repairOrphanClients() {

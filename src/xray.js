@@ -660,8 +660,87 @@ function clientTag(c) {
   return `${c.email}#${c.id.slice(0, 8)}`;
 }
 
+/*
+ * When a deadline is a deadline.
+ *
+ * Three shapes reach this from outside and only one of them is ours:
+ *
+ *   a millisecond timestamp  what this panel writes
+ *   a second timestamp       what some panels export, and what an API client
+ *                            written against a different panel sends. Read as
+ *                            milliseconds it is a date in 1970, so the client
+ *                            reads as expired while the page shows a quota of
+ *                            Unlimited and a date nobody set - which is
+ *                            exactly how a working config comes to be labelled
+ *                            Expired
+ *   a negative number        3x-ui's "this many milliseconds once it starts".
+ *                            It is a length, not a date, and nothing has
+ *                            started, so it is not a deadline at all
+ *
+ * Anything that is not a finite positive number is no deadline either. The
+ * cutoff is the year 2001 in milliseconds: no deadline this panel ever wrote
+ * is below it, and every second-timestamp from now until the year 33000 is.
+ */
+const MS_FLOOR = 1000000000000;        // 2001-09-09, in milliseconds
+
+function deadlineOf(c) {
+  const raw = Number(c && c.expiryTime);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return raw < MS_FLOOR ? raw * 1000 : raw;
+}
+
 function isExpired(c) {
-  return !!c.expiryTime && c.expiryTime > 0 && c.expiryTime < Date.now();
+  const at = deadlineOf(c);
+  return !!at && at < Date.now();
+}
+
+/**
+ * Put every deadline in the store into milliseconds, once.
+ *
+ * `deadlineOf` reads the odd shapes correctly, but it is one function and
+ * there are a dozen other places - the subscription headers, the bot's "how
+ * long is left", the dashboard's next-expiry - that compare the stored number
+ * directly. Teaching all of them the same trick would mean the next one added
+ * gets it wrong. So the value is corrected where it lives, at startup, and
+ * everything downstream goes on reading a plain millisecond timestamp.
+ *
+ * A negative one is 3x-ui's way of writing "this long once it starts", which
+ * is what this panel calls startAfterFirstUse plus a number of days, so it is
+ * written that way instead of being thrown away.
+ */
+function repairClocks(db) {
+  const d = db.data;
+  let seconds = 0;
+  let durations = 0;
+
+  for (const list of [d.clients || [], d.inbounds || []]) {
+    for (const c of list) {
+      const raw = Number(c.expiryTime);
+      if (!Number.isFinite(raw) || raw === 0) continue;
+      if (raw < 0) {
+        const days = Math.round(-raw / 86400000);
+        c.expiryTime = 0;
+        if (days > 0 && !(Number(c.expiryDays) > 0)) {
+          c.expiryDays = days;
+          c.startAfterFirstUse = true;
+        }
+        durations++;
+      } else if (raw < MS_FLOOR) {
+        c.expiryTime = raw * 1000;
+        seconds++;
+      }
+    }
+  }
+
+  if (seconds || durations) {
+    db.saveNow();
+    (d.logs = d.logs || []).unshift({ at: Date.now(), type: 'client',
+      message: `Fixed ${seconds + durations} expiry date(s) that were stored in another panel's format`
+        + `${seconds ? ` - ${seconds} in seconds rather than milliseconds, which read as 1970 and`
+          + ' therefore as expired' : ''}` });
+    if (d.logs.length > 500) d.logs.length = 500;
+  }
+  return { seconds, durations };
 }
 
 function isOverQuota(c) {
@@ -1514,6 +1593,7 @@ async function generateReality() {
 }
 
 module.exports = {
+  deadlineOf, repairClocks,
   xrayVersion,
   XRAY_BIN, XRAY_CONFIG, XRAY_SERVICE, API_PORT, BOT_PROXY_PORT, botVia, handOverConfig,
   buildConfig, writeConfig, testConfig, apply, serviceStatus, repairCerts, messageOf, isOverIpLimit,

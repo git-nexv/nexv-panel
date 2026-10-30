@@ -760,8 +760,28 @@ seed_settings() {
   ok "Settings saved"
 }
 
+# How much heap node may use, in megabytes.
+#
+# Without a ceiling V8 sizes the old space from the machine's total memory and
+# then has no reason to hand anything back: on a 2 GB VPS the panel's resident
+# set climbs into the hundreds of megabytes and stays there, which on a box
+# that is also running Xray is the difference between comfortable and swapping.
+# The panel's own live data is a few megabytes - the store, the online map, the
+# traffic counters - so a quarter of the machine, floored at 192 MB and capped
+# at 512, is room to spare and a reason for the collector to do its job.
+node_heap_mb() {
+  local total mb
+  total="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 1024)"
+  mb=$(( total / 4 ))
+  (( mb < 192 )) && mb=192
+  (( mb > 512 )) && mb=512
+  echo "$mb"
+}
+
 install_service() {
   info "Creating the systemd service..."
+  local heap
+  heap="$(node_heap_mb)"
   cat > /etc/systemd/system/${SERVICE}.service <<EOF
 [Unit]
 Description=NexV Panel - Xray management panel
@@ -771,7 +791,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$(command -v node) $INSTALL_DIR/src/server.js
+ExecStart=$(command -v node) --max-old-space-size=$heap $INSTALL_DIR/src/server.js
 Environment=NODE_ENV=production
 Environment=NEXV_DATA_DIR=$DATA_DIR
 Environment=NEXV_ADMIN_USER=$ADMIN_USER

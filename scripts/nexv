@@ -535,17 +535,44 @@ act_protect() {
   done
 }
 
+# A quarter of the machine's memory, floored and capped - see install.sh.
+node_heap_mb() {
+  local total mb
+  total="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 1024)"
+  mb=$(( total / 4 ))
+  (( mb < 192 )) && mb=192
+  (( mb > 512 )) && mb=512
+  echo "$mb"
+}
+
+# Bring an existing unit up to what the installer writes today.
+#
+# Two things get added: a stop timeout, and a heap ceiling for node. Without
+# the ceiling V8 sizes itself from the whole machine and never gives any of it
+# back, so a panel that has been up for a week sits on far more memory than it
+# is using - on a small VPS next to Xray, that is what "the panel is heavy"
+# turns out to be.
 refresh_unit() {
   local unit="/etc/systemd/system/${SERVICE}.service"
   [[ -f $unit ]] || return 0
-  grep -q '^TimeoutStopSec=' "$unit" && return 0
+  local want_stop=1 want_heap=1
+  grep -q '^TimeoutStopSec=' "$unit" && want_stop=0
+  grep -q 'max-old-space-size' "$unit" && want_heap=0
+  [[ $want_stop == 0 && $want_heap == 0 ]] && return 0
   # the unit may be locked against deletion; sed cannot write through that
   local locked=0
   if lsattr "$unit" 2>/dev/null | grep -q '^....i'; then
     chattr -i "$unit" >/dev/null 2>&1 && locked=1
   fi
   # after the last Restart/Limit line, before [Install]
-  sed -i 's/^\[Install\]$/TimeoutStopSec=15\n\n[Install]/' "$unit"
+  [[ $want_stop == 1 ]] && sed -i 's/^\[Install\]$/TimeoutStopSec=15\n\n[Install]/' "$unit"
+  if [[ $want_heap == 1 ]]; then
+    # only an ExecStart that has not been edited by hand, and only the node one
+    sed -i -E "s#^(ExecStart=[^ ]*node) (.*/src/server\.js)#\1 --max-old-space-size=$(node_heap_mb) \2#" "$unit"
+    grep -q 'max-old-space-size' "$unit" \
+      && ok "Gave node a $(node_heap_mb) MB heap ceiling" \
+      || warn "Could not add the heap ceiling to $unit - left as it was"
+  fi
   [[ $locked == 1 ]] && chattr +i "$unit" >/dev/null 2>&1
   systemctl daemon-reload 2>/dev/null || true
 }

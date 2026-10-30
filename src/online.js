@@ -208,6 +208,71 @@ function save() {
   }
 }
 
+/*
+ * How the log is read, and why it is read this way.
+ *
+ * This used to allocate one buffer the size of everything new - up to the four
+ * megabyte catch-up limit - turn it into a string, and then split that string
+ * on newlines into an array holding every line at once. Three copies of the
+ * same data, the largest of them a few hundred thousand short strings, every
+ * ten seconds, for the life of the process. None of it is kept, so it is not a
+ * leak; it is churn, and churn is what makes a resident set that will not come
+ * down: the garbage collector has no reason to hand memory back while the next
+ * burst is ten seconds away.
+ *
+ * So it is read a chunk at a time into one buffer that is allocated once and
+ * reused forever, and the lines are walked in place with indexOf - no array of
+ * lines, no second copy of the text. What the panel ends up knowing is exactly
+ * the same; what it costs to find it out is a fixed quarter of a megabyte
+ * instead of a multiple of however busy the server is.
+ */
+const CHUNK = 256 * 1024;
+const MAX_CATCHUP = 4 * 1024 * 1024;
+/* one line of an access log is a couple of hundred bytes; this is the point
+   past which something is wrong and the fragment is not worth carrying */
+const MAX_CARRY = 64 * 1024;
+let chunkBuffer = null;
+
+function readChunks(from, to, onLine) {
+  if (!chunkBuffer) chunkBuffer = Buffer.allocUnsafe(CHUNK);
+  let fd;
+  try { fd = fs.openSync(LOG_FILE, 'r'); } catch (err) { state.error = err.message; return false; }
+
+  let at = from;
+  let carry = '';
+  try {
+    while (at < to) {
+      const want = Math.min(CHUNK, to - at);
+      const got = fs.readSync(fd, chunkBuffer, 0, want, at);
+      if (got <= 0) break;
+      at += got;
+
+      /* a chunk boundary can land in the middle of a multi-byte character, so
+         the tail of the buffer is held over rather than decoded on its own */
+      const text = carry + chunkBuffer.toString('utf8', 0, got);
+      carry = '';
+      let pos = 0;
+      for (;;) {
+        const end = text.indexOf('\n', pos);
+        if (end === -1) {
+          const rest = text.slice(pos);
+          carry = rest.length > MAX_CARRY ? '' : rest;
+          break;
+        }
+        if (end > pos) onLine(text.slice(pos, end));
+        pos = end + 1;
+      }
+    }
+    if (carry) onLine(carry);
+  } catch (err) {
+    state.error = err.message;
+    return false;
+  } finally {
+    try { fs.closeSync(fd); } catch (_) { /* already gone */ }
+  }
+  return true;
+}
+
 /** Read whatever has been appended since the last pass. */
 function read() {
   let stat;
@@ -223,30 +288,19 @@ function read() {
   if (stat.size === state.offset) return;
 
   // never read more than the last stretch: a log nobody has rotated can be huge
-  const from = Math.max(state.offset, stat.size - 4 * 1024 * 1024);
-  let text = '';
-  try {
-    const fd = fs.openSync(LOG_FILE, 'r');
-    const length = stat.size - from;
-    const buffer = Buffer.allocUnsafe(length);
-    fs.readSync(fd, buffer, 0, length, from);
-    fs.closeSync(fd);
-    text = buffer.toString('utf8');
-  } catch (err) {
-    state.error = err.message;
-    return;
-  }
-  state.offset = stat.size;
-  state.reads++;
-
+  const from = Math.max(state.offset, stat.size - MAX_CATCHUP);
   const now = Date.now();
-  for (const line of text.split('\n')) {
+  const ok = readChunks(from, stat.size, (line) => {
     const m = LINE.exec(line);
-    if (!m) continue;
+    if (!m) return;
     state.lines++;
     // m: 1 source address, 2 network, 3 destination, 4 port, 5 client tag
     note(m[5], m[1].replace(/^\[|\]$/g, ''), (m[3] || '').toLowerCase(), stampOf(line, now));
-  }
+  });
+  if (!ok) return;
+
+  state.offset = stat.size;
+  state.reads++;
   prune(now);
 }
 
