@@ -61,6 +61,8 @@ function settings() {
   if (typeof s.user !== 'string' || !s.user) s.user = 'root';
   if (typeof s.autoRotate !== 'boolean') s.autoRotate = false;
   if (!(Number(s.everyHours) > 0)) s.everyHours = DEFAULT_EVERY_HOURS;
+  if (typeof s.notifyBot !== 'boolean') s.notifyBot = false;
+  if (typeof s.notifyError !== 'string') s.notifyError = '';
   if (typeof s.password !== 'string') s.password = '';
   if (!(Number(s.setAt) >= 0)) s.setAt = 0;
   /* settings written while the clock and authenticator styles existed carry
@@ -147,18 +149,87 @@ async function setPassword(password, user) {
   s.password = want;
   s.setAt = Date.now();
   db.saveNow();
-  return { user: who, at: s.setAt };
+  const told = await announce('manual');
+  return { user: who, at: s.setAt, sentToBot: !!told.sent };
 }
 
 /** Set it to something nobody has ever seen, including whoever asked. */
-async function rotate() {
+async function rotate(reason) {
   const s = settings();
   const next = generate(DEFAULT_LENGTH);
   await apply(s.user || 'root', next);
   s.password = next;
   s.setAt = Date.now();
   db.saveNow();
-  return { user: s.user, at: s.setAt };
+  const told = await announce(reason || 'manual');
+  return { user: s.user, at: s.setAt, sentToBot: !!told.sent };
+}
+
+/**
+ * Send the new password to the bot's admin, when the admin has asked for it.
+ *
+ * Worth being plain about what this is: it puts the server's root password in
+ * a Telegram chat. That is a chat on a phone that can be lost, on an account
+ * that can be taken over, and the message sits there until somebody deletes
+ * it - which is exactly why a backup strips this password out before it is
+ * sent anywhere. It is off unless it is switched on, it goes only to the one
+ * chat id the bot calls its admin, and nowhere else.
+ *
+ * What it buys is the thing it was asked for: a password that changes itself
+ * every few hours is no use at all if the only place to read it is a panel
+ * you cannot reach without it, and this is the way back in.
+ *
+ * It never throws. A password that was changed on the server and could not be
+ * announced is still changed, and the caller must not be made to think
+ * otherwise - the failure goes in the settings and onto the page instead.
+ */
+async function announce(reason) {
+  const s = settings();
+  if (!s.notifyBot || !s.password) return { sent: false };
+  let telegram;
+  try { telegram = require('./telegram'); } catch (_) { return { sent: false }; }
+
+  const lines = [
+    '🔐 <b>رمز ورود سرور عوض شد</b>',
+    '',
+    `کاربر: <code>${telegram.escapeHtml(s.user || 'root')}</code>`,
+    `رمز تازه: <code>${telegram.escapeHtml(s.password)}</code>`,
+    `زمان: ${telegram.escapeHtml(tehranStamp(s.setAt))} (به وقت ایران)`,
+    '',
+    reason === 'auto' ? 'این تغییر خودکار بود.' : 'این تغییر از داخل پنل انجام شد.',
+    '',
+    '⚠️ این پیام رمز سرور شما را دارد. بعد از ذخیره‌کردنش پاکش کنید.'
+  ];
+
+  /* the admin's own chat id, which the bot only has once they have pressed
+     Start: a bot cannot open a conversation, so there is nowhere to send to
+     until they have said hello once */
+  const chat = telegram.adminChat();
+  if (!chat) {
+    s.notifyError = 'the bot does not know the admin chat yet - press Start in the bot once';
+    db.save();
+    return { sent: false, error: s.notifyError };
+  }
+
+  try {
+    /* call rather than send: send swallows the error and answers undefined,
+       which would have this reporting a password as delivered when Telegram
+       had refused it - and this is the message somebody locked out of their
+       server is relying on */
+    await telegram.call('sendMessage', {
+      chat_id: chat,
+      text: lines.join('\n'),
+      parse_mode: 'HTML',
+      disable_web_page_preview: true
+    });
+    s.notifyError = '';
+    db.save();
+    return { sent: true };
+  } catch (err) {
+    s.notifyError = err.message;
+    db.save();
+    return { sent: false, error: err.message };
+  }
 }
 
 /** When the next automatic change falls due, or 0 when none does. */
@@ -191,7 +262,7 @@ async function rotateIfDue() {
   if (!canManage().ok) return { rotated: false };
   const due = nextDue();
   if (!due || Date.now() < due) return { rotated: false };
-  await rotate();
+  await rotate('auto');
   const d = db.data;
   d.logs = d.logs || [];
   d.logs.unshift({ at: Date.now(), type: 'system',
@@ -218,6 +289,8 @@ function status() {
     password: s.password || '',
     setAt: Number(s.setAt) || 0,
     autoRotate: !!s.autoRotate,
+    notifyBot: !!s.notifyBot,
+    notifyError: s.notifyError || '',
     everyHours: hoursOf(s.everyHours),
     minHours: MIN_EVERY_HOURS,
     maxHours: MAX_EVERY_HOURS,
@@ -226,6 +299,22 @@ function status() {
     setAtText: tehranStamp(Number(s.setAt) || 0),
     nextAtText: tehranStamp(due)
   };
+}
+
+/**
+ * Turn the Telegram message on or off.
+ *
+ * Switching it on sends the password it has right now, which is the only way
+ * to find out whether it works before the admin is relying on it to get back
+ * into a server they have locked themselves out of.
+ */
+async function setNotifyBot(on) {
+  const s = settings();
+  s.notifyBot = !!on;
+  s.notifyError = '';
+  db.saveNow();
+  if (s.notifyBot && s.password) await announce('manual');
+  return status();
 }
 
 /** Turn the automatic change on or off, and say how often. */
@@ -242,6 +331,6 @@ function setAutoRotate(on, everyHours) {
 
 module.exports = {
   settings, generate, canManage, setPassword, rotate, rotateIfDue,
-  setAutoRotate, status, nextDue, tehranStamp, hoursOf,
+  setAutoRotate, setNotifyBot, announce, status, nextDue, tehranStamp, hoursOf,
   MIN_LENGTH, DEFAULT_EVERY_HOURS, MIN_EVERY_HOURS, MAX_EVERY_HOURS
 };

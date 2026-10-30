@@ -1319,6 +1319,26 @@ router.put('/server/auto-rotate', async (req, res) => {
   return res.json(rootpw.status());
 });
 
+/**
+ * Have the bot send the new password to the admin, every time it changes.
+ *
+ * Only the one chat the bot calls its admin, and only when asked for: this is
+ * the root password of the box going into a Telegram chat, which is the exact
+ * thing the backup strips out before it leaves the machine.
+ */
+router.put('/server/notify-bot', async (req, res) => {
+  const on = !!(req.body || {}).on;
+  try {
+    const out = await rootpw.setNotifyBot(on);
+    logEvent('system', on
+      ? 'the new server password will be sent to the bot admin each time it changes'
+      : 'the server password will no longer be sent to the bot');
+    return res.json(out);
+  } catch (err) {
+    return bad(res, err.message);
+  }
+});
+
 /** Whether a newer panel has been published. Never fails the page. */
 router.get('/version', async (req, res) => {
   const ready = update.available();

@@ -1482,6 +1482,21 @@ function serverPasswordCard() {
      somebody who has forgotten theirs arrives in */
   const lostLine = el('div', { class: 'notice hidden', style: 'margin-top:10px' });
 
+  /*
+   * Have the bot send the new password over, every time it changes.
+   *
+   * A password that changes itself every few hours is no use if the only
+   * place to read it is a panel nobody can reach without it, which is the
+   * lockout this card already talks about. The bot is the way back in.
+   */
+  const notify = el('input', { type: 'checkbox' });
+  const notifyNote = el('div', { class: 'hint' });
+  const notifyRow = el('div', { style: 'margin-top:12px' }, [
+    el('label', { class: 'switch' }, [notify, el('span', { class: 'track' }),
+      el('span', { class: 'muted', text: t('Send the new password to the bot admin') })]),
+    notifyNote
+  ]);
+
   /* how often it changes itself; the switch above turns it on and off */
   const hours = el('input', { type: 'number', min: '1', max: '720', style: 'max-width:110px' });
   const hoursSave = el('button', { class: 'btn', text: 'Save' });
@@ -1496,7 +1511,7 @@ function serverPasswordCard() {
     if (!s) return;
     whoLine.textContent = `${t('Server login')}: ${s.user}`;
     const can = s.manageable;
-    for (const node of [field, saveBtn, randomBtn, auto, hours, hoursSave]) node.disabled = !can;
+    for (const node of [field, saveBtn, randomBtn, auto, hours, hoursSave, notify]) node.disabled = !can;
     // not while it is being typed in, or the cursor jumps on every refresh
     if (document.activeElement !== hours) hours.value = s.everyHours;
     autoLabel.textContent = `${t('Change it by itself every')} ${s.everyHours} ${t('hours')}`;
@@ -1526,6 +1541,15 @@ function serverPasswordCard() {
     randomBtn.className = `btn ${s.known ? '' : 'primary'}`;
     saveBtn.className = `btn ${s.known ? 'primary' : ''}`;
     auto.checked = !!s.autoRotate;
+    notify.checked = !!s.notifyBot;
+    /* the failure this has is always the same one and is worth naming: a bot
+       cannot open a conversation, so the admin has to have pressed Start */
+    notifyNote.textContent = s.notifyError
+      ? `${t('The bot could not send it')}: ${s.notifyError}`
+      : (s.notifyBot
+        ? t('Each new password is sent to the bot admin. That message holds your server password — delete it once you have it.')
+        : t('Off. Turn it on and every new password is sent to the bot admin, which is the way back in if the automatic change locks you out.'));
+    notifyNote.className = `hint${s.notifyError ? ' danger' : ''}`;
   };
 
   const load = async () => {
@@ -1565,6 +1589,24 @@ function serverPasswordCard() {
     }
   };
 
+  notify.addEventListener('change', async () => {
+    const on = notify.checked;
+    try {
+      state_ = await api.put('/server/notify-bot', { on });
+      paint();
+      if (!on) return toast(t('The password will no longer be sent to the bot'));
+      /* switching it on sends the one it has now, so the admin finds out here
+         and not when they are locked out */
+      return toast(state_.notifyError
+        ? `${t('Switched on, but the bot could not send it')}: ${state_.notifyError}`
+        : t('Switched on — check the bot, the password is there now'),
+      state_.notifyError ? 'err' : 'ok');
+    } catch (err) {
+      notify.checked = !on;
+      return toast(err.message, 'err');
+    }
+  });
+
   auto.addEventListener('change', () => saveSchedule(auto.checked, hours.value));
   hoursSave.onclick = () => saveSchedule(auto.checked, hours.value);
   // Enter in the box is the same as pressing Save beside it
@@ -1581,6 +1623,7 @@ function serverPasswordCard() {
     whenLine,
     el('div', { class: 'row', style: 'margin-top:14px;flex-wrap:wrap;gap:10px' }, [field, saveBtn, randomBtn]),
     hoursRow,
+    notifyRow,
     el('div', { class: 'hint', style: 'margin-top:10px' }, [
       el('span', { text: t('This is the password you log in to the server with over SSH. If you turn on the automatic change, set up an SSH key first — otherwise the only way back in is this page.') })
     ])
