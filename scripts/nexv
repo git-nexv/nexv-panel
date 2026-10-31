@@ -938,6 +938,52 @@ remember_cert_error() {
   ' >/dev/null 2>&1 || true
 }
 
+# The real rehearsal: Let's Encrypt's staging service, doing the whole thing.
+#
+# The local check below proves the name resolves and something here answers on
+# port 80 - but it proves it by asking from this machine, and a request from
+# this machine to its own public address may never leave the building. It says
+# nothing about whether the internet can get in, which is the one thing that
+# matters. It is kept because it is instant and it catches the common cases by
+# name, but it is not the proof.
+#
+# This is: certbot's own --dry-run, which runs the entire issue against Let's
+# Encrypt's staging servers. Real DNS, a real connection inbound from their
+# machines to this one, a real challenge - and staging has its own, far larger
+# limits, so a failure here costs nothing against the five-an-hour that the
+# real one counts. If this passes, the certificate will issue. If it fails, it
+# fails with the actual reason, for free, as many times as it takes.
+cert_dry_run() {
+  local domain="$1"
+  local log="/var/log/nexv-certbot-dryrun.log"
+  # nothing to rehearse with yet; the real step installs it and says so itself
+  if ! command -v certbot >/dev/null 2>&1; then
+    warn "certbot is not installed yet, so the test issue was skipped."
+    return 0
+  fi
+  echo "  Trying the whole thing against Let's Encrypt's test service..."
+
+  if ! free_port_80 80 >/dev/null; then
+    err "Port 80 could not be cleared for the test."
+    restore_port_80 >/dev/null 2>&1
+    return 1
+  fi
+  certbot certonly --standalone --non-interactive --agree-tos \
+    --register-unsafely-without-email --dry-run -d "$domain" >"$log" 2>&1
+  local rc=$?
+  restore_port_80 >/dev/null 2>&1
+
+  if [[ $rc -eq 0 ]]; then
+    ok "The test issue succeeded - the real one will work"
+    return 0
+  fi
+
+  err "The test issue failed, so the real one would have failed too."
+  echo "  Nothing was spent: this was Let's Encrypt's test service."
+  explain_cert_failure "$log" "$domain"
+  return 1
+}
+
 # Prove the challenge can actually be answered, before spending an attempt.
 #
 # Let's Encrypt allows five failures an hour for the same names, and a server
@@ -970,6 +1016,39 @@ cert_preflight() {
     echo "  then run this again."
     return 1
   fi
+
+  # Can this server reach Let's Encrypt at all?
+  #
+  # The other half of the job, and the half nothing was testing. The challenge
+  # is Let's Encrypt knocking on port 80 here; before any of that, certbot has
+  # to open its own connection OUT to the ACME API over HTTPS and be answered.
+  # On a server whose outbound traffic is filtered - which is most of the
+  # reason anybody is installing this panel - that leg fails while port 80 is
+  # perfectly fine, and every message points at the firewall, the DNS and the
+  # port, all of which are innocent.
+  local acme_api="https://acme-v02.api.letsencrypt.org/directory"
+  local api_code
+  api_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$acme_api" 2>/dev/null || echo 000)"
+  if [[ $api_code != 200 ]]; then
+    CERT_ERROR="this server cannot reach Let's Encrypt"
+    err "This server cannot reach Let's Encrypt itself."
+    echo "  certbot has to talk to $acme_api"
+    echo "  over HTTPS before any check happens, and that connection"
+    if [[ $api_code == 000 ]]; then
+      echo "  did not complete at all."
+    else
+      echo "  came back as HTTP $api_code instead of 200."
+    fi
+    echo
+    echo "  Port 80 and your domain are not the problem - this is the server's own"
+    echo "  way out. On a filtered network it is the usual one. Either:"
+    echo "    - get the certificate on a server that can reach it and copy the"
+    echo "      files over (nexv cert-fix points the panel at them), or"
+    echo "    - put this server behind something that can reach it, or"
+    echo "    - use a domain on Cloudflare and a DNS challenge instead of port 80."
+    return 1
+  fi
+  ok "Let's Encrypt is reachable from this server"
 
   local token="nexv-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   local dir="/tmp/nexv-acme-$$"
@@ -1010,8 +1089,10 @@ cert_preflight() {
   restore_port_80 >/dev/null 2>&1
 
   if [[ $body == "$token" ]]; then
-    ok "Port 80 answers for $domain - the challenge will work"
-    return 0
+    ok "Port 80 answers for $domain from this server"
+    # and now the only test that actually proves it - see below
+    cert_dry_run "$domain"
+    return $?
   fi
 
   err "The challenge cannot be answered for $domain yet."

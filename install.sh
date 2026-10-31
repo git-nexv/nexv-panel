@@ -654,16 +654,36 @@ explain_cert_failure() {
     warn "The certificate could not be issued."
   fi
 
-  # and certbot's own words, so there is something to search for
+  # and certbot's own words - which are not its last words.
+  #
+  # Every failure ends with the same three lines: ask for help at the forum,
+  # see the logfile, re-run with -v for more details. The word "details" there
+  # matched the old filter, so those three crowded out the real reason and an
+  # install printed the least informative part of the whole output - which is
+  # exactly what it did on the server this was written for. They are dropped,
+  # and the Domain/Type/Detail block the Certificate Authority sends back is
+  # preferred, because that one line is the answer.
+  local boilerplate='Ask for help|search for solutions|See the logfile|re-run Certbot|Saving debug log|Please see the logfiles|certbot\.eff\.org'
   if [[ -n $text ]]; then
     local said
-    said="$(grep -iE 'error|detail|problem|challenge|urn:ietf' <<<"$text" | tail -6)"
-    # a failure nobody has a pattern for is exactly the one where the raw tail
-    # is worth printing, so an empty match falls back to the last few lines
-    [[ -n $said ]] || said="$(tail -6 <<<"$text")"
+    said="$(grep -iE '^ *(Domain|Type|Detail|Status|Hint):|failed to authenticate|could not bind|address already in use|timeout|connection refused|unauthorized|rate ?limit|too many|NXDOMAIN|no valid|secondary validation' <<<"$text" \
+            | grep -viE "$boilerplate" | tail -8)"
+    [[ -n $said ]] || said="$(grep -viE "$boilerplate" <<<"$text" | grep -v '^[[:space:]]*$' | tail -8)"
     echo "  ---- what certbot said ----"
     sed 's/^/  /' <<<"$said"
     echo "  ---------------------------"
+  fi
+
+  # and Let's Encrypt's own answer, stored word for word where certbot put it
+  local acme=/var/log/letsencrypt/letsencrypt.log
+  if [[ -r $acme ]]; then
+    local detail
+    detail="$(grep -iE '"detail"|urn:ietf:params:acme:error|Challenge failed|ConnectionError' "$acme" 2>/dev/null | tail -4)"
+    if [[ -n $detail ]]; then
+      echo "  ---- what Let's Encrypt answered ----"
+      sed 's/^/  /' <<<"$detail" | cut -c1-200
+      echo "  -------------------------------------"
+    fi
   fi
   warn "The panel will be served over plain HTTP. Retry any time with: nexv cert $domain"
 }
