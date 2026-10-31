@@ -2324,134 +2324,25 @@ function infoRowCard() {
   return card;
 }
 
-/**
- * The Telegram proxy, which is not an inbound however much it looks like one.
- *
- * It sits on this page because this is where somebody goes looking for "a port
- * clients connect to", and the first thing the card has to do is explain why
- * it is not in the list above: MTProto is Telegram's own protocol, Xray-core
- * removed it and will not take it back, so this is a second small daemon the
- * panel installs and keeps running beside Xray.
- */
-function telegramProxyCard() {
-  const card = el('div', { class: 'card', style: 'grid-column:1/-1;margin-bottom:16px' });
-  const stateChip = el('span', { class: 'chip' });
-  const onOff = el('input', { type: 'checkbox' });
-  const port = el('input', { type: 'number', min: '1', max: '65535', style: 'max-width:120px' });
-  const domain = el('input', { placeholder: 'www.cloudflare.com', style: 'max-width:240px' });
-  const saveBtn = el('button', { class: 'btn', text: 'Save' });
-  const rerollBtn = el('button', { class: 'btn ghost', text: 'New key' });
-  const installBtn = el('button', { class: 'btn', text: 'Install it' });
-  const note = el('div', { class: 'hint', style: 'margin-top:10px' });
-  const linkBox = el('div', { style: 'margin-top:12px' });
-  let s_ = null;
-
-  const paint = () => {
-    const s = s_;
-    if (!s) return;
-    stateChip.className = `chip ${s.running ? 'ok' : s.enable ? 'danger' : ''}`;
-    stateChip.innerHTML = `<i></i>${t(s.running ? 'Running' : s.enable ? 'Stopped' : 'Off')}`;
-    onOff.checked = !!s.enable;
-    if (document.activeElement !== port) port.value = s.port;
-    if (document.activeElement !== domain) domain.value = s.domain;
-    installBtn.classList.toggle('hidden', s.installed);
-    for (const node of [onOff, port, domain, saveBtn, rerollBtn]) node.disabled = !s.supported;
-
-    const lines = [];
-    if (!s.supported) lines.push(t('This server cannot run it: it needs Linux on a machine the proxy is built for.'));
-    else if (!s.systemd) lines.push(t('This server has no systemd, so the proxy cannot be kept running.'));
-    else if (!s.installed) lines.push(t('Not installed yet. Press "Install it" — about 5 MB, fetched once.'));
-    if (s.error) lines.push(`${t('Last error')}: ${s.error}`);
-    if (s.installed && s.version) lines.push(`mtg ${s.version}`);
-    if (!s.host) lines.push(t('The panel does not know this server\u2019s address yet, so there is no link to show. Set a domain in Settings, or wait for the address to be found.'));
-    note.textContent = lines.join(' · ');
-
-    linkBox.innerHTML = '';
-    if (s.secret && s.host) {
-      const copyBtn = el('button', { class: 'btn', text: 'Copy the link', onclick: () => copy(s.links.https) });
-      const qrBtn = s.qr ? el('button', {
-        class: 'btn ghost', text: 'QR code',
-        onclick: () => modal({
-          title: 'Telegram proxy',
-          subtitle: 'Scan it, or send the link',
-          body: el('div', { style: 'text-align:center' }, [
-            el('img', { src: s.qr, alt: 'QR code', style: 'width:300px;max-width:100%;border-radius:12px' }),
-            el('div', { class: 'link-box', style: 'margin-top:12px', text: s.links.https })
-          ]),
-          width: 420,
-          actions: [{ label: 'Copy', kind: 'primary', onClick: (close) => { copy(s.links.https); close(); } }]
-        })
-      }) : null;
-      linkBox.append(
-        el('label', { text: 'Share this' }),
-        el('div', { class: 'row', style: 'flex-wrap:wrap;gap:10px;align-items:center' }, [
-          el('code', { style: 'word-break:break-all;flex:1 1 320px', text: s.links.https }),
-          copyBtn, qrBtn
-        ]),
-        el('div', { class: 'hint', style: 'margin-top:6px',
-          text: `${t('Whoever opens it is asked to add the proxy. The disguise in this link is')} ${s.secretDomain || s.domain}.` })
-      );
-    }
-  };
-
-  const load = async () => {
-    try { s_ = await api.get('/mtproto'); paint(); } catch (_) { /* the note says enough */ }
-  };
-
-  const push = async (payload, said) => {
-    try {
-      s_ = await api.put('/mtproto', payload);
-      paint();
-      toast(said);
-    } catch (err) {
-      toast(err.message, 'err');
-      await load();
-    }
-  };
-
-  onOff.addEventListener('change', () => push(
-    { enable: onOff.checked, port: port.value, domain: domain.value },
-    onOff.checked ? t('The Telegram proxy is on') : t('The Telegram proxy is off')
-  ));
-  saveBtn.onclick = () => push({ port: port.value, domain: domain.value }, t('Saved'));
-  rerollBtn.onclick = () => {
-    if (!confirm(t('Make a new key? Every link you have already handed out stops working.'))) return undefined;
-    return push({ newSecret: true }, t('New key — hand out the new link'));
-  };
-  installBtn.onclick = async () => {
-    installBtn.disabled = true;
-    installBtn.textContent = t('Installing…');
-    try {
-      s_ = await api.post('/mtproto/install', {});
-      toast(t('The proxy is installed'));
-    } catch (err) { toast(err.message, 'err'); }
-    installBtn.disabled = false;
-    installBtn.textContent = t('Install it');
-    paint();
-  };
-
-  card.append(
-    el('div', { class: 'between', style: 'margin-bottom:4px' }, [
-      el('div', {}, [
-        el('strong', { text: '✈️ Telegram proxy (MTProto)' }),
-        el('div', { class: 'muted', text: 'Telegram\u2019s own proxy protocol, which Xray cannot speak — so the panel runs a small daemon of its own for it, beside Xray.' })
-      ]),
-      el('div', { class: 'row', style: 'gap:10px;align-items:center' }, [
-        stateChip,
-        el('label', { class: 'switch' }, [onOff, el('span', { class: 'track' }), el('span', { class: 'muted', text: t('On') })])
-      ])
+/** The tg:// link for one MTProto inbound, with its QR. */
+function showProxyLink(inb, proxy) {
+  if (!proxy || !proxy.links || !proxy.links.https) {
+    return toast(proxy && !proxy.host
+      ? 'The panel does not know this server\u2019s address yet, so there is no link to show'
+      : 'This proxy has no link yet', 'err');
+  }
+  return modal({
+    title: inb.remark || 'Telegram proxy',
+    subtitle: `Pretends to be ${proxy.domain} · port ${proxy.port}`,
+    body: el('div', { style: 'text-align:center' }, [
+      proxy.qr ? el('img', { src: proxy.qr, alt: 'QR code', style: 'width:300px;max-width:100%;border-radius:12px' }) : null,
+      el('div', { class: 'link-box', style: 'margin-top:12px', text: proxy.links.https }),
+      el('div', { class: 'hint', style: 'margin-top:8px',
+        text: 'Whoever opens it is asked to add the proxy. Changing the domain or making a new key stops this link working.' })
     ]),
-    el('div', { class: 'row', style: 'margin-top:12px;flex-wrap:wrap;gap:10px;align-items:center' }, [
-      el('span', { class: 'muted', text: t('Port') }), port,
-      el('span', { class: 'muted', text: t('pretends to be') }), domain,
-      saveBtn, rerollBtn, installBtn
-    ]),
-    note,
-    linkBox
-  );
-
-  load();
-  return card;
+    width: 420,
+    actions: [{ label: 'Copy', kind: 'primary', onClick: (close) => { copy(proxy.links.https); close(); } }]
+  });
 }
 
 async function renderInbounds(view) {
@@ -2469,9 +2360,6 @@ async function renderInbounds(view) {
       el('button', { class: 'btn primary', html: `${icon('plus')} New inbound`, onclick: () => inboundForm(null) })
     ])
   ]));
-
-  /* not an inbound, but this is the page somebody looks for it on */
-  if (!isReseller()) view.append(telegramProxyCard());
 
   /*
    * The info line sits above the inbounds because that is what it looks like
@@ -2491,6 +2379,18 @@ async function renderInbounds(view) {
     return emptyState(wrap, 'No inbounds yet. Create one to start accepting connections.');
   }
 
+  /*
+   * MTProto inbounds are served by a daemon of their own rather than by Xray,
+   * so whether one is actually up is a different question from whether the
+   * row says Enabled - and the link to hand out lives there too. Asked for
+   * once, and only when there is one.
+   */
+  let mt = { inbounds: [] };
+  if (state.inbounds.some((i) => i.protocol === 'mtproto')) {
+    mt = await api.get('/mtproto').catch(() => ({ inbounds: [] }));
+  }
+  const mtFor = (id) => (mt.inbounds || []).find((x) => x.id === id) || null;
+
   const table = el('table');
   table.innerHTML = `<thead><tr>
     <th>Name</th><th>Protocol</th><th>Port</th><th>Transport</th>
@@ -2499,24 +2399,50 @@ async function renderInbounds(view) {
   const tbody = el('tbody');
 
   for (const inb of state.inbounds) {
+    const proxy = inb.protocol === 'mtproto' ? mtFor(inb.id) : null;
+    /* for a proxy the question is whether its daemon is up, which "Enabled"
+       does not answer: an inbound switched on whose service died reads wrong
+       every other way of putting it */
+    const statusChip = proxy
+      ? (inb.enable === false
+        ? el('span', { class: 'chip', html: '<i></i>Disabled' })
+        : el('span', {
+          class: `chip ${proxy.running ? 'ok' : 'danger'}`,
+          html: `<i></i>${proxy.running ? 'Running' : (proxy.installed ? 'Stopped' : 'Installing…')}`
+        }))
+      : el('span', {
+        class: `chip ${inb.enable === false ? '' : 'ok'}`,
+        html: `<i></i>${inb.enable === false ? 'Disabled' : 'Enabled'}`
+      });
+
     tbody.append(el('tr', {}, [
       el('td', {}, [el('strong', { text: inb.remark })]),
       el('td', {}, [el('span', { class: 'chip brand', text: inb.protocol })]),
       el('td', { class: 'mono', text: String(inb.port) }),
-      el('td', { class: 'muted', text: `${inb.network}${inb.security !== 'none' ? ` · ${inb.security}` : ''}` }),
-      el('td', { text: String(inb.clientCount) }),
-      el('td', { class: 'muted num', text: bytes(inb.up + inb.down) }),
-      el('td', {}, [el('span', {
-        class: `chip ${inb.enable === false ? '' : 'ok'}`,
-        html: `<i></i>${inb.enable === false ? 'Disabled' : 'Enabled'}`
-      })]),
+      el('td', { class: 'muted', text: proxy
+        ? `FakeTLS · ${proxy.domain || '—'}`
+        : `${inb.network}${inb.security !== 'none' ? ` · ${inb.security}` : ''}` }),
+      el('td', { text: proxy ? '—' : String(inb.clientCount) }),
+      el('td', { class: 'muted num', text: proxy ? '—' : bytes(inb.up + inb.down) }),
+      el('td', {}, [statusChip]),
       el('td', {}, [el('div', { class: 'row-actions' }, [
+        proxy ? el('button', {
+          class: 'btn icon ghost', title: 'Telegram link and QR', html: icon('qr'),
+          onclick: () => showProxyLink(inb, proxy)
+        }) : null,
         el('button', { class: 'btn icon ghost', title: 'Edit', html: icon('edit'), onclick: () => inboundForm(inb) }),
         el('button', {
           class: 'btn icon ghost', title: 'Enable / disable', html: icon('power'),
           onclick: async () => { await api.post(`/inbounds/${inb.id}/toggle`); render(); }
         }),
-        popupMenu([
+        /* a proxy has no clients to attach, no URLs to export and no traffic
+           to reset - every one of those is an Xray idea */
+        popupMenu(proxy ? [
+          { label: 'Edit', onClick: () => inboundForm(inb) },
+          { label: 'Telegram link', onClick: () => showProxyLink(inb, proxy) },
+          'sep',
+          { label: 'Delete', danger: true, onClick: () => deleteInbound(inb) }
+        ] : [
           { label: 'Edit', onClick: () => inboundForm(inb) },
           { label: 'Export inbound', onClick: () => exportInboundText(inb) },
           { label: 'Export all URLs', onClick: () => showUrls('links', inb.id) },
@@ -2534,9 +2460,18 @@ async function renderInbounds(view) {
   mountTable(wrap, table);
 }
 
+/** Does this protocol have per-client accounts at all? */
+function canCarryClients(protocol) {
+  const list = (state.protocols && state.protocols.withClients) || null;
+  if (list) return list.includes(protocol);
+  // before /protocols has arrived, the one that certainly does not
+  return protocol !== 'mtproto';
+}
+
 const PROTOCOL_LABELS = {
   vless: 'VLESS', vmess: 'VMess', trojan: 'Trojan', shadowsocks: 'Shadowsocks',
   socks: 'SOCKS5', http: 'HTTP', 'dokodemo-door': 'Dokodemo-door', wireguard: 'WireGuard',
+  mtproto: 'MTProto (Telegram proxy)',
   freedom: 'Freedom (direct)', blackhole: 'Blackhole (block)', dns: 'DNS'
 };
 
@@ -2635,7 +2570,21 @@ function tabbed(names) {
   window.addEventListener('resize', markOverflow, { passive: true });
 
   wrap.append(bar, ...Object.values(panels));
-  return { wrap, panels };
+
+  /*
+   * A protocol can have nothing at all on a tab - MTProto has no Xray
+   * transport, no TLS of its own and nothing to sniff - and a tab that opens
+   * on an empty panel reads as a page that failed to load. Hiding one moves
+   * off it first if it was the one showing.
+   */
+  const showTab = (name, on) => {
+    const index = names.indexOf(name);
+    if (index < 0) return;
+    tabs[index].classList.toggle('hidden', !on);
+    if (!on && !panels[name].hidden) tabs[names.findIndex((n) => !tabs[names.indexOf(n)].classList.contains('hidden'))].click();
+  };
+
+  return { wrap, panels, showTab };
 }
 
 /** Segmented control, the way 3x-ui presents Security and certificate source. */
@@ -2744,7 +2693,7 @@ const toggleValue = (node) => node.querySelector('input').checked;
 function inboundForm(existing) {
   const v = existing || {};
   const protocols = (state.protocols && state.protocols.inbound) || ['vless'];
-  const { wrap, panels } = tabbed(['Basics', 'Protocol', 'Stream', 'Security', 'Sniffing']);
+  const { wrap, panels, showTab } = tabbed(['Basics', 'Protocol', 'Stream', 'Security', 'Sniffing']);
 
   /* one helper for every labelled control, so each tab reads as a list */
   const add = (tab, label, control, opts = {}) => formField(panels[tab], label, control, opts);
@@ -2789,6 +2738,27 @@ function inboundForm(existing) {
   const ssIvCheck = add('Protocol', 'ivCheck', toggle(v.ssIvCheck), {
     hint: 'Rejects a repeated initialisation vector - replay protection for the older ciphers.'
   });
+  /*
+   * MTProto, which is Telegram's own protocol and not one Xray speaks.
+   *
+   * Two fields, because there are only two things to decide: the port, which
+   * is on Basics with every other inbound's, and the domain this pretends to
+   * be. The key is not a field - the domain is encoded inside it, so it is
+   * made from the domain and shown rather than typed. Changing the domain
+   * makes a new key and invalidates the links already handed out, which is
+   * said here rather than discovered.
+   */
+  const mtDomain = add('Protocol', 'Pretend to be', text(v.mtDomain || 'www.cloudflare.com'), {
+    hint: 'A real, busy, unblocked site. Clients announce this name in a TLS handshake that '
+      + 'is not really TLS, which is what makes the proxy look like ordinary browsing.'
+  });
+  const mtNewSecret = add('Protocol', 'Make a new key', toggle(false), {
+    hint: 'Every link already handed out stops working. Changing the domain above does this too, '
+      + 'because the domain is carried inside the key.'
+  });
+  const mtNote = el('div', { class: 'hint' });
+  add('Protocol', 'Telegram link', mtNote, { full: true });
+
   const udp = add('Protocol', 'UDP relay', toggle(v.udp !== false));
   const allowTransparent = add('Protocol', 'Allow transparent', toggle(v.allowTransparent));
   const targetAddress = add('Protocol', 'Forward to address', text(v.targetAddress || '127.0.0.1'));
@@ -3045,8 +3015,24 @@ function inboundForm(existing) {
   function sync() {
     const proto = protocol.value;
     const net = network.value;
-    // wireguard and dokodemo-door carry no xray transport of their own
-    const hasStream = proto !== 'wireguard' && proto !== 'dokodemo-door';
+    /* wireguard and dokodemo-door carry no xray transport of their own, and
+       MTProto is not Xray's at all: its disguise is inside its own key, so
+       there is no transport, no TLS and nothing to sniff on it either */
+    const isMt = proto === 'mtproto';
+    const hasStream = !isMt && proto !== 'wireguard' && proto !== 'dokodemo-door';
+
+    show([fieldOf(mtDomain), fieldOf(mtNewSecret), fieldOf(mtNote)], isMt);
+    showTab('Stream', !isMt);
+    showTab('Security', !isMt);
+    showTab('Sniffing', !isMt);
+    /* an inbound cap and an expiry date are Xray counting bytes for a tag it
+       owns; nothing counts for a daemon that is not Xray */
+    show([fieldOf(totalGB), fieldOf(expiryDays), fieldOf(address)], !isMt);
+    if (isMt) {
+      mtNote.textContent = existing
+        ? 'Saved. The link and its QR are on the inbound\u2019s row in the list.'
+        : 'The link appears on this inbound\u2019s row once it is saved.';
+    }
 
     show([fieldOf(ssMethod), fieldOf(ssPassword), fieldOf(ssNetwork), fieldOf(ssIvCheck)], proto === 'shadowsocks');
     show(fieldOf(udp), proto === 'socks');
@@ -3133,6 +3119,10 @@ function inboundForm(existing) {
           address: address.value,
           enable: toggleValue(enable),
           protocol: protocol.value,
+          /* the key is made from the domain on the server, never sent from
+             here - a secret that arrived from a form is one nobody checked */
+          mtDomain: mtDomain.value.trim(),
+          mtNewSecret: toggleValue(mtNewSecret),
           method: ssMethod.value,
           password: ssPassword.value,
           udp: toggleValue(udp),
@@ -4083,7 +4073,11 @@ function clientForm(existing) {
     ? v.inboundIds
     : (v.inboundId ? [v.inboundId] : []);
   const inboundPick = el('div', { class: 'chips' });
-  for (const inb of state.inbounds) {
+  /* a Telegram proxy has no client list - it is one secret on one port, and
+     everybody who has the link uses the same one - so it is not something a
+     client can be put on, and offering it here would be offering nothing */
+  const attachable = state.inbounds.filter((i) => canCarryClients(i.protocol));
+  for (const inb of attachable) {
     const box = el('input', { type: 'checkbox', value: inb.id });
     /*
      * A new client starts on every inbound there is, and the admin unticks
@@ -4103,8 +4097,8 @@ function clientForm(existing) {
    * theirs - and does not when they have one, where it would be a list of one
    * they cannot change.
    */
-  if (!isReseller() || state.inbounds.length > 1) {
-    formField(form, 'Inbounds', state.inbounds.length ? inboundPick : el('div', { class: 'hint', text: 'No inbounds yet.' }),
+  if (!isReseller() || attachable.length > 1) {
+    formField(form, 'Inbounds', attachable.length ? inboundPick : el('div', { class: 'hint', text: 'No inbounds that take clients yet.' }),
       { full: true, hint: 'Tick every inbound this client should be able to connect through. The subscription carries one config per inbound.' });
   }
 
@@ -4272,7 +4266,7 @@ function clientForm(existing) {
         const chosenInbounds = pickedIds();
         /* asked for whenever the picker is on the form, which for a reseller
            is whenever they have more than one inbound to choose between */
-        if (!chosenInbounds.length && (!isReseller() || state.inbounds.length > 1)) {
+        if (!chosenInbounds.length && (!isReseller() || attachable.length > 1)) {
           return toast('Tick at least one inbound — a client with none has no way in', 'err');
         }
         /* waiting for first use means no expiry is written yet - the days are
@@ -5378,7 +5372,9 @@ function renderFirewall(panel) {
         const name = l.name || l.cmd || '';
         /* the panel is node and an inbound is Xray; a certificate port can be
            either, so nothing is claimed about it */
-        const expect = wanted && wanted.kind === 'inbound' ? /xray/i
+        /* mtg holds an MTProto inbound's port, not Xray - it is an inbound on
+           the page and a daemon of its own underneath */
+        const expect = wanted && wanted.kind === 'inbound' ? /xray|mtg/i
           : wanted && wanted.kind === 'panel' ? /node|nexv/i : null;
         const wrong = !!(expect && name && !expect.test(name));
         usedList.append(el('div', { class: `notice ${wrong ? 'warn' : ''}`, style: 'padding:8px 10px' }, [

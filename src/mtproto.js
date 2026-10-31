@@ -30,9 +30,7 @@ const db = require('./db');
 
 const BIN = process.env.NEXV_MTG_BIN || '/usr/local/bin/mtg';
 const DIR = process.env.NEXV_MTG_DIR || '/usr/local/etc/nexv-mtproto';
-const CONFIG = path.join(DIR, 'mtg.toml');
-const SERVICE = 'nexv-mtproto';
-const UNIT = `/etc/systemd/system/${SERVICE}.service`;
+/* one config and one unit per inbound: see serviceOf/configOf below */
 
 /*
  * The release this panel installs, and the hash of every file it will accept.
@@ -75,18 +73,25 @@ function archKey() {
   }
 }
 
-/** Where this lives in the store, with its defaults filled in. */
-function settings() {
+/**
+ * The settings this panel used to keep in a corner of its own.
+ *
+ * Kept only so an install made before MTProto became a protocol can be moved
+ * across: whatever was configured there becomes an inbound on the first run
+ * and this is never read again.
+ */
+function legacySettings() {
   const d = db.data;
-  if (!d.mtproto || typeof d.mtproto !== 'object') d.mtproto = {};
-  const s = d.mtproto;
-  if (typeof s.enable !== 'boolean') s.enable = false;
-  if (!(Number(s.port) > 0 && Number(s.port) < 65536)) s.port = DEFAULT_PORT;
-  if (typeof s.domain !== 'string' || !s.domain) s.domain = DEFAULT_DOMAIN;
-  if (typeof s.secret !== 'string') s.secret = '';
-  if (typeof s.error !== 'string') s.error = '';
-  if (typeof s.version !== 'string') s.version = '';
-  return s;
+  return (d.mtproto && typeof d.mtproto === 'object') ? d.mtproto : null;
+}
+
+/** Every MTProto inbound, which is the whole of what this module serves. */
+function inbounds() {
+  return (db.data.inbounds || []).filter((i) => i.protocol === 'mtproto');
+}
+
+function byId(id) {
+  return inbounds().find((i) => i.id === id) || null;
 }
 
 /** A hostname, as strict as it needs to be - it goes into a secret. */
@@ -127,6 +132,259 @@ function domainOf(secret) {
 function linksFor(host, port, secret) {
   const query = `server=${encodeURIComponent(host)}&port=${port}&secret=${secret}`;
   return { tg: `tg://proxy?${query}`, https: `https://t.me/proxy?${query}` };
+}
+
+/* --------------------------- one inbound, one daemon --------------------- */
+
+/*
+ * A service, a config file and a unit name per inbound.
+ *
+ * mtg is one secret on one port per process, so two MTProto inbounds are two
+ * processes - which is the same thing two vless inbounds are inside Xray, and
+ * the admin should not have to know the difference. The id is what names them
+ * apart, shortened the way client tags are, so the unit is something a person
+ * can read in `systemctl status`.
+ */
+function tagOf(inb) {
+  /* a unit name, so only characters that are safe in one: the id is a uuid
+     and its first eight are hex, but nothing here should depend on that */
+  const clean = String(inb.id || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return clean.slice(0, 8) || 'default';
+}
+
+function serviceOf(inb) { return `nexv-mtproto-${tagOf(inb)}`; }
+function unitPathOf(inb) { return `/etc/systemd/system/${serviceOf(inb)}.service`; }
+function configOf(inb) { return path.join(DIR, `${tagOf(inb)}.toml`); }
+
+function hasSystemd() {
+  return fs.existsSync(process.env.NEXV_SYSTEMD_DIR || '/run/systemd/system');
+}
+
+async function isRunning(inb) {
+  if (!hasSystemd()) return false;
+  const out = await run('systemctl', ['is-active', '--quiet', serviceOf(inb)], 8000);
+  return out.ok;
+}
+
+function writeConfig(inb) {
+  fs.mkdirSync(DIR, { recursive: true, mode: 0o700 });
+  /* two required keys and nothing else. prefer-ip keeps it on IPv4, which is
+     what a server with no working IPv6 needs and costs nothing where it has */
+  const toml = [
+    '# written by the NexV panel - edit the inbound there, not this file',
+    `secret = "${inb.mtSecret}"`,
+    `bind-to = "${inb.listen && inb.listen !== '0.0.0.0' ? inb.listen : '0.0.0.0'}:${Number(inb.port)}"`,
+    'prefer-ip = "prefer-ipv4"',
+    ''
+  ].join('\n');
+  const file = configOf(inb);
+  fs.writeFileSync(file, toml, { mode: 0o600 });
+  return file;
+}
+
+function writeUnit(inb) {
+  const unit = [
+    '[Unit]',
+    `Description=NexV Telegram proxy (MTProto) - ${inb.remark || tagOf(inb)}`,
+    'After=network.target',
+    '',
+    '[Service]',
+    'Type=simple',
+    `ExecStart=${BIN} run ${configOf(inb)}`,
+    'Restart=always',
+    'RestartSec=3',
+    'LimitNOFILE=65535',
+    /* it needs a low port sometimes and nothing else; no reason for it to run
+       as root beyond binding one */
+    'AmbientCapabilities=CAP_NET_BIND_SERVICE',
+    'NoNewPrivileges=true',
+    'PrivateTmp=true',
+    '',
+    '[Install]',
+    'WantedBy=multi-user.target',
+    ''
+  ].join('\n');
+  fs.writeFileSync(unitPathOf(inb), unit, { mode: 0o644 });
+  return unitPathOf(inb);
+}
+
+/** Put one inbound's proxy up, replacing whatever it was running before. */
+async function startOne(inb) {
+  if (!(await installed()).ok) await install();
+  if (!hasSystemd()) throw new Error('this server has no systemd, so the proxy cannot be kept running');
+  writeConfig(inb);
+  writeUnit(inb);
+  await run('systemctl', ['daemon-reload'], 15000);
+  /* restart rather than start: the port or the secret may have changed, and a
+     service already up would otherwise keep serving the old one */
+  const on = await run('systemctl', ['enable', '--now', serviceOf(inb)], 30000);
+  if (!on.ok) throw new Error((on.stderr || on.error || 'systemd would not start it').slice(0, 200));
+  await run('systemctl', ['restart', serviceOf(inb)], 30000);
+  return { ok: true };
+}
+
+/** Take one down, and forget it ever existed when it is really gone. */
+async function stopOne(inb, remove) {
+  if (hasSystemd()) await run('systemctl', ['disable', '--now', serviceOf(inb)], 30000);
+  if (remove) {
+    try { fs.rmSync(unitPathOf(inb), { force: true }); } catch (_) { /* already gone */ }
+    try { fs.rmSync(configOf(inb), { force: true }); } catch (_) { /* as above */ }
+    if (hasSystemd()) await run('systemctl', ['daemon-reload'], 15000);
+  }
+  return { ok: true };
+}
+
+/**
+ * Make the running daemons match the inbound list, whatever it now says.
+ *
+ * Called after every change to an inbound, and on the way up. It is the whole
+ * of the control surface: there is no "start the Telegram proxy" button
+ * anywhere, because an MTProto inbound that is switched on is one that should
+ * be running and an inbound that is switched off or deleted is one that
+ * should not. Exactly what enable means for every other inbound.
+ */
+/* what the running daemons would have to match; see sync() */
+function fingerprint() {
+  return inbounds()
+    .map((i) => [i.id, i.port, i.listen || '', i.mtSecret || '', i.enable !== false].join(':'))
+    .sort()
+    .join('|');
+}
+
+let lastSynced = null;
+
+async function sync(force) {
+  /*
+   * Applying the configuration happens on every client change too, and this
+   * one shells out to systemctl - so when nothing about the MTProto inbounds
+   * has moved since the last pass, there is nothing to do and doing it anyway
+   * would make saving a client slower for everybody who has one of these.
+   */
+  const now = fingerprint();
+  if (!force && lastSynced === now) return { started: [], stopped: [], failed: [], skipped: true };
+
+  const mine = inbounds();
+  const wanted = mine.filter((i) => i.enable !== false);
+  const out = { started: [], stopped: [], failed: [] };
+
+  for (const inb of mine) {
+    try {
+      if (inb.enable === false) {
+        await stopOne(inb, false);
+        out.stopped.push(inb.id);
+      } else {
+        await startOne(inb);
+        out.started.push(inb.id);
+        try { await require('./firewall').allow(inb.port, 'tcp'); } catch (_) { /* its own page says */ }
+      }
+    } catch (err) {
+      out.failed.push({ id: inb.id, reason: err.message });
+    }
+  }
+
+  /* units for inbounds that are no longer there at all. Read off the disk
+     rather than remembered, so a deletion the panel was not running for is
+     still cleaned up the next time it is. */
+  const alive = new Set(mine.map((i) => serviceOf(i)));
+  try {
+    for (const name of fs.readdirSync('/etc/systemd/system')) {
+      const m = /^(nexv-mtproto-[0-9a-z]+)\.service$/.exec(name);
+      if (!m || alive.has(m[1])) continue;
+      if (hasSystemd()) await run('systemctl', ['disable', '--now', m[1]], 30000);
+      fs.rmSync(`/etc/systemd/system/${name}`, { force: true });
+      out.stopped.push(m[1]);
+    }
+    if (hasSystemd()) await run('systemctl', ['daemon-reload'], 15000);
+  } catch (_) { /* no systemd directory: nothing to tidy */ }
+
+  void wanted;
+  /* remembered only when nothing failed: a daemon that would not start has to
+     be tried again on the next pass, not written off as done */
+  lastSynced = out.failed.length ? null : now;
+  return out;
+}
+
+/** Everything the page shows about one MTProto inbound. */
+async function statusOf(inb) {
+  const bin = await installed();
+  const host = String(db.settings.domain || db.settings.serverIP || '').trim();
+  const secret = inb.mtSecret || '';
+  const links = secret && host ? linksFor(host, Number(inb.port), secret) : { tg: '', https: '' };
+  return {
+    id: inb.id,
+    installed: bin.ok,
+    version: bin.version || '',
+    wantVersion: VERSION,
+    running: await isRunning(inb),
+    service: serviceOf(inb),
+    port: Number(inb.port),
+    domain: domainOf(secret) || inb.mtDomain || '',
+    secret,
+    host,
+    links,
+    supported: !!archKey() && process.platform === 'linux',
+    systemd: hasSystemd()
+  };
+}
+
+/** The same, for the whole list - what the Inbounds page asks for once. */
+async function status() {
+  const mine = inbounds();
+  const bin = await installed();
+  const out = {
+    installed: bin.ok,
+    version: bin.version || '',
+    wantVersion: VERSION,
+    supported: !!archKey() && process.platform === 'linux',
+    systemd: hasSystemd(),
+    arch: archKey(),
+    inbounds: []
+  };
+  for (const inb of mine) out.inbounds.push(await statusOf(inb));
+  return out;
+}
+
+/**
+ * Move an install made before this was a protocol.
+ *
+ * The Telegram proxy used to be a card of its own with its settings in a
+ * corner of the store. Anybody who switched it on there should not have to
+ * set it up again, so it becomes an inbound - with its port, its disguise and
+ * the secret it already had, so the links already handed out keep working.
+ */
+async function migrate() {
+  const old = legacySettings();
+  if (!old || !old.secret) return { moved: false };
+  const d = db.data;
+  d.inbounds = d.inbounds || [];
+  if (d.inbounds.some((i) => i.protocol === 'mtproto')) {
+    delete d.mtproto;
+    db.saveNow();
+    return { moved: false };
+  }
+
+  d.inbounds.push({
+    id: db.id(),
+    remark: 'Telegram proxy',
+    protocol: 'mtproto',
+    port: Number(old.port) || DEFAULT_PORT,
+    listen: '0.0.0.0',
+    enable: !!old.enable,
+    mtSecret: old.secret,
+    mtDomain: domainOf(old.secret) || old.domain || DEFAULT_DOMAIN,
+    createdAt: Date.now()
+  });
+  delete d.mtproto;
+  db.saveNow();
+  return { moved: true };
+}
+
+/** Start whatever should be running, after a panel restart. */
+async function resume() {
+  await migrate();
+  if (!inbounds().some((i) => i.enable !== false)) return { started: 0 };
+  const out = await sync();
+  return { started: out.started.length, failed: out.failed };
 }
 
 /* --------------------------------- install ------------------------------- */
@@ -189,176 +447,11 @@ async function install() {
   }
 }
 
-/* ---------------------------------- run ---------------------------------- */
-
-function writeConfig() {
-  const s = settings();
-  if (!s.secret) s.secret = makeSecret(s.domain);
-  fs.mkdirSync(DIR, { recursive: true, mode: 0o700 });
-  /* two required keys and nothing else. prefer-ip keeps it on IPv4, which is
-     what a server with no working IPv6 needs and costs nothing where it has */
-  const toml = [
-    '# written by the NexV panel - edit it there, not here',
-    `secret = "${s.secret}"`,
-    `bind-to = "0.0.0.0:${Number(s.port)}"`,
-    'prefer-ip = "prefer-ipv4"',
-    ''
-  ].join('\n');
-  fs.writeFileSync(CONFIG, toml, { mode: 0o600 });
-  db.saveNow();
-  return CONFIG;
-}
-
-function writeUnit() {
-  const unit = [
-    '[Unit]',
-    'Description=NexV Telegram proxy (MTProto)',
-    'After=network.target',
-    '',
-    '[Service]',
-    'Type=simple',
-    `ExecStart=${BIN} run ${CONFIG}`,
-    'Restart=always',
-    'RestartSec=3',
-    'LimitNOFILE=65535',
-    /* it needs a low port sometimes and nothing else; no reason for it to run
-       as root beyond binding one */
-    'AmbientCapabilities=CAP_NET_BIND_SERVICE',
-    'NoNewPrivileges=true',
-    'PrivateTmp=true',
-    '',
-    '[Install]',
-    'WantedBy=multi-user.target',
-    ''
-  ].join('\n');
-  fs.writeFileSync(UNIT, unit, { mode: 0o644 });
-  return UNIT;
-}
-
-function hasSystemd() {
-  return fs.existsSync(process.env.NEXV_SYSTEMD_DIR || '/run/systemd/system');
-}
-
-async function isRunning() {
-  if (!hasSystemd()) return false;
-  const out = await run('systemctl', ['is-active', '--quiet', SERVICE], 8000);
-  return out.ok;
-}
-
-/** Put the config and the unit in place and start it. */
-async function start() {
-  const ready = await installed();
-  if (!ready.ok) throw new Error('mtg is not installed yet');
-  writeConfig();
-  if (!hasSystemd()) throw new Error('this server has no systemd, so the proxy cannot be kept running');
-  writeUnit();
-  await run('systemctl', ['daemon-reload'], 15000);
-  const on = await run('systemctl', ['enable', '--now', SERVICE], 30000);
-  if (!on.ok) throw new Error((on.stderr || on.error || 'systemd would not start it').slice(0, 200));
-
-  // the port has to be open or the proxy is running and unreachable
-  try { await require('./firewall').allow(settings().port, 'tcp'); } catch (_) { /* said on its own page */ }
-  return { ok: true };
-}
-
-async function stop() {
-  if (!hasSystemd()) return { ok: true };
-  await run('systemctl', ['disable', '--now', SERVICE], 30000);
-  return { ok: true };
-}
-
-/** Everything the page shows about it. */
-async function status() {
-  const s = settings();
-  const bin = await installed();
-  const running = await isRunning();
-  const host = String(db.settings.domain || db.settings.serverIP || '').trim();
-  const links = s.secret && host ? linksFor(host, Number(s.port), s.secret) : { tg: '', https: '' };
-  return {
-    enable: !!s.enable,
-    installed: bin.ok,
-    version: bin.version || s.version || '',
-    wantVersion: VERSION,
-    running,
-    port: Number(s.port),
-    domain: s.domain,
-    secret: s.secret,
-    secretDomain: domainOf(s.secret),
-    host,
-    links,
-    error: s.error || '',
-    arch: archKey(),
-    supported: !!archKey() && process.platform === 'linux',
-    systemd: hasSystemd()
-  };
-}
-
-/**
- * One call for everything the page can change.
- *
- * The order matters: a port or a domain that is rejected must not leave the
- * proxy running on the old one while the page shows the new one, so nothing is
- * written until all of it is valid.
- */
-async function apply(changes) {
-  const s = settings();
-  const want = changes || {};
-
-  let port = s.port;
-  if (want.port !== undefined) {
-    port = Math.round(Number(want.port));
-    if (!Number.isFinite(port) || port < 1 || port > 65535) throw new Error('port must be between 1 and 65535');
-  }
-
-  let domain = s.domain;
-  if (want.domain !== undefined) {
-    domain = cleanDomain(want.domain);
-    if (!domain) throw new Error('that is not a domain name');
-  }
-
-  const domainChanged = domain !== s.domain;
-  s.port = port;
-  s.domain = domain;
-  /* the domain lives inside the secret, so a new domain is a new secret and
-     the old links stop working - said on the page, not discovered later */
-  if (want.newSecret || domainChanged || !s.secret) s.secret = makeSecret(domain);
-  if (want.enable !== undefined) s.enable = !!want.enable;
-  s.error = '';
-  db.saveNow();
-
-  try {
-    if (s.enable) {
-      if (!(await installed()).ok) await install();
-      await start();
-    } else {
-      await stop();
-    }
-  } catch (err) {
-    s.error = err.message;
-    db.saveNow();
-    throw err;
-  }
-  return status();
-}
-
-/** Start it again after a panel restart, if it is meant to be on. */
-async function resume() {
-  const s = settings();
-  if (!s.enable) return { started: false };
-  if (await isRunning()) return { started: false, already: true };
-  try {
-    await start();
-    return { started: true };
-  } catch (err) {
-    s.error = err.message;
-    db.save();
-    return { started: false, error: err.message };
-  }
-}
-
 module.exports = {
-  settings, status, apply, install, installed, start, stop, resume,
+  /* the inbound list is the configuration; there is nothing else to set */
+  inbounds, byId, status, statusOf, sync, fingerprint, resume, migrate,
+  install, installed, startOne, stopOne, isRunning,
   makeSecret, domainOf, cleanDomain, linksFor, writeConfig, writeUnit,
-  isRunning, archKey, VERSION, SUMS, BIN, DIR, CONFIG, SERVICE, UNIT,
-  DEFAULT_DOMAIN, DEFAULT_PORT
+  serviceOf, configOf, unitPathOf, tagOf, archKey,
+  VERSION, SUMS, BIN, DIR, DEFAULT_DOMAIN, DEFAULT_PORT
 };

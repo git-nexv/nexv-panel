@@ -1343,61 +1343,43 @@ router.put('/server/notify-bot', async (req, res) => {
 /* ----------------------------- Telegram proxy ---------------------------- */
 
 /*
- * MTProto is not an Xray inbound and cannot be made into one - Xray-core
- * removed the protocol and will not take it back - so it is a daemon of its
- * own beside Xray, and these are its four buttons.
+ * MTProto inbounds are inbounds: they are created, edited, switched on and
+ * deleted through /inbounds like every other protocol, and applying the
+ * configuration starts and stops their daemons. What is left here is the one
+ * thing the inbound row cannot answer from the store - whether the daemon is
+ * actually up - and the link to hand out.
  */
-async function mtprotoView() {
-  const out = await mtproto.status();
-  /* the QR belongs with the link, and this is the one place in the panel that
-     already has a QR encoder - the module itself has no business knowing */
-  if (out.links && out.links.https) {
-    try {
-      out.qr = await QRCode.toDataURL(out.links.https, { margin: 1, width: 380, errorCorrectionLevel: 'M' });
-    } catch (_) { out.qr = ''; }
-  } else {
-    out.qr = '';
-  }
-  return out;
-}
-
 router.get('/mtproto', leaderOnly, async (req, res) => {
   try {
-    return res.json(await mtprotoView());
-  } catch (err) {
-    return bad(res, err.message);
-  }
-});
-
-/** Switch it on or off, move its port, change its disguise, reroll its key. */
-router.put('/mtproto', leaderOnly, async (req, res) => {
-  const body = req.body || {};
-  try {
-    const out = await mtproto.apply(body);
-    const view = await mtprotoView();
-    if (body.enable !== undefined) {
-      logEvent('system', body.enable
-        ? `the Telegram proxy is on, on port ${out.port}`
-        : 'the Telegram proxy is off');
-    } else if (body.newSecret) {
-      logEvent('system', 'the Telegram proxy key was changed - older links no longer work');
-    } else {
-      logEvent('system', `the Telegram proxy now answers on port ${out.port} as ${out.domain}`);
+    const out = await mtproto.status();
+    for (const one of out.inbounds) {
+      /* the QR belongs with the link, and this is the one place in the panel
+         that already has an encoder - the module has no business knowing */
+      one.qr = '';
+      if (one.links && one.links.https) {
+        try {
+          one.qr = await QRCode.toDataURL(one.links.https, { margin: 1, width: 380, errorCorrectionLevel: 'M' });
+        } catch (_) { /* the link alone is still useful */ }
+      }
     }
-    return res.json(view);
+    return res.json(out);
   } catch (err) {
-    /* the settings were saved either way, so the page shows what it will try
-       again with rather than snapping back to the old values */
     return bad(res, err.message);
   }
 });
 
-/** Fetch the proxy binary, which is the one step that needs the network. */
+/**
+ * Fetch the proxy binary.
+ *
+ * Switching an MTProto inbound on does this by itself; this is for doing it
+ * ahead of time, or again after a failure the admin has since fixed.
+ */
 router.post('/mtproto/install', leaderOnly, async (req, res) => {
   try {
     const out = await mtproto.install();
     logEvent('system', `installed the Telegram proxy (mtg ${out.version})`);
-    return res.json(await mtprotoView());
+    await mtproto.sync(true);
+    return res.json(await mtproto.status());
   } catch (err) {
     return bad(res, err.message);
   }
@@ -1655,6 +1637,30 @@ function inboundMissing(inb) {
   return '';
 }
 
+/**
+ * Settle an MTProto inbound's disguise and key.
+ *
+ * Kept out of the big field list because it is the one field that is derived
+ * rather than copied: the domain is encoded inside the secret, so the two
+ * cannot be set independently, and a secret arriving from a form would be a
+ * secret nobody had checked.
+ */
+function settleMtproto(inb, body) {
+  if (inb.protocol !== 'mtproto') return '';
+  const asked = String(body.mtDomain || inb.mtDomain || '').trim();
+  const domain = mtproto.cleanDomain(asked || mtproto.DEFAULT_DOMAIN);
+  if (!domain) return 'that is not a domain name for the Telegram proxy to imitate';
+  inb.mtDomain = domain;
+
+  const carried = mtproto.domainOf(inb.mtSecret);
+  /* a new key when asked for, when there is none, or when the disguise moved -
+     the domain is inside the key, so those are the same event */
+  if (body.mtNewSecret || !inb.mtSecret || carried !== domain) {
+    inb.mtSecret = mtproto.makeSecret(domain);
+  }
+  return '';
+}
+
 function normalizeInbound(body, existing) {
   const inb = Object.assign({}, existing || {}, {
     remark: transfer.clean(body.remark ?? existing?.remark) || 'inbound',
@@ -1701,6 +1707,15 @@ function normalizeInbound(body, existing) {
     ocspStapling: Number(body.ocspStapling ?? existing?.ocspStapling ?? 0),
     certUsage: body.certUsage ?? existing?.certUsage ?? 'encipherment',
     certOneTimeLoading: body.certOneTimeLoading ?? existing?.certOneTimeLoading ?? false,
+    /* ---- MTProto: the disguise, and the key that carries it ----
+       The secret is not taken from the form as a free string: it is built
+       from the domain, because the domain lives inside it. `mtNewSecret`
+       asks for a fresh one; otherwise the existing key is kept, so editing
+       the name or the port of an inbound does not invalidate every link
+       already handed out. */
+    mtDomain: body.mtDomain ?? existing?.mtDomain ?? '',
+    mtSecret: existing?.mtSecret ?? '',
+
     /* ---- the inbound's own cap and expiry, like 3x-ui's ---- */
     totalGB: Number(body.totalGB ?? existing?.totalGB ?? 0),
     expiryTime: Number(body.expiryTime ?? existing?.expiryTime ?? 0),
@@ -1810,6 +1825,8 @@ router.get('/inbounds', (req, res) => {
 router.post('/inbounds', async (req, res) => {
   const body = req.body || {};
   const inb = normalizeInbound(body, null);
+  const mtBad = settleMtproto(inb, body);
+  if (mtBad) return bad(res, mtBad);
   if (!inb.port || inb.port < 1 || inb.port > 65535) return bad(res, 'port must be between 1 and 65535');
   const clash = portConflict(inb.port, inb.listen, null, inb);
   if (clash) return bad(res, clash);
@@ -1849,6 +1866,8 @@ router.put('/inbounds/:id', async (req, res) => {
   const updated = normalizeInbound(req.body || {}, before);
   updated.id = before.id;
   updated.tag = before.tag;
+  const mtBad = settleMtproto(updated, req.body || {});
+  if (mtBad) return bad(res, mtBad);
   const clash = portConflict(updated.port, updated.listen, updated.id, updated);
   if (clash) return bad(res, clash);
   /* the same rules as on create: xray would refuse the whole config over one of
@@ -2217,7 +2236,17 @@ function nameTaken(client, inbound, ignoreId) {
  * dropped here, so a stale form cannot attach anyone to a hole.
  */
 function wantedInbounds(body, existing) {
-  const known = new Set(db.data.inbounds.map((i) => i.id));
+  /*
+   * Only inbounds that have client accounts at all.
+   *
+   * A Telegram proxy is one secret on one port that everybody shares - there
+   * is no per-client anything to attach somebody to, and a client carrying it
+   * would be a client with a way in that does not exist. The page does not
+   * offer it; this is why it would not matter if it did.
+   */
+  const known = new Set(db.data.inbounds
+    .filter((i) => xray.CLIENT_PROTOCOLS.includes(i.protocol))
+    .map((i) => i.id));
   let ids;
   if (Array.isArray(body.inboundIds)) ids = body.inboundIds;
   else if (body.inboundId !== undefined) ids = [body.inboundId];

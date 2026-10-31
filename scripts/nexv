@@ -327,8 +327,6 @@ panel_needed_ports() {
       };
       add(s.panelPort || 2087, "tcp");
       if (s.subPort) add(s.subPort, "tcp");
-      // the Telegram proxy has a port of its own and is not an inbound
-      if (db.mtproto && db.mtproto.enable) add(db.mtproto.port, "tcp");
       if (s.domain) { add(80, "tcp"); add(443, "tcp"); }
       for (const inb of (db.inbounds || [])) {
         if (inb.enable === false) continue;
@@ -2178,8 +2176,13 @@ act_uninstall() {
   systemctl disable --now "$SERVICE" 2>/dev/null || true
   # the Telegram proxy is a service of its own and would otherwise be left
   # running on the server after the panel that put it there was gone
-  systemctl disable --now nexv-mtproto 2>/dev/null || true
-  rm -f /etc/systemd/system/nexv-mtproto.service /usr/local/bin/mtg
+  # one service per MTProto inbound, so this is a list and not a name
+  for unit in /etc/systemd/system/nexv-mtproto*.service; do
+    [[ -e $unit ]] || continue
+    systemctl disable --now "$(basename "$unit" .service)" 2>/dev/null || true
+    rm -f "$unit"
+  done
+  rm -f /usr/local/bin/mtg
   rm -rf /usr/local/etc/nexv-mtproto
   rm -f /etc/systemd/system/${SERVICE}.service /etc/cron.d/nexv-cert-renew
   systemctl daemon-reload

@@ -30,10 +30,27 @@ const API_PORT = 62789;
  */
 const BOT_PROXY_PORT = 62790;
 
+/**
+ * Protocols that are not Xray's at all.
+ *
+ * MTProto is Telegram's own, and Xray-core removed it years ago - a config
+ * with an `mtproto` inbound in it is one Xray refuses to start on. It is in
+ * the panel's protocol list all the same, because from the admin's side it is
+ * exactly what an inbound is: a port, a disguise, something clients connect
+ * to, listed with the rest. What is behind it is a second daemon the panel
+ * runs, and the one rule that makes this safe is here: these never reach the
+ * generated config.
+ */
+const FOREIGN_PROTOCOLS = ['mtproto'];
+
+function isForeign(inb) {
+  return FOREIGN_PROTOCOLS.includes(String(inb && inb.protocol || ''));
+}
+
 /** Inbound protocols the panel can configure. */
 const INBOUND_PROTOCOLS = [
   'vless', 'vmess', 'trojan', 'shadowsocks',
-  'socks', 'http', 'dokodemo-door', 'wireguard'
+  'socks', 'http', 'dokodemo-door', 'wireguard', 'mtproto'
 ];
 
 /** Outbound protocols the panel can configure. */
@@ -839,7 +856,10 @@ function buildConfig() {
 
   /* several inbounds may name the same port; one of them owns the listener
      and the rest are moved onto the loopback behind it */
-  const live = d.inbounds.filter((inb) => inb.enable !== false && !inboundDead(inb));
+  /* foreign protocols are not Xray's to serve: they are listed as inbounds on
+     the panel and run by their own daemon, and putting one in this config
+     would stop Xray from starting at all */
+  const live = d.inbounds.filter((inb) => inb.enable !== false && !inboundDead(inb) && !isForeign(inb));
   const share = sharedport.plan(live, [API_PORT, Number(d.settings.panelPort || 0),
     Number(process.env.NEXV_PORT || 0), Number(d.settings.subPort || 0)]);
 
@@ -1111,6 +1131,25 @@ function rollBack(previous) {
 async function apply() {
   // whatever happens below changes the service, so the held status is stale now
   forgetServiceStatus();
+
+  /*
+   * The inbounds that are not Xray's.
+   *
+   * Applying the configuration means making the server match the panel, and
+   * since an MTProto inbound is an inbound like any other on the page, that
+   * has to include the daemons behind them. It goes through the same call
+   * every route already makes rather than being bolted onto each one, so
+   * there is no path that changes an inbound and forgets. It does nothing at
+   * all when none of them has moved, and it never fails this: a Telegram
+   * proxy that would not start is not a reason to refuse an Xray config.
+   */
+  require('./mtproto').sync()
+    .then((out) => {
+      for (const bad of (out.failed || [])) {
+        console.error(`[mtproto] ${bad.id}: ${bad.reason}`);
+      }
+    })
+    .catch((err) => console.error('[mtproto] could not apply:', err.message));
   let previous = null;
   if (fs.existsSync(XRAY_CONFIG)) previous = fs.readFileSync(XRAY_CONFIG, 'utf8');
 
@@ -1593,7 +1632,7 @@ async function generateReality() {
 }
 
 module.exports = {
-  deadlineOf, repairClocks,
+  deadlineOf, repairClocks, isForeign, FOREIGN_PROTOCOLS,
   xrayVersion,
   XRAY_BIN, XRAY_CONFIG, XRAY_SERVICE, API_PORT, BOT_PROXY_PORT, botVia, handOverConfig,
   buildConfig, writeConfig, testConfig, apply, serviceStatus, repairCerts, messageOf, isOverIpLimit,

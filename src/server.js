@@ -597,11 +597,12 @@ async function bootstrap() {
   }).catch((err) => console.error('[xray] could not be started:', err.message));
   // a bot that was running before the restart starts polling again on its own
   try { require('./telegram').resume(); } catch (err) { console.error('[bot] could not resume:', err.message); }
-  /* the Telegram proxy, if it is meant to be on: its own systemd unit should
-     have brought it back, and this covers the case where it did not */
+  /* MTProto inbounds: their own units should have brought them back, and this
+     covers the ones that did not - and moves an install made before MTProto
+     was a protocol onto an inbound of its own */
   require('./mtproto').resume()
-    .then((r) => { if (r && r.started) console.log('[mtproto] the Telegram proxy was started again'); })
-    .catch((err) => console.error('[mtproto] could not start the Telegram proxy:', err.message));
+    .then((r) => { if (r && r.started) console.log(`[mtproto] started ${r.started} Telegram proxy(s)`); })
+    .catch((err) => console.error('[mtproto] could not start the Telegram proxies:', err.message));
   /*
    * Deadlines written by another panel, in seconds or as a negative duration.
    * Read as milliseconds a second-timestamp is a date in 1970, so the client
