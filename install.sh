@@ -702,6 +702,15 @@ setup_ssl() {
   # leftovers - that is the install's most common reason for ending without
   # HTTPS. The management script knows how to clear it; it is already on disk
   # by this point, so this does not have to learn the same trick twice.
+  # the same rehearsal the menu does: five failed attempts an hour is the
+  # rate limit, and an install that burns them teaches nobody anything
+  if ! bash "$INSTALL_DIR/scripts/nexv" cert-check "$DOMAIN"; then
+    CERT_ERROR="the challenge for $DOMAIN could not be answered"
+    warn "Skipping the certificate: nothing was requested, so no attempt was used."
+    echo "  Fix what is printed above, then run:  nexv cert $DOMAIN"
+    return 0
+  fi
+
   local freed=0
   if bash "$INSTALL_DIR/scripts/nexv" free80 >/dev/null 2>&1; then
     freed=1
@@ -819,15 +828,30 @@ EOF
   ok "Service $SERVICE is running"
 }
 
+# Open the ports this install needs, whether or not the firewall is running.
+#
+# Two things were wrong with doing it the obvious way. It only wrote rules when
+# the firewall was ACTIVE - and on a fresh Ubuntu ufw is installed and switched
+# off, which answered "no firewall" and saved nothing, so the day it was turned
+# on everything was shut. And it ran after the certificate step, so the one
+# moment the ports had to be open - while Let's Encrypt was knocking on 80 -
+# was the one moment nothing had opened them.
+#
+# ufw keeps its rules whether it is up or down and applies them the moment it
+# is enabled, so they are written either way now, and this runs before SSL.
 open_firewall() {
   local ports=("$PANEL_PORT" 80 443 2096)
-  if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
+  if command -v ufw >/dev/null; then
     for port in "${ports[@]}"; do ufw allow "$port"/tcp >/dev/null 2>&1 || true; done
-    ok "Ports opened in ufw"
-  elif command -v firewall-cmd >/dev/null && systemctl is-active --quiet firewalld; then
+    if ufw status 2>/dev/null | grep -q "Status: active"; then
+      ok "Ports opened in ufw: ${ports[*]}"
+    else
+      ok "Firewall rules saved for ${ports[*]} (ufw is installed but switched off)"
+    fi
+  elif command -v firewall-cmd >/dev/null; then
     for port in "${ports[@]}"; do firewall-cmd --permanent --add-port="$port"/tcp >/dev/null 2>&1 || true; done
     firewall-cmd --reload >/dev/null 2>&1 || true
-    ok "Ports opened in firewalld"
+    ok "Ports opened in firewalld: ${ports[*]}"
   fi
 }
 
@@ -902,9 +926,12 @@ main() {
   migrate_legacy_dir
   fetch_panel
   ask_config
+  # the ports first: the certificate step needs 80 open to the world
+  open_firewall
   setup_ssl
   seed_settings
   install_service
+  # again, because the panel port is only settled by now
   open_firewall
   lock_panel_files
   summary

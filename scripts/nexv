@@ -884,15 +884,42 @@ explain_cert_failure() {
     err "The certificate could not be issued."
   fi
 
+  # What certbot actually said, which is not what it says last.
+  #
+  # Every failure ends with the same three lines - ask for help at the
+  # community forum, see the logfile, re-run with -v for more details - and
+  # the word "details" matched the old filter, so those three crowded out the
+  # real reason and the panel printed the least informative part of the whole
+  # output. They are dropped now, and the lines that carry the answer are
+  # preferred: certbot prints the ACME problem as Domain/Type/Detail, and the
+  # binding and authentication failures as sentences of their own.
+  local boilerplate='Ask for help|search for solutions|See the logfile|re-run Certbot|Saving debug log|Please see the logfiles|certbot\.eff\.org'
   if [[ -n $text ]]; then
     local said
-    said="$(grep -iE 'error|detail|problem|challenge|urn:ietf' <<<"$text" | tail -6)"
-    # a failure nobody has a pattern for is exactly the one where the raw tail
-    # is worth printing, so an empty match falls back to the last few lines
-    [[ -n $said ]] || said="$(tail -6 <<<"$text")"
+    said="$(grep -iE '^ *(Domain|Type|Detail|Status|Hint):|failed to authenticate|could not bind|address already in use|timeout|connection refused|unauthorized|rate ?limit|too many|NXDOMAIN|no valid|secondary validation' <<<"$text" \
+            | grep -viE "$boilerplate" | tail -8)"
+    # nothing matched: the raw tail, still without the boilerplate
+    [[ -n $said ]] || said="$(grep -viE "$boilerplate" <<<"$text" | grep -v '^[[:space:]]*$' | tail -8)"
     echo "  ---- what certbot said ----"
     sed 's/^/  /' <<<"$said"
     echo "  ---------------------------"
+  fi
+
+  # The ACME log, where the reason really lives.
+  #
+  # certbot's console output summarises; /var/log/letsencrypt/letsencrypt.log
+  # holds the server's own answer word for word, and when the summary says
+  # nothing useful that file is the difference between "it did not work" and
+  # knowing which of five things went wrong.
+  local acme=/var/log/letsencrypt/letsencrypt.log
+  if [[ -r $acme ]]; then
+    local detail
+    detail="$(grep -iE '"detail"|urn:ietf:params:acme:error|Challenge failed|ConnectionError' "$acme" 2>/dev/null | tail -4)"
+    if [[ -n $detail ]]; then
+      echo "  ---- what Let's Encrypt answered ----"
+      sed 's/^/  /' <<<"$detail" | cut -c1-200
+      echo "  -------------------------------------"
+    fi
   fi
 }
 
@@ -909,6 +936,101 @@ remember_cert_error() {
       fs.writeFileSync(file, JSON.stringify(db, null, 2), { mode: 0o600 });
     } catch (e) { }
   ' >/dev/null 2>&1 || true
+}
+
+# Prove the challenge can actually be answered, before spending an attempt.
+#
+# Let's Encrypt allows five failures an hour for the same names, and a server
+# that cannot answer the challenge burns all five in a couple of minutes - at
+# which point the real error is replaced by a rate limit and the admin is
+# locked out of trying for an hour, having learned nothing.
+#
+# So the exact thing certbot is about to do is done first, with our own file:
+# a small server is put on port 80 serving one random token at the path the
+# challenge uses, and then the token is fetched through the domain name. That
+# request goes out the same way Let's Encrypt's will - through DNS, through
+# whatever proxy is in front, back to this machine - so it tests the whole
+# path and not just whether something is listening here.
+#
+# Four answers, and each one names a different fix:
+#   the token comes back      the path works; certbot will work too
+#   something else comes back the name points at another server, or a proxy
+#                             is answering for it (Cloudflare's orange cloud)
+#   nothing comes back        a firewall or a cloud security group is dropping
+#                             port 80 before it reaches here
+#   the name does not resolve there is no DNS record to follow
+cert_preflight() {
+  local domain="$1"
+
+  # no record at all is its own answer, and a different fix from the rest
+  if ! getent hosts "$domain" >/dev/null 2>&1; then
+    CERT_ERROR="$domain does not resolve to anything"
+    err "$domain has no DNS record at all."
+    echo "  Point an A record at this server's IP address and wait for it to spread,"
+    echo "  then run this again."
+    return 1
+  fi
+
+  local token="nexv-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  local dir="/tmp/nexv-acme-$$"
+  mkdir -p "$dir/.well-known/acme-challenge"
+  printf '%s' "$token" > "$dir/.well-known/acme-challenge/$token"
+
+  free_port_80 80 >/dev/null || { restore_port_80 >/dev/null 2>&1; return 2; }
+
+  # node is already on this machine - the panel is written in it
+  local node
+  node="$(command -v node || echo /usr/bin/node)"
+  "$node" -e '
+    const http = require("http"), fs = require("fs"), path = require("path");
+    const root = process.argv[1];
+    http.createServer((req, res) => {
+      const file = path.join(root, decodeURIComponent(req.url.split("?")[0]));
+      if (!file.startsWith(root)) { res.writeHead(403); return res.end(); }
+      fs.readFile(file, (err, body) => {
+        if (err) { res.writeHead(404); return res.end("no"); }
+        res.writeHead(200, { "content-type": "text/plain" });
+        res.end(body);
+      });
+    }).listen(80, "0.0.0.0");
+  ' "$dir" >/dev/null 2>&1 &
+  local server=$!
+  sleep 1
+
+  local body code
+  body="$(curl -s --max-time 15 -o /tmp/nexv-acme-body.$$ -w '%{http_code}' \
+          "http://${domain}/.well-known/acme-challenge/${token}" 2>/dev/null)"
+  code="$body"
+  body="$(head -c 200 /tmp/nexv-acme-body.$$ 2>/dev/null || true)"
+  rm -f /tmp/nexv-acme-body.$$
+
+  kill "$server" 2>/dev/null
+  wait "$server" 2>/dev/null
+  rm -rf "$dir"
+  restore_port_80 >/dev/null 2>&1
+
+  if [[ $body == "$token" ]]; then
+    ok "Port 80 answers for $domain - the challenge will work"
+    return 0
+  fi
+
+  err "The challenge cannot be answered for $domain yet."
+  if [[ -z $code || $code == 000 ]]; then
+    CERT_ERROR="nothing reached this server on port 80 for $domain"
+    echo "  Nothing came back at all. Port 80 is being dropped before it gets here:"
+    echo "    - your provider's own firewall or security group (DigitalOcean, Hetzner,"
+    echo "      Oracle and the rest all have one, separate from ufw)"
+    echo "    - or the domain points at a different machine"
+    echo "  This server's own firewall is open - the panel just opened it."
+  else
+    CERT_ERROR="something else answered for $domain on port 80"
+    echo "  Something answered, but it was not this server (HTTP $code)."
+    echo "  That is what a proxy in front of the domain looks like - in Cloudflare,"
+    echo "  turn the orange cloud grey until the certificate is issued - or the"
+    echo "  name is pointed at another machine."
+    [[ -n $body ]] && echo "  It said: $(tr -d '\n' <<<"$body" | cut -c1-120)"
+  fi
+  return 1
 }
 
 act_cert() {
@@ -940,6 +1062,20 @@ act_cert() {
   # certbot to bind - in that order, because opening a port nothing can bind
   # is no use and clearing one the firewall drops is no use either
   allow_port 80 tcp
+  allow_port 443 tcp
+
+  # the dry run, with our own token, before one of the week's attempts is spent
+  if [[ ${NEXV_SKIP_PREFLIGHT:-0} != 1 ]]; then
+    if ! cert_preflight "$domain"; then
+      remember_cert_error "$CERT_ERROR"
+      echo
+      echo "  Nothing was requested from Let's Encrypt, so no attempt was used."
+      echo "  Fix the above and run this again:  nexv cert $domain"
+      echo "  To try anyway:  NEXV_SKIP_PREFLIGHT=1 nexv cert $domain"
+      return 1
+    fi
+  fi
+
   if ! free_port_80 80; then
     CERT_ERROR="something else is already using port 80"
     remember_cert_error "$CERT_ERROR"
@@ -1980,6 +2116,7 @@ ${BOLD}nexv${RESET} - NexV Panel management
   nexv port <number>            change the panel port
   nexv settings                 print the current settings
   nexv cert <domain>            request a Let's Encrypt certificate
+  nexv cert-check <domain>      test whether the certificate check can work
   nexv reset-password [pw]      set the admin password (generated when omitted)
   nexv reset-username <name>    change the admin username
   nexv firewall                 open the panel ports
@@ -2009,6 +2146,9 @@ case "${1:-menu}" in
   # what the renewal cron calls around certbot, so a renewal at three in the
   # morning clears port 80 the same way the first issue did
   free80)          need_root; free_port_80 "${2:-80}" ;;
+  # the challenge rehearsal on its own, for the installer and for anybody who
+  # wants to know whether it will work before spending an attempt
+  cert-check)      need_root; allow_port 80 tcp; cert_preflight "${2:-}" ;;
   free80-undo)     need_root; restore_port_80 ;;
   reset-password)  act_reset_password "${2:-}" ;;
   reset-username)  act_reset_username "${2:-}" ;;
