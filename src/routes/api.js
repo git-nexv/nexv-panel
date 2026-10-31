@@ -27,6 +27,7 @@ const backup = require('../backup');
 const paygate = require('../paygate');
 const payapi = require('../payapi');
 const rootpw = require('../rootpw');
+const mtproto = require('../mtproto');
 const leftovers = require('../leftovers');
 
 const router = express.Router();
@@ -1334,6 +1335,69 @@ router.put('/server/notify-bot', async (req, res) => {
       ? 'the new server password will be sent to the bot admin each time it changes'
       : 'the server password will no longer be sent to the bot');
     return res.json(out);
+  } catch (err) {
+    return bad(res, err.message);
+  }
+});
+
+/* ----------------------------- Telegram proxy ---------------------------- */
+
+/*
+ * MTProto is not an Xray inbound and cannot be made into one - Xray-core
+ * removed the protocol and will not take it back - so it is a daemon of its
+ * own beside Xray, and these are its four buttons.
+ */
+async function mtprotoView() {
+  const out = await mtproto.status();
+  /* the QR belongs with the link, and this is the one place in the panel that
+     already has a QR encoder - the module itself has no business knowing */
+  if (out.links && out.links.https) {
+    try {
+      out.qr = await QRCode.toDataURL(out.links.https, { margin: 1, width: 380, errorCorrectionLevel: 'M' });
+    } catch (_) { out.qr = ''; }
+  } else {
+    out.qr = '';
+  }
+  return out;
+}
+
+router.get('/mtproto', leaderOnly, async (req, res) => {
+  try {
+    return res.json(await mtprotoView());
+  } catch (err) {
+    return bad(res, err.message);
+  }
+});
+
+/** Switch it on or off, move its port, change its disguise, reroll its key. */
+router.put('/mtproto', leaderOnly, async (req, res) => {
+  const body = req.body || {};
+  try {
+    const out = await mtproto.apply(body);
+    const view = await mtprotoView();
+    if (body.enable !== undefined) {
+      logEvent('system', body.enable
+        ? `the Telegram proxy is on, on port ${out.port}`
+        : 'the Telegram proxy is off');
+    } else if (body.newSecret) {
+      logEvent('system', 'the Telegram proxy key was changed - older links no longer work');
+    } else {
+      logEvent('system', `the Telegram proxy now answers on port ${out.port} as ${out.domain}`);
+    }
+    return res.json(view);
+  } catch (err) {
+    /* the settings were saved either way, so the page shows what it will try
+       again with rather than snapping back to the old values */
+    return bad(res, err.message);
+  }
+});
+
+/** Fetch the proxy binary, which is the one step that needs the network. */
+router.post('/mtproto/install', leaderOnly, async (req, res) => {
+  try {
+    const out = await mtproto.install();
+    logEvent('system', `installed the Telegram proxy (mtg ${out.version})`);
+    return res.json(await mtprotoView());
   } catch (err) {
     return bad(res, err.message);
   }

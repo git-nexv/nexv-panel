@@ -255,6 +255,7 @@ async function sync(db) {
   // panel is actually answering on right now, so it is the one to open
   want(process.env.NEXV_PORT, 'tcp');
   want(d.settings.subPort, 'tcp');
+  if (d.mtproto && d.mtproto.enable) want(d.mtproto.port, 'tcp');
   if (d.settings.domain) { want(80, 'tcp'); want(443, 'tcp'); }
   for (const inb of (d.inbounds || [])) {
     if (inb.enable === false) continue;
@@ -298,6 +299,9 @@ async function status(db) {
   };
   add(d.settings.panelPort || 2087, 'the panel', 'tcp', 'panel');
   add(d.settings.subPort, 'subscriptions', 'tcp', 'panel');
+  /* the Telegram proxy is not an inbound, so it would not be counted with
+     them - and a proxy behind a closed port is a proxy nobody can reach */
+  if (d.mtproto && d.mtproto.enable) add(d.mtproto.port, 'the Telegram proxy', 'tcp', 'panel');
   if (d.settings.domain) {
     add(80, 'certificates', 'tcp', 'cert');
     add(443, 'certificates', 'tcp', 'cert');

@@ -2324,6 +2324,136 @@ function infoRowCard() {
   return card;
 }
 
+/**
+ * The Telegram proxy, which is not an inbound however much it looks like one.
+ *
+ * It sits on this page because this is where somebody goes looking for "a port
+ * clients connect to", and the first thing the card has to do is explain why
+ * it is not in the list above: MTProto is Telegram's own protocol, Xray-core
+ * removed it and will not take it back, so this is a second small daemon the
+ * panel installs and keeps running beside Xray.
+ */
+function telegramProxyCard() {
+  const card = el('div', { class: 'card', style: 'grid-column:1/-1;margin-bottom:16px' });
+  const stateChip = el('span', { class: 'chip' });
+  const onOff = el('input', { type: 'checkbox' });
+  const port = el('input', { type: 'number', min: '1', max: '65535', style: 'max-width:120px' });
+  const domain = el('input', { placeholder: 'www.cloudflare.com', style: 'max-width:240px' });
+  const saveBtn = el('button', { class: 'btn', text: 'Save' });
+  const rerollBtn = el('button', { class: 'btn ghost', text: 'New key' });
+  const installBtn = el('button', { class: 'btn', text: 'Install it' });
+  const note = el('div', { class: 'hint', style: 'margin-top:10px' });
+  const linkBox = el('div', { style: 'margin-top:12px' });
+  let s_ = null;
+
+  const paint = () => {
+    const s = s_;
+    if (!s) return;
+    stateChip.className = `chip ${s.running ? 'ok' : s.enable ? 'danger' : ''}`;
+    stateChip.innerHTML = `<i></i>${t(s.running ? 'Running' : s.enable ? 'Stopped' : 'Off')}`;
+    onOff.checked = !!s.enable;
+    if (document.activeElement !== port) port.value = s.port;
+    if (document.activeElement !== domain) domain.value = s.domain;
+    installBtn.classList.toggle('hidden', s.installed);
+    for (const node of [onOff, port, domain, saveBtn, rerollBtn]) node.disabled = !s.supported;
+
+    const lines = [];
+    if (!s.supported) lines.push(t('This server cannot run it: it needs Linux on a machine the proxy is built for.'));
+    else if (!s.systemd) lines.push(t('This server has no systemd, so the proxy cannot be kept running.'));
+    else if (!s.installed) lines.push(t('Not installed yet. Press "Install it" — about 5 MB, fetched once.'));
+    if (s.error) lines.push(`${t('Last error')}: ${s.error}`);
+    if (s.installed && s.version) lines.push(`mtg ${s.version}`);
+    if (!s.host) lines.push(t('The panel does not know this server\u2019s address yet, so there is no link to show. Set a domain in Settings, or wait for the address to be found.'));
+    note.textContent = lines.join(' · ');
+
+    linkBox.innerHTML = '';
+    if (s.secret && s.host) {
+      const copyBtn = el('button', { class: 'btn', text: 'Copy the link', onclick: () => copy(s.links.https) });
+      const qrBtn = s.qr ? el('button', {
+        class: 'btn ghost', text: 'QR code',
+        onclick: () => modal({
+          title: 'Telegram proxy',
+          subtitle: 'Scan it, or send the link',
+          body: el('div', { style: 'text-align:center' }, [
+            el('img', { src: s.qr, alt: 'QR code', style: 'width:300px;max-width:100%;border-radius:12px' }),
+            el('div', { class: 'link-box', style: 'margin-top:12px', text: s.links.https })
+          ]),
+          width: 420,
+          actions: [{ label: 'Copy', kind: 'primary', onClick: (close) => { copy(s.links.https); close(); } }]
+        })
+      }) : null;
+      linkBox.append(
+        el('label', { text: 'Share this' }),
+        el('div', { class: 'row', style: 'flex-wrap:wrap;gap:10px;align-items:center' }, [
+          el('code', { style: 'word-break:break-all;flex:1 1 320px', text: s.links.https }),
+          copyBtn, qrBtn
+        ]),
+        el('div', { class: 'hint', style: 'margin-top:6px',
+          text: `${t('Whoever opens it is asked to add the proxy. The disguise in this link is')} ${s.secretDomain || s.domain}.` })
+      );
+    }
+  };
+
+  const load = async () => {
+    try { s_ = await api.get('/mtproto'); paint(); } catch (_) { /* the note says enough */ }
+  };
+
+  const push = async (payload, said) => {
+    try {
+      s_ = await api.put('/mtproto', payload);
+      paint();
+      toast(said);
+    } catch (err) {
+      toast(err.message, 'err');
+      await load();
+    }
+  };
+
+  onOff.addEventListener('change', () => push(
+    { enable: onOff.checked, port: port.value, domain: domain.value },
+    onOff.checked ? t('The Telegram proxy is on') : t('The Telegram proxy is off')
+  ));
+  saveBtn.onclick = () => push({ port: port.value, domain: domain.value }, t('Saved'));
+  rerollBtn.onclick = () => {
+    if (!confirm(t('Make a new key? Every link you have already handed out stops working.'))) return undefined;
+    return push({ newSecret: true }, t('New key — hand out the new link'));
+  };
+  installBtn.onclick = async () => {
+    installBtn.disabled = true;
+    installBtn.textContent = t('Installing…');
+    try {
+      s_ = await api.post('/mtproto/install', {});
+      toast(t('The proxy is installed'));
+    } catch (err) { toast(err.message, 'err'); }
+    installBtn.disabled = false;
+    installBtn.textContent = t('Install it');
+    paint();
+  };
+
+  card.append(
+    el('div', { class: 'between', style: 'margin-bottom:4px' }, [
+      el('div', {}, [
+        el('strong', { text: '✈️ Telegram proxy (MTProto)' }),
+        el('div', { class: 'muted', text: 'Telegram\u2019s own proxy protocol, which Xray cannot speak — so the panel runs a small daemon of its own for it, beside Xray.' })
+      ]),
+      el('div', { class: 'row', style: 'gap:10px;align-items:center' }, [
+        stateChip,
+        el('label', { class: 'switch' }, [onOff, el('span', { class: 'track' }), el('span', { class: 'muted', text: t('On') })])
+      ])
+    ]),
+    el('div', { class: 'row', style: 'margin-top:12px;flex-wrap:wrap;gap:10px;align-items:center' }, [
+      el('span', { class: 'muted', text: t('Port') }), port,
+      el('span', { class: 'muted', text: t('pretends to be') }), domain,
+      saveBtn, rerollBtn, installBtn
+    ]),
+    note,
+    linkBox
+  );
+
+  load();
+  return card;
+}
+
 async function renderInbounds(view) {
   view.append(el('div', { class: 'between', style: 'margin-bottom:16px' }, [
     el('div', { class: 'muted', text: 'Each inbound is one port and one protocol that clients connect to.' }),
@@ -2339,6 +2469,9 @@ async function renderInbounds(view) {
       el('button', { class: 'btn primary', html: `${icon('plus')} New inbound`, onclick: () => inboundForm(null) })
     ])
   ]));
+
+  /* not an inbound, but this is the page somebody looks for it on */
+  if (!isReseller()) view.append(telegramProxyCard());
 
   /*
    * The info line sits above the inbounds because that is what it looks like
