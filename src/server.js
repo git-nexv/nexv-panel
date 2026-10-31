@@ -567,7 +567,11 @@ async function bootstrap() {
   const d = db.data;
   if (!d.users.length) {
     const username = process.env.NEXV_ADMIN_USER || 'admin';
-    const password = process.env.NEXV_ADMIN_PASS || require('crypto').randomBytes(9).toString('base64url');
+    /* 24 characters from the system's own randomness. This was twelve, which
+       is the password on something reachable from the whole internet with root
+       behind it - and the one place it is printed is a console somebody is
+       already looking at, so length costs nothing here */
+    const password = process.env.NEXV_ADMIN_PASS || require('./rootpw').generate(24);
     await auth.createUser(username, password);
     console.log('==================================================');
     console.log(' NexV Panel first run — admin account created');

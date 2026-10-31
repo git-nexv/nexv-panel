@@ -155,6 +155,45 @@ restore_port_80() {
 
 # Which firewall is RUNNING. "none" here means nothing is filtering anything,
 # which is not the same as nothing being installed - see firewall_tool below.
+# A generated password worth having.
+#
+# This used to be `openssl rand -base64 12` with the awkward characters cut
+# out and the result trimmed to fourteen. Two things wrong with it. Fourteen
+# characters is shorter than it looks once the alphabet is stripped, and it is
+# the password on a panel that is reachable from the whole internet and has
+# root behind it. And it had one source: on a box with no openssl the command
+# produced nothing at all and the password came out empty, which is not a
+# weaker password, it is no password.
+#
+# So: 24 characters from an alphabet of 57 - about 140 bits, which is not
+# guessable by anything, ever - and three sources tried in turn so there is
+# always one. No l/I/1 or O/0, because this gets read off a screen and typed
+# into a login box, and a password nobody can transcribe is its own lockout.
+gen_password() {
+  local want="${1:-24}"
+  local pool='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
+  local out=""
+
+  if command -v openssl >/dev/null 2>&1; then
+    out="$(LC_ALL=C openssl rand -base64 $(( want * 2 )) | LC_ALL=C tr -dc "$pool" | cut -c1-"$want")"
+  fi
+  if [[ ${#out} -lt $want && -r /dev/urandom ]]; then
+    out="$(LC_ALL=C tr -dc "$pool" < /dev/urandom 2>/dev/null | head -c "$want")"
+  fi
+  if [[ ${#out} -lt $want ]] && command -v node >/dev/null 2>&1; then
+    out="$(node -e '
+      const crypto = require("crypto");
+      const pool = process.argv[1], want = Number(process.argv[2]);
+      let s = "";
+      while (s.length < want) s += pool[crypto.randomInt(pool.length)];
+      process.stdout.write(s);
+    ' "$pool" "$want")"
+  fi
+  # never hand back something shorter than asked for and call it a password
+  [[ ${#out} -ge $want ]] || { echo "could not generate a password on this machine" >&2; return 1; }
+  printf '%s' "$out"
+}
+
 firewall_kind() {
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
     echo ufw
@@ -1321,12 +1360,18 @@ act_reset_password() {
   need_root
   local newpass="${1:-}"
   if [[ -n $newpass ]]; then
-    if (( ${#newpass} < 6 )); then
-      err "Choose a password of at least 6 characters"
+    # the panel's own API refuses under 8; the terminal said 6, so a password
+    # set here could be one the panel itself would not have accepted
+    if (( ${#newpass} < 8 )); then
+      err "Choose a password of at least 8 characters, or leave it empty for a generated one"
       return 1
     fi
+    if (( ${#newpass} < 12 )); then
+      warn "That is ${#newpass} characters, on a panel the whole internet can reach."
+      echo "  Leaving it empty next time gets you a 24-character one."
+    fi
   else
-    newpass="$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-14)"
+    newpass="$(gen_password 24)" || { err "Could not generate a password on this machine"; return 1; }
   fi
   NEW_PASS="$newpass" DATA_DIR="$DATA_DIR" node -e '
     const fs = require("fs"), path = require("path");

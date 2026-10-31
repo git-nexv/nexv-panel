@@ -440,11 +440,19 @@ function clearCredentials(reseller) {
 }
 
 /** Something readable to hand over, when the leader cannot think of one. */
+/*
+ * A password to hand to a reseller.
+ *
+ * Twenty characters, and drawn with randomInt rather than a byte modulo the
+ * alphabet length: 256 does not divide 56, so a modulo makes the first eight
+ * letters of the pool fractionally likelier than the rest. It is a small bias
+ * and it is a silly one to carry in something whose only job is to be
+ * unguessable.
+ */
 function suggestPassword() {
   const pool = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const bytes = crypto.randomBytes(14);
   let out = '';
-  for (let i = 0; i < 14; i++) out += pool[bytes[i] % pool.length];
+  for (let i = 0; i < 20; i++) out += pool[crypto.randomInt(pool.length)];
   return out;
 }
 

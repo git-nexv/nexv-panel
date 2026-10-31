@@ -573,6 +573,45 @@ fetch_panel() {
   ok "Panel installed in $INSTALL_DIR"
 }
 
+# A generated password worth having.
+#
+# This used to be `openssl rand -base64 12` with the awkward characters cut
+# out and the result trimmed to fourteen. Two things wrong with it. Fourteen
+# characters is shorter than it looks once the alphabet is stripped, and it is
+# the password on a panel that is reachable from the whole internet and has
+# root behind it. And it had one source: on a box with no openssl the command
+# produced nothing at all and the password came out empty, which is not a
+# weaker password, it is no password.
+#
+# So: 24 characters from an alphabet of 57 - about 140 bits, which is not
+# guessable by anything, ever - and three sources tried in turn so there is
+# always one. No l/I/1 or O/0, because this gets read off a screen and typed
+# into a login box, and a password nobody can transcribe is its own lockout.
+gen_password() {
+  local want="${1:-24}"
+  local pool='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
+  local out=""
+
+  if command -v openssl >/dev/null 2>&1; then
+    out="$(LC_ALL=C openssl rand -base64 $(( want * 2 )) | LC_ALL=C tr -dc "$pool" | cut -c1-"$want")"
+  fi
+  if [[ ${#out} -lt $want && -r /dev/urandom ]]; then
+    out="$(LC_ALL=C tr -dc "$pool" < /dev/urandom 2>/dev/null | head -c "$want")"
+  fi
+  if [[ ${#out} -lt $want ]] && command -v node >/dev/null 2>&1; then
+    out="$(node -e '
+      const crypto = require("crypto");
+      const pool = process.argv[1], want = Number(process.argv[2]);
+      let s = "";
+      while (s.length < want) s += pool[crypto.randomInt(pool.length)];
+      process.stdout.write(s);
+    ' "$pool" "$want")"
+  fi
+  # never hand back something shorter than asked for and call it a password
+  [[ ${#out} -ge $want ]] || { echo "could not generate a password on this machine" >&2; return 1; }
+  printf '%s' "$out"
+}
+
 ask_config() {
   PANEL_PORT="${NEXV_PORT:-}"
   ADMIN_USER="${NEXV_USER:-}"
@@ -588,7 +627,18 @@ ask_config() {
     echo "${BOLD}-- Panel configuration --${RESET}"
     [[ -n $PANEL_PORT ]] || { read -rp "Panel port [2087]: " PANEL_PORT; }
     [[ -n $ADMIN_USER ]] || { read -rp "Admin username [admin]: " ADMIN_USER; }
-    [[ -n $ADMIN_PASS ]] || { read -rsp "Admin password (empty = generate one): " ADMIN_PASS; echo; }
+    # asked again rather than refused: aborting an install that is already
+    # minutes in, over a password somebody can simply retype, is a bad trade
+    while [[ -z $ADMIN_PASS ]]; do
+      read -rsp "Admin password (empty = generate a strong one): " ADMIN_PASS; echo
+      [[ -z $ADMIN_PASS ]] && break
+      if [[ ${#ADMIN_PASS} -lt 10 ]]; then
+        warn "That is ${#ADMIN_PASS} characters. This panel is reachable from the whole"
+        echo "  internet and has root behind it - use at least 10, or press Enter on"
+        echo "  the next prompt and a 24-character one will be made for you."
+        ADMIN_PASS=""
+      fi
+    done
     [[ -n $DOMAIN ]] || { read -rp "Panel domain (optional, e.g. panel.example.com): " DOMAIN; }
     if [[ -n $DOMAIN && -z $WANT_SSL ]]; then
       read -rp "Request a free Let's Encrypt certificate for it? [Y/n]: " WANT_SSL
@@ -599,7 +649,13 @@ ask_config() {
 
   PANEL_PORT="${PANEL_PORT:-2087}"
   ADMIN_USER="${ADMIN_USER:-admin}"
-  [[ -n $ADMIN_PASS ]] || ADMIN_PASS="$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-14)"
+  if [[ -z $ADMIN_PASS ]]; then
+    ADMIN_PASS="$(gen_password 24)" || fail "Could not generate an admin password"
+  elif [[ ${#ADMIN_PASS} -lt 8 ]]; then
+    # only reachable with NEXV_PASS set from a script, where there is nobody
+    # to ask again - and the panel's own API refuses under 8 anyway
+    fail "NEXV_PASS is ${#ADMIN_PASS} characters. Use at least 8, or leave it unset and one will be generated."
+  fi
   [[ -z $DOMAIN ]] || WANT_SSL="${WANT_SSL:-Y}"
 }
 
