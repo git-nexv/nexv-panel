@@ -875,6 +875,15 @@ explain_cert_failure() {
     CERT_ERROR="something else is already using port 80"
     err "Port 80 is taken by another program, so the challenge could not be served."
     echo "  Stop it - usually nginx or apache - and try again."
+  elif grep -qiE 'existing certificate that contains a portion|--expand flag' <<<"$text"; then
+    CERT_ERROR="another panel's certificate on this server already covers $domain"
+    err "A certificate left behind by something else already covers this name."
+    echo "  certbot wanted to ask whether to replace it and could not - nothing can"
+    echo "  answer a question in an unattended install, so it stopped instead."
+    echo "  The panel now asks for its own certificate by name and passes --expand,"
+    echo "  so this is handled; if you are seeing it, update and try again:"
+    echo "    nexv   (option 1), then: nexv cert $domain"
+    echo "  To see what else is on this server:  nexv cert-list"
   elif grep -qiE 'unauthorized|Invalid response from' <<<"$text"; then
     CERT_ERROR="the challenge for $domain was answered by something else"
     err "The challenge was answered by something other than this server."
@@ -969,7 +978,8 @@ cert_dry_run() {
     return 1
   fi
   certbot certonly --standalone --non-interactive --agree-tos \
-    --register-unsafely-without-email --dry-run -d "$domain" >"$log" 2>&1
+    --register-unsafely-without-email --cert-name "$domain" --expand \
+    --dry-run -d "$domain" >"$log" 2>&1
   local rc=$?
   restore_port_80 >/dev/null 2>&1
 
@@ -1114,6 +1124,81 @@ cert_preflight() {
   return 1
 }
 
+# What certificates are on this server, and who they belong to.
+#
+# A server that has had another panel on it has that panel's certificate
+# lineages in /etc/letsencrypt, and they do not go away when the panel does.
+# They are not harmless: certbot refuses an unattended issue for a name that
+# an existing lineage already covers, because the only honest thing it can do
+# is ask whether to replace it - and there is nobody to ask. That is a failure
+# with no useful message, on a server where the ports and the DNS are fine.
+cert_lineages() {
+  [[ -d /etc/letsencrypt/renewal ]] || return 0
+  local conf name names
+  for conf in /etc/letsencrypt/renewal/*.conf; do
+    [[ -e $conf ]] || continue
+    name="$(basename "$conf" .conf)"
+    names="$(sed -n 's/^domains *= *//p' "$conf" | head -1)"
+    [[ -n $names ]] || names="$(ls /etc/letsencrypt/live/"$name" 2>/dev/null >/dev/null && echo "$name")"
+    printf '%s\t%s\n' "$name" "${names:-?}"
+  done
+}
+
+act_cert_list() {
+  need_root
+  local rows
+  rows="$(cert_lineages)"
+  if [[ -z $rows ]]; then
+    ok "There are no certificates on this server."
+    return 0
+  fi
+  echo "  ${BOLD}Certificates on this server${RESET}"
+  echo
+  printf '  %-34s %s\n' "NAME" "COVERS"
+  while IFS=$'\t' read -r name names; do
+    printf '  %-34s %s\n' "$name" "$names"
+  done <<<"$rows"
+  echo
+  echo "  The panel's own is named after its domain. Anything else was left by"
+  echo "  whatever was on this server before."
+  echo "  Remove one with:  nexv cert-drop <name>"
+}
+
+# Remove one lineage, by the name this listing gives it.
+#
+# Deleting a certificate is not undoable and the five-a-week limit means a
+# mistake here costs a wait, so it takes an exact name, says what it covers,
+# and asks first. It will not touch the one the panel is currently using.
+act_cert_drop() {
+  need_root
+  local want="${1:-}"
+  [[ -n $want ]] || { err "Which one? Run: nexv cert-list"; return 1; }
+  local conf="/etc/letsencrypt/renewal/${want}.conf"
+  [[ -f $conf ]] || { err "There is no certificate called $want. Run: nexv cert-list"; return 1; }
+
+  local mine
+  mine="$(DATA_DIR="$DATA_DIR" node -e '
+    try {
+      const db = require(process.env.DATA_DIR + "/db.json");
+      process.stdout.write(String((db.settings && db.settings.certFile) || ""));
+    } catch (e) { process.stdout.write(""); }
+  ' 2>/dev/null || true)"
+  if [[ -n $mine && $mine == *"/live/${want}/"* ]]; then
+    err "That is the certificate this panel is using. Point the panel somewhere"
+    echo "  else first, or get a new one with: nexv cert <domain>"
+    return 1
+  fi
+
+  echo "  $want covers: $(sed -n 's/^domains *= *//p' "$conf" | head -1)"
+  confirm "Delete this certificate?" || { echo "Cancelled"; return 0; }
+  if certbot delete --cert-name "$want" --non-interactive >/dev/null 2>&1; then
+    ok "Deleted $want"
+  else
+    err "certbot would not delete it; see /var/log/letsencrypt/letsencrypt.log"
+    return 1
+  fi
+}
+
 act_cert() {
   need_root
   local domain="${1:-}"
@@ -1165,8 +1250,11 @@ act_cert() {
   fi
 
   local log="/var/log/nexv-certbot.log"
+  # --cert-name and --expand: see cert_lineages below. Without them certbot
+  # stops to ask a question it cannot ask, and the install just fails.
   if ! certbot certonly --standalone --non-interactive --agree-tos \
-       --register-unsafely-without-email -d "$domain" >"$log" 2>&1; then
+       --register-unsafely-without-email --cert-name "$domain" --expand \
+       -d "$domain" >"$log" 2>&1; then
     explain_cert_failure "$log" "$domain"
     echo "  The full output is in $log"
     remember_cert_error "$CERT_ERROR"
@@ -2198,6 +2286,8 @@ ${BOLD}nexv${RESET} - NexV Panel management
   nexv settings                 print the current settings
   nexv cert <domain>            request a Let's Encrypt certificate
   nexv cert-check <domain>      test whether the certificate check can work
+  nexv cert-list                certificates on this server, including old ones
+  nexv cert-drop <name>         delete one of them
   nexv reset-password [pw]      set the admin password (generated when omitted)
   nexv reset-username <name>    change the admin username
   nexv firewall                 open the panel ports
@@ -2230,6 +2320,8 @@ case "${1:-menu}" in
   # the challenge rehearsal on its own, for the installer and for anybody who
   # wants to know whether it will work before spending an attempt
   cert-check)      need_root; allow_port 80 tcp; cert_preflight "${2:-}" ;;
+  cert-list)       act_cert_list ;;
+  cert-drop)       act_cert_drop "${2:-}" ;;
   free80-undo)     need_root; restore_port_80 ;;
   reset-password)  act_reset_password "${2:-}" ;;
   reset-username)  act_reset_username "${2:-}" ;;

@@ -740,7 +740,8 @@ setup_ssl() {
   local log="/var/log/nexv-certbot.log"
   if step "Requesting a certificate for $DOMAIN" \
        bash -c 'certbot certonly --standalone --non-interactive --agree-tos \
-         --register-unsafely-without-email -d "$1" >"$2" 2>&1' _ "$DOMAIN" "$log"; then
+         --register-unsafely-without-email --cert-name "$1" --expand \
+         -d "$1" >"$2" 2>&1' _ "$DOMAIN" "$log"; then
     CERT_FILE="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
     KEY_FILE="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
     CERT_ERROR=""
