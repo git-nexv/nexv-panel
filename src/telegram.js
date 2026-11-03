@@ -2052,7 +2052,7 @@ function rewardStats() {
  * says what the service is, what they get for nothing by turning up, and that
  * the same offer is waiting for them afterwards.
  */
-function shareText() {
+function shareText(link) {
   const r = rewardSettings();
   const b = bot();
   const brand = b.brand || 'NexV';
@@ -2070,8 +2070,30 @@ function shareText() {
     '💬 پشتیبانی همیشه در دسترس'
   ];
   if (plan) lines.push('', `همین حالا وارد شو و ببین: با دعوت ${r.need} نفر، «${plan.name}» رایگان است.`);
-  lines.push('', '👇 روی لینک بزن و استارت کن');
+  /* the link last, on its own line, with the arrow pointing at it and nothing
+     after it - see shareUrl for why it cannot be left to Telegram */
+  if (link) lines.push('', '👇 روی لینک بزن و استارت کن', '', link);
+  else lines.push('', '👇 روی لینک بزن و استارت کن');
   return lines.join('\n');
+}
+
+/**
+ * The share composer, with the link where somebody will read it.
+ *
+ * Telegram builds the shared message as the `url` parameter, then a newline,
+ * then `text` - always in that order. So passing the link as `url` and the
+ * pitch as `text` puts the link at the very top, above everything that
+ * explains it, and the "tap the link below" line at the bottom points at
+ * nothing. That is what it was doing.
+ *
+ * There is no parameter for the other order, so the whole message goes in as
+ * `url` with the link written into its last line, and `text` is left out
+ * entirely. The composer inserts that string as it is, Telegram links the
+ * address inside it the way it links any address in any message, and the
+ * message reads top to bottom the way it was written.
+ */
+function shareUrl(link) {
+  return `https://t.me/share/url?url=${encodeURIComponent(shareText(link))}`;
 }
 
 /** The friendly default, when the admin has not written their own. */
@@ -2133,13 +2155,18 @@ async function showReward(ctx) {
   const link = `https://t.me/${me}?start=ref_${code}`;
   const bar = progressBar(standing.credited, standing.need);
 
+  /*
+   * The link first, then where they stand, then the explanation.
+   *
+   * It was the other way round, with a paragraph above it, so the one thing
+   * somebody opened this screen to get was below the fold on a phone. What
+   * they came for goes at the top; the words that explain it are still there
+   * for whoever reads on.
+   */
   const lines = [
     `<b>${escapeHtml(r.label)}</b>`,
     '',
-    r.text ? escapeHtml(r.text) : rewardBlurb(plan, standing.need),
-    '',
-    '━━━━━━━━━━━━━━',
-    '🔗 <b>لینک اختصاصی شما</b>',
+    '🔗 <b>لینک اختصاصی شما</b> — برای کپی روی آن بزنید:',
     `<code>${escapeHtml(link)}</code>`,
     '',
     `${bar}  <b>${standing.credited}</b> از <b>${standing.need}</b> نفر`,
@@ -2147,14 +2174,14 @@ async function showReward(ctx) {
       ? '🔥 فقط یک نفر دیگر مانده!'
       : `هنوز <b>${standing.left}</b> نفر دیگر لازم است.`,
     '',
+    '━━━━━━━━━━━━━━',
+    r.text ? escapeHtml(r.text) : rewardBlurb(plan, standing.need),
+    '',
     '⚡️ به‌محض رسیدن به عدد لازم، اشتراک خودکار برایتان ساخته و همین‌جا فرستاده می‌شود.'
   ];
 
   return reply(ctx, lines.join('\n'), [
-    [{
-      text: '📤 فرستادن لینک برای دوستان',
-      url: `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(shareText())}`
-    }],
+    [{ text: '📤 فرستادن لینک برای دوستان', url: shareUrl(link) }],
     [{ text: '🔄 بررسی وضعیت', callback_data: 'b:rewardget:' }],
     backRow()[0]
   ]);
@@ -4478,7 +4505,7 @@ module.exports = {
   resetTrials, trialsTaken, repairOrphanClients, dateUndatedClients, customTerms,
   /* the reward: its settings, where everybody stands, and the admin's view */
   rewardSettings, rewardPlan, rewardOn, rewardStanding, rewardRecord, rewardCode,
-  creditReferral, showReward, claimReward, grantReward, resetRewards, shareText,
+  creditReferral, showReward, claimReward, grantReward, resetRewards, shareText, shareUrl,
   knownPeople, meetPerson, hasMetBefore,
   rewardStats, keyboardFor, pairStartRows,
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
