@@ -6472,9 +6472,27 @@ async function renderBot(view) {
       }),
       startBtn,
     ]),
-    el('div', { class: 'hint', style: 'margin-top:12px', text: data.adminLinked
-      ? 'The admin chat is linked, so orders and alerts can reach you.'
-      : 'Send /start to your bot from the admin account once, so the panel learns where to send orders.' })
+    /*
+     * Not linked is not a hint, it is a fault: every support message a
+     * customer sends goes nowhere until the admin has pressed Start once, and
+     * a grey line under a form is where that goes unread.
+     */
+    data.adminLinked
+      ? el('div', { class: 'hint', style: 'margin-top:12px',
+        text: 'The admin chat is linked, so orders, alerts and support messages reach you.' })
+      : el('div', { class: 'notice danger', style: 'margin-top:12px' }, [
+        el('div', { text: 'The bot cannot message you yet.' }),
+        el('div', { class: 'hint', style: 'margin-top:6px' }, [
+          'Telegram does not let a bot open a chat with somebody who has never pressed Start on it. '
+          + 'Open your bot from the admin account and send /start once \u2014 until then, every support '
+          + 'message a customer sends goes nowhere, and orders and backups cannot reach you either.'
+        ])
+      ]),
+    data.adminError
+      ? el('div', { class: 'notice warn', style: 'margin-top:10px' }, [
+        `${t('The last message to you failed')}: ${data.adminError}`
+      ])
+      : null
   ]));
 
   /* ---- Plans ---- */

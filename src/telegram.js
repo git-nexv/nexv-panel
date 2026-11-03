@@ -2375,6 +2375,21 @@ async function openSupport(ctx) {
 async function toSupport(ctx, message) {
   const admin = adminChat();
   if (!admin) {
+    /*
+     * There is nowhere to send it, and the admin is the only one who can fix
+     * that - so it is written down for them rather than only apologised for
+     * to the buyer. A bot cannot open a chat with an @username: until the
+     * person behind that name has pressed Start on this bot once, there is no
+     * chat id to send to and no way to find one out.
+     */
+    const b = bot();
+    runtime.adminError = b.adminId
+      ? `the admin (${b.adminId}) has never messaged this bot, so there is no chat to send to`
+      : 'no admin is set on the Bot page';
+    db.data.logs.unshift({ at: Date.now(), type: 'bot',
+      message: `a support message from ${ctx.userId} went nowhere: ${runtime.adminError}` });
+    if (db.data.logs.length > 500) db.data.logs.length = 500;
+    db.save();
     await send(ctx.chatId, 'پشتیبانی فعلاً در دسترس نیست. کمی بعد دوباره امتحان کنید.');
     return false;
   }
@@ -3682,7 +3697,28 @@ async function handle(update) {
      * carries no text at all.
      */
     const inSupport = expected(ctx.userId);
-    if (inSupport && inSupport.kind === 'support' && !ctx.isAdmin && !text.startsWith('/')) {
+    if (inSupport && inSupport.kind === 'support' && !text.startsWith('/')) {
+      /*
+       * The admin testing their own support button.
+       *
+       * This used to fall straight through to the command lookup, so the
+       * message vanished and the main menu appeared - which looks exactly
+       * like support being broken, and is the first thing anybody does to
+       * check that it works. It cannot be relayed: the admin is the person it
+       * would be relayed to. So it is answered.
+       */
+      if (ctx.isAdmin) {
+        forget(ctx.userId);
+        await send(ctx.chatId, [
+          '🛟 <b>این‌جا پیام‌های پشتیبانی به شما می‌رسد</b>',
+          '',
+          'شما ادمین این ربات هستید، پس پیامتان جایی برای رفتن ندارد —'
+          + ' پیام‌های مشتری‌ها به همین چت می‌آید و با دکمه‌ی «پاسخ» جواب می‌دهید.',
+          '',
+          'برای امتحان‌کردن، از یک اکانت دیگر به ربات پیام بدهید.'
+        ].join('\n'), backRow());
+        return null;
+      }
       if (await gate(ctx)) return null;
       await toSupport(ctx, message);
       return null;

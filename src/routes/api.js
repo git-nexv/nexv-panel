@@ -353,6 +353,9 @@ function botView() {
     tokenHint: b.token ? `${b.token.slice(0, 8)}…${b.token.slice(-4)}` : '',
     adminId: b.adminId || '',
     adminLinked: !!b.adminChatId,
+    /* the last time a message to the admin really failed, so the page can say
+       it out loud instead of leaving a support inbox quietly going nowhere */
+    adminError: telegram.status().adminError || '',
     brand: b.brand || 'NexV',
     currency: b.currency || 'Toman',
     screens: b.screens || [],
