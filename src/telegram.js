@@ -830,7 +830,17 @@ function edit(chatId, messageId, text, keyboard) {
     parse_mode: 'HTML',
     disable_web_page_preview: true,
     reply_markup: keyboard ? { inline_keyboard: styled(keyboard) } : undefined
-  }).catch(() => send(chatId, text, keyboard));
+  }).catch((err) => {
+    /*
+     * "message is not modified" is Telegram saying the screen is already what
+     * we asked for - which is a success, not a failure. Falling back to send()
+     * on it posted the same screen again underneath, so a button that redraws
+     * what is already there - the reward's own check button - looked like it
+     * was spamming the chat instead of answering.
+     */
+    if (/message is not modified/i.test(err.message || '')) return null;
+    return send(chatId, text, keyboard);
+  });
 }
 
 /* -------------------------------- helpers -------------------------------- */
@@ -1990,7 +2000,7 @@ async function tellInviter(owner) {
     standing.left === 1
       ? `فقط <b>۱ نفر</b> دیگر مانده تا <b>${escapeHtml(plan.name)}</b> رایگان مال شما شود 🎁`
       : `<b>${standing.left}</b> نفر دیگر تا <b>${escapeHtml(plan.name)}</b> رایگان.`
-  ].join('\n'), [[{ text: '🔄 بررسی وضعیت', callback_data: 'b:reward:' }]]);
+  ].join('\n'), [[{ text: '🔄 بررسی وضعیت', callback_data: 'b:rewardget:' }]]);
 }
 
 /**
@@ -2145,7 +2155,7 @@ async function showReward(ctx) {
       text: '📤 فرستادن لینک برای دوستان',
       url: `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(shareText())}`
     }],
-    [{ text: '🔄 بررسی وضعیت', callback_data: 'b:reward:' }],
+    [{ text: '🔄 بررسی وضعیت', callback_data: 'b:rewardget:' }],
     backRow()[0]
   ]);
 }
@@ -2237,15 +2247,49 @@ async function grantReward(userId, chatId, ctx) {
 }
 
 /**
- * The button. It only ever reports where somebody stands now - the reward
- * itself goes out by itself the moment it is earned - but it also catches
- * anybody who crossed the line while the bot was down.
+ * The check button, which has to say something.
+ *
+ * Pressing it used to redraw the same screen, and Telegram answers an edit
+ * that changes nothing with an error - so the screen was posted a second
+ * time underneath and the tap itself said nothing at all. Whatever the
+ * answer is, it is now given as an alert on the button: the reward is on its
+ * way, or nobody has come in yet, or this many are still needed. The screen
+ * is refreshed afterwards, which does nothing visible when nothing changed.
+ *
+ * It still hands the reward over when it is due. The delivery is automatic,
+ * so this only ever catches somebody who crossed the line while the bot was
+ * down - but that is exactly the person most likely to come and press it.
  */
 async function claimReward(ctx) {
+  const plan = rewardPlan();
+  const alert = (text) => { if (ctx.answer) ctx.answer(text, true); };
+
+  if (!rewardOn() || !plan) {
+    alert('این بخش فعلاً فعال نیست.');
+    return showReward(ctx);
+  }
+
   const standing = rewardStanding(ctx.userId);
+
+  if (standing.taken) {
+    alert('شما جایزه‌تان را قبلاً گرفته‌اید 🎁\nدر بخش «کانفیگ‌های من» ببینیدش.');
+    return showReward(ctx);
+  }
+
   if (standing.ready) {
+    alert(`تایید شد ✅\n«${plan.name}» همین حالا برایتان ساخته و فرستاده می‌شود.`);
     const out = await grantReward(ctx.userId, ctx.chatId, ctx);
     if (out.ok) return null;
+    await send(ctx.chatId, 'ساخت کانفیگ جایزه ممکن نشد. لطفاً به پشتیبانی بگویید.');
+    return null;
+  }
+
+  if (!standing.credited) {
+    alert('هنوز هیچ‌کس با لینک شما وارد ربات نشده است.\n'
+      + `لینکتان را برای دوستانتان بفرستید — با ${standing.need} نفر، جایزه برایتان ارسال می‌شود.`);
+  } else {
+    alert(`تا اینجا ${standing.credited} نفر از ${standing.need} نفر ✅\n`
+      + `${standing.left} نفر دیگر مانده تا «${plan.name}» رایگان برایتان ارسال شود.`);
   }
   return showReward(ctx);
 }
@@ -3829,12 +3873,15 @@ async function handle(update) {
     // held until the gate has spoken, so its message can be the alert
     ctx.answer = (text, alert) => answer(query.id, text, alert);
     const [, action, ...rest] = String(query.data || '').split(':');
-    // the re-check button has to work from behind the gate
-    if (action !== 'joined' && await gate(ctx)) {
+    /* these answer the tap themselves, with something worth reading: the
+       membership re-check and the reward check both have a verdict to give,
+       and a callback may only be answered once */
+    const SPEAKS = ['joined', 'rewardget'];
+    if (!SPEAKS.includes(action) && await gate(ctx)) {
       if (ctx.answer) ctx.answer();
       return null;
     }
-    if (action !== 'joined' && ctx.answer) ctx.answer();
+    if (!SPEAKS.includes(action) && ctx.answer) ctx.answer();
     /*
      * Walking away ends the support conversation. Without this, somebody who
      * taps Support, changes their mind, goes to look at their configs and then
