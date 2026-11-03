@@ -134,7 +134,43 @@ function migrateUsageButton() {
     if (addToStart(b.screens, { label: '🎁 کانفیگ تست', action: 'trial' })) touched = true;
   }
 
+  if (pairStartRows(b.screens)) touched = true;
+
   if (touched) db.saveNow();
+  return touched;
+}
+
+/**
+ * Put the pairs back beside each other on the first screen.
+ *
+ * The menu is meant to read as three short rows - buy, then the two keys
+ * about a config somebody already has, then the two about getting help - and
+ * a bot whose screens were stored before that shape existed, or which picked
+ * a key up from one of these migrations, ends up with them stacked one per
+ * row. That is four taps' worth of scrolling for a menu with six keys in it.
+ *
+ * Only these two pairs, only on the start screen, and only when the two keys
+ * are already alone on rows of their own: a menu the admin has arranged some
+ * other way is theirs, and this leaves it alone.
+ */
+const START_PAIRS = [['configs', 'trial'], ['screen:help', 'support']];
+
+function pairStartRows(screens) {
+  const start = (screens || []).find((screen) => screen.key === 'start');
+  if (!start || !Array.isArray(start.buttons)) return false;
+  const nameOf = (btn) => (btn.action === 'screen' ? `screen:${btn.value || ''}` : String(btn.action || ''));
+  let touched = false;
+
+  for (const pair of START_PAIRS) {
+    const where = pair.map((want) => start.buttons
+      .findIndex((row) => Array.isArray(row) && row.length === 1 && nameOf(row[0]) === want));
+    // both present, both alone, and in that order
+    if (where.some((i) => i < 0) || where[0] >= where[1]) continue;
+    const second = start.buttons[where[1]][0];
+    start.buttons[where[0]].push(second);
+    start.buttons.splice(where[1], 1);
+    touched = true;
+  }
   return touched;
 }
 
@@ -644,8 +680,12 @@ const DESTRUCTIVE = /^b:(cancel|del|delyes|no|power)\b/;
  * Once the buyer is looking at a list of sizes they have already decided to
  * buy; painting 10 GB and 30 GB the same green says nothing about which to
  * pick, and spends the colour that was meant to carry them into the list.
+ *
+ * The free subscription is the third. It is the other thing the shop wants
+ * pressed - somebody who will not buy today may still bring five people who
+ * will - so it carries the same colour as buying does.
  */
-const COLOURED = /^b:plans\b/;
+const COLOURED = /^b:(plans|reward)\b/;
 const BACK_ARROW = /^\s*⬅️/;
 
 /**
@@ -912,7 +952,10 @@ function keyboardFor(screen) {
    */
   if (screen.key === 'start' && rewardOn()) {
     const already = out.some((row) => row.some((b) => String(b.callback_data || '').startsWith('b:reward')));
-    if (!already) out.splice(1, 0, [{ text: rewardSettings().label, callback_data: 'b:reward:' }]);
+    /* at the bottom, on a row of its own: it is the last thing on the menu
+       rather than the second, so the keys somebody opens the bot to use stay
+       where they were and this sits under them where it reads as an offer */
+    if (!already) out.push([{ text: rewardSettings().label, callback_data: 'b:reward:' }]);
   }
   return out;
 }
@@ -4135,7 +4178,7 @@ module.exports = {
   /* the reward: its settings, where everybody stands, and the admin's view */
   rewardSettings, rewardPlan, rewardOn, rewardStanding, rewardRecord, rewardCode,
   creditReferral, showReward, claimReward, knownPeople, meetPerson, hasMetBefore,
-  rewardStats, keyboardFor,
+  rewardStats, keyboardFor, pairStartRows,
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
   sendBackup, backupStatus, backupSettings, backupTimes, watchBackups, minutesOf, nextBackupAt, backupTick,
   backupOnChange, stateFingerprint, backupBeat,
