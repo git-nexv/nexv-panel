@@ -356,6 +356,7 @@ function botView() {
     /* the last time a message to the admin really failed, so the page can say
        it out loud instead of leaving a support inbox quietly going nowhere */
     adminError: telegram.status().adminError || '',
+    audience: telegram.audienceCounts(),
     brand: b.brand || 'NexV',
     currency: b.currency || 'Toman',
     screens: b.screens || [],
@@ -887,6 +888,39 @@ router.post('/bot/reward/reset', (req, res) => {
   res.json(Object.assign({ ok: true }, out, { stats: telegram.rewardStats() }));
 });
 
+/* ------------------------------ broadcasting ----------------------------- */
+
+/** Who a broadcast would reach, and how the last one went. */
+router.get('/bot/broadcast', (req, res) => {
+  res.json(Object.assign({ stats: telegram.botStats() }, telegram.broadcastStatus()));
+});
+
+/**
+ * Send a message to everybody, or to the buyers, or to the people who have
+ * not bought anything yet.
+ *
+ * It answers as soon as the sending has started rather than when it has
+ * finished: a thousand people at twenty-five a second is most of a minute,
+ * and a request held open that long is a page that looks hung.
+ */
+router.post('/bot/broadcast', async (req, res) => {
+  const body = req.body || {};
+  try {
+    const out = await telegram.startBroadcast(body.text, body.audience, { button: body.button });
+    logEvent('bot', `broadcast started to ${out.audience} (${out.total} people)`);
+    res.json(out);
+  } catch (err) {
+    bad(res, err.message);
+  }
+});
+
+/** Stop one part way through. What has gone out has gone out. */
+router.delete('/bot/broadcast', (req, res) => {
+  const out = telegram.stopBroadcast();
+  if (out.sent) logEvent('bot', `broadcast stopped after ${out.sent} message(s)`);
+  res.json(out);
+});
+
 /* ------------------------------- the guide ------------------------------- */
 
 const HELP_SCREENS = [
@@ -1214,6 +1248,9 @@ async function statusView(req, res) {
       routingRules: (d.routing || []).length
     },
     traffic: totals,
+    /* the bot's own figures, for the card on the dashboard. Cheap: all of it
+       is counted out of the store, with nothing asked of Telegram */
+    bot: telegram.botStats(),
     settings: { domain: d.settings.domain, subPath: d.settings.subPath, subPort: d.settings.subPort }
   });
 }

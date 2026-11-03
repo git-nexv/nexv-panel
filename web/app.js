@@ -1675,6 +1675,22 @@ async function renderDashboard(view) {
     return acc;
   }, {});
 
+  /*
+   * The bot, on the dashboard.
+   *
+   * "How many clicks has the bot had" is three numbers, not one: how many
+   * times Start has been pressed, how many separate people that was, and how
+   * many of them bought something. A bot with four hundred starts from forty
+   * people is a different bot from one with four hundred people, and one
+   * figure cannot tell you which you have.
+   */
+  const botState = el('span', { class: 'chip' });
+  const botLines = ['people', 'starts', 'buyers', 'money', 'extra', 'warn'].reduce((acc, key) => {
+    acc[key] = el('div');
+    return acc;
+  }, {});
+  botLines.warn.className = 'hint';
+
   info.append(
     el('div', { class: 'card' }, [
       el('div', { class: 'between', style: 'margin-bottom:14px' }, [
@@ -1686,6 +1702,15 @@ async function renderDashboard(view) {
     el('div', { class: 'card' }, [
       el('strong', { text: 'Server' }),
       el('div', { class: 'muted', style: 'margin-top:12px;line-height:2' }, Object.values(serverLines))
+    ]),
+    el('div', { class: 'card' }, [
+      el('div', { class: 'between', style: 'margin-bottom:14px' }, [
+        el('strong', { text: '🤖 Telegram bot' }), botState
+      ]),
+      el('div', { class: 'muted', style: 'line-height:2' }, Object.values(botLines)),
+      el('div', { class: 'row', style: 'margin-top:14px;gap:10px' }, [
+        el('button', { class: 'btn', text: 'Open the bot page', onclick: () => navigate('bot') })
+      ])
     ]),
     serverPasswordCard(),
     sessionsCard(),
@@ -1727,6 +1752,26 @@ async function renderDashboard(view) {
     write(serverLines.load, `Load average: ${s.loadavg.map((n) => n.toFixed(2)).join(' / ')}`);
     write(serverLines.counts, `Outbounds: ${status.counts.outbounds} \u00b7 Routing rules: ${status.counts.routingRules}`);
     write(serverLines.clients, `Expired: ${status.counts.clientsExpired} \u00b7 Out of quota: ${status.counts.clientsDepleted}`);
+
+    const b = status.bot || {};
+    botState.className = `chip ${b.running ? 'ok' : ''}`;
+    botState.innerHTML = `<i></i>${t(b.running ? 'Running' : 'Stopped')}`;
+    write(botLines.people, `${t('People who have used it')}: ${b.people || 0}`
+      + (b.newThisWeek ? ` (${b.newThisWeek} ${t('this week')})` : ''));
+    write(botLines.starts, `${t('Start pressed')}: ${b.starts || 0}`
+      + (b.startsToday ? ` · ${b.startsToday} ${t('today')}` : ''));
+    write(botLines.buyers, `${t('Buyers')}: ${b.buyers || 0} · ${t('Orders')}: ${b.orders || 0}`
+      + (b.trials ? ` · ${t('Test configs')}: ${b.trials}` : ''));
+    write(botLines.money, `${t('Sold')}: ${(b.revenue || 0).toLocaleString('en-US')} ${b.currency || ''}`.trim());
+    write(botLines.extra, [
+      b.username ? `@${b.username}` : '',
+      b.rewardsGiven ? `${t('Rewards given')}: ${b.rewardsGiven}` : '',
+      b.blocked ? `${t('Blocked the bot')}: ${b.blocked}` : ''
+    ].filter(Boolean).join(' · '));
+    botLines.warn.className = b.adminLinked ? 'hint' : 'notice danger';
+    write(botLines.warn, b.adminLinked
+      ? ''
+      : t('The bot cannot message you — send /start to it from the admin account once.'));
 
     paintXrayChip(status.xray);
   };
@@ -6272,7 +6317,7 @@ async function renderBot(view) {
    * untouched: they are still loaded, still saved, and still what the bot
    * shows; there is just no longer a tab for rewriting them.
    */
-  const { wrap, panels } = tabbed(['Setup', 'Plans', 'Test config', 'Reward', 'Manual plan', 'Access user', 'Payment', 'Help', 'Backup', 'Channel', 'Orders', 'AI']);
+  const { wrap, panels } = tabbed(['Setup', 'Plans', 'Test config', 'Reward', 'Message', 'Manual plan', 'Access user', 'Payment', 'Help', 'Backup', 'Channel', 'Orders', 'AI']);
   for (const panel of Object.values(panels)) panel.className = 'tab-panel';
   view.append(wrap);
 
@@ -6711,6 +6756,127 @@ async function renderBot(view) {
       text: t('Each account gets the reward once. This opens it for everybody again.') })
   ]));
   hydrateIcons(panels.Reward);
+
+  /* ------------------------------ Message ------------------------------- */
+  /*
+   * One message to everybody at once.
+   *
+   * The thing that makes this usable rather than frightening is saying how
+   * many people it will reach before it is sent, and showing it going out
+   * afterwards: a broadcast is the one action here that cannot be taken back,
+   * and "send to 1,240 people" is a different decision from "send".
+   */
+  const audience = (data.audience || { all: 0, buyers: 0, nonbuyers: 0, blocked: 0 });
+  const who = el('div', { class: 'seg' });
+  let picked = 'all';
+  const whoButtons = [];
+  const whoOptions = [
+    { value: 'all', label: `Everyone (${audience.all})` },
+    { value: 'buyers', label: `Buyers (${audience.buyers})` },
+    { value: 'nonbuyers', label: `Not bought yet (${audience.nonbuyers})` }
+  ];
+  for (const opt of whoOptions) {
+    const b = el('button', {
+      type: 'button', class: opt.value === picked ? 'active' : '', text: opt.label,
+      onclick: () => { picked = opt.value; whoButtons.forEach((x) => x.classList.remove('active')); b.classList.add('active'); }
+    });
+    whoButtons.push(b);
+    who.append(b);
+  }
+
+  const msgText = el('textarea', { rows: 7, placeholder: 'Write the message…' });
+  const msgBtnText = el('input', { placeholder: 'Button text (optional)' });
+  const msgBtnUrl = el('input', { placeholder: 'https://… (optional)' });
+  const msgState = el('div', { class: 'hint', style: 'margin-top:10px' });
+  const sendBtn = el('button', { class: 'btn primary', text: 'Send' });
+  const stopBtn = el('button', { class: 'btn danger hidden', text: 'Stop' });
+
+  const paintBroadcast = (out) => {
+    if (!out) return;
+    if (out.running) {
+      msgState.className = 'notice warn';
+      msgState.textContent = `${t('Sending')}… ${out.sent} / ${out.total}`
+        + (out.blocked ? ` · ${out.blocked} ${t('blocked the bot')}` : '')
+        + (out.failed ? ` · ${out.failed} ${t('failed')}` : '');
+      sendBtn.disabled = true;
+      stopBtn.classList.remove('hidden');
+      return;
+    }
+    sendBtn.disabled = false;
+    stopBtn.classList.add('hidden');
+    if (out.finishedAt) {
+      msgState.className = out.failed ? 'notice warn' : 'notice ok';
+      msgState.textContent = `${t('Done')} — ${out.sent} ${t('sent')}`
+        + (out.blocked ? `, ${out.blocked} ${t('had blocked the bot')}` : '')
+        + (out.failed ? `, ${out.failed} ${t('failed')}` : '')
+        + (out.lastError ? ` (${out.lastError})` : '');
+    } else {
+      msgState.className = 'hint';
+      msgState.textContent = audience.blocked
+        ? t(`${audience.blocked} people have blocked the bot and are skipped.`)
+        : '';
+    }
+  };
+
+  let watcher = null;
+  const watch = () => {
+    clearInterval(watcher);
+    watcher = setInterval(async () => {
+      try {
+        const out = await api.get('/bot/broadcast');
+        paintBroadcast(out);
+        if (!out.running) clearInterval(watcher);
+      } catch (_) { clearInterval(watcher); }
+    }, 1500);
+  };
+
+  sendBtn.onclick = () => {
+    const text = msgText.value.trim();
+    if (!text) return toast(t('Write the message first'), 'err');
+    const count = audience[picked] || 0;
+    if (!count) return toast(t('There is nobody in that group yet'), 'err');
+    return confirmDialog(
+      `This goes to ${count} people on Telegram, one message each, and cannot be taken back.`,
+      async () => {
+        try {
+          const payload = { text, audience: picked };
+          if (msgBtnText.value.trim() && msgBtnUrl.value.trim()) {
+            payload.button = { text: msgBtnText.value.trim(), url: msgBtnUrl.value.trim() };
+          }
+          paintBroadcast(await api.post('/bot/broadcast', payload));
+          watch();
+        } catch (err) { toast(err.message, 'err'); }
+      }
+    );
+  };
+  stopBtn.onclick = async () => {
+    try { paintBroadcast(await api.del('/bot/broadcast')); } catch (err) { toast(err.message, 'err'); }
+  };
+
+  const msgGrid = el('div', { class: 'form-grid' });
+  formField(msgGrid, 'Who gets it', who, { full: true });
+  formField(msgGrid, 'Message', msgText, {
+    full: true,
+    hint: 'Plain text, or simple HTML: <b>bold</b>, <i>italic</i>, <a href="…">link</a>.'
+  });
+  formField(msgGrid, 'Button text', msgBtnText);
+  formField(msgGrid, 'Button link', msgBtnUrl, { hint: 'Both together, or neither.' });
+
+  panels.Message.append(el('div', { class: 'card' }, [
+    el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+      el('strong', { text: '📣 Message everybody' }),
+      el('span', { class: 'muted', text: t(`${audience.all} people have used this bot`) })
+    ]),
+    msgGrid,
+    el('div', { class: 'row', style: 'margin-top:12px;gap:10px' }, [sendBtn, stopBtn]),
+    msgState,
+    el('div', { class: 'hint', style: 'margin-top:10px' }, [
+      'It goes out at about twenty-five a second, which is the most Telegram allows; '
+      + 'a thousand people take roughly a minute. You can close this page \u2014 it keeps going.'
+    ])
+  ]));
+  hydrateIcons(panels.Message);
+  api.get('/bot/broadcast').then((out) => { paintBroadcast(out); if (out.running) watch(); }).catch(() => {});
 
   /* ---- Manual plan: buying by the gigabyte, on a tab of its own ---- */
   const custom = draft.custom = draft.custom || { enable: false, minGB: 1, maxGB: 0, days: 30, inboundId: '' };

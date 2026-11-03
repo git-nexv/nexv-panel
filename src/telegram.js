@@ -1750,6 +1750,265 @@ async function takeTrialName(ctx, raw) {
 }
 
 
+/**
+ * What the dashboard shows about the bot.
+ *
+ * "How many clicks" is really three different numbers and they are worth
+ * telling apart: how many times anybody has pressed Start, how many separate
+ * people that was, and how many of them have bought something. A bot with
+ * four hundred starts from forty people is a different bot from one with four
+ * hundred people, and one figure cannot say which you have.
+ */
+function botStats() {
+  const b = bot();
+  const d = db.data;
+  const stats = b.stats && typeof b.stats === 'object' ? b.stats : {};
+  const people = Object.keys(knownPeople());
+  const today = new Date().toISOString().slice(0, 10);
+
+  const buyers = new Set();
+  let revenue = 0;
+  let orders = 0;
+  for (const o of (b.orders || [])) {
+    if (o.status !== 'done' && o.status !== 'approved' && o.status !== 'delivered') continue;
+    orders += 1;
+    revenue += Number(String(o.price || '0').replace(/[^\d.]/g, '')) || 0;
+    const id = String(o.userId || '').trim();
+    if (id) buyers.add(id);
+  }
+  for (const c of (d.clients || [])) {
+    const id = String(c.tgId || '').trim();
+    if (id && !c.isTrial) buyers.add(id);
+  }
+
+  /* how many arrived in the last week, which is the only one of these that
+     says whether the bot is growing */
+  const weekAgo = Date.now() - 7 * 86400000;
+  const fresh = people.filter((id) => Number(knownPeople()[id]) > weekAgo).length;
+
+  return {
+    running: runtime.running,
+    username: (runtime.me && runtime.me.username) || b.username || '',
+    people: people.length,
+    newThisWeek: fresh,
+    starts: Number(stats.starts) || 0,
+    startsToday: String(stats.day) === today ? (Number(stats.dayStarts) || 0) : 0,
+    buyers: buyers.size,
+    orders,
+    revenue,
+    currency: b.currency || '',
+    trials: Object.keys((b.trial && b.trial.taken) || {}).length,
+    blocked: Object.keys((b.blocked && typeof b.blocked === 'object') ? b.blocked : {}).length,
+    rewardsGiven: rewardStats().given,
+    seen: runtime.seen,
+    sent: runtime.sent,
+    adminLinked: !!b.adminChatId,
+    adminError: runtime.adminError || ''
+  };
+}
+
+/** One press of Start, written down so the dashboard can count them. */
+function countStart() {
+  const b = bot();
+  if (!b.stats || typeof b.stats !== 'object') b.stats = {};
+  const today = new Date().toISOString().slice(0, 10);
+  b.stats.starts = (Number(b.stats.starts) || 0) + 1;
+  if (String(b.stats.day) !== today) { b.stats.day = today; b.stats.dayStarts = 0; }
+  b.stats.dayStarts = (Number(b.stats.dayStarts) || 0) + 1;
+  db.save();
+}
+
+/* ------------------------------ broadcasting ----------------------------- */
+/*
+ * A message to everybody, or to the people who have bought something.
+ *
+ * Three things make this more than a loop over a list of ids.
+ *
+ * Telegram's own limit is about thirty messages a second to different chats,
+ * and a bot that ignores it is answered with 429 and a retry_after - so there
+ * is a gap between sends, and a 429 is waited out rather than counted as a
+ * failure. A broadcast that goes out slowly and arrives is better than one
+ * that goes out fast and gets the bot rate-limited for everybody else.
+ *
+ * It cannot be done inside the HTTP request either: a thousand people at
+ * thirty a second is half a minute, and the panel would be holding a request
+ * open the whole time. It runs in the background and the page asks how it is
+ * going.
+ *
+ * And somebody who has blocked the bot answers 403 for every message, forever.
+ * They are counted as blocked rather than failed, and written down, so the
+ * next broadcast does not spend its time on them again.
+ */
+const BROADCAST_GAP_MS = 40;          // ~25 a second, under Telegram's ~30
+const BROADCAST_MAX = 20000;
+
+const broadcast = {
+  running: false,
+  startedAt: 0,
+  finishedAt: 0,
+  total: 0,
+  sent: 0,
+  blocked: 0,
+  failed: 0,
+  audience: '',
+  text: '',
+  error: '',
+  lastError: ''
+};
+
+/** Everybody the bot could write to, by the group the admin picked. */
+function audienceIds(which) {
+  const d = db.data;
+  const b = bot();
+  const known = Object.keys(knownPeople());
+
+  const buyers = new Set();
+  for (const c of (d.clients || [])) {
+    const id = String(c.tgId || '').trim();
+    if (id && !c.isTrial) buyers.add(id);
+  }
+  for (const o of (b.orders || [])) {
+    if (o.status !== 'done' && o.status !== 'approved' && o.status !== 'delivered') continue;
+    const id = String(o.userId || '').trim();
+    if (id) buyers.add(id);
+  }
+
+  /* somebody who blocked the bot is not written to again - every send to them
+     fails the same way and the time is better spent on everybody else */
+  const blocked = new Set(Object.keys((b.blocked && typeof b.blocked === 'object') ? b.blocked : {}));
+  const keep = (id) => !blocked.has(String(id));
+
+  if (which === 'buyers') return [...buyers].filter(keep);
+  if (which === 'nonbuyers') return known.filter((id) => !buyers.has(id)).filter(keep);
+  return known.filter(keep);
+}
+
+/** How many people each choice would reach, for the page to show. */
+function audienceCounts() {
+  return {
+    all: audienceIds('all').length,
+    buyers: audienceIds('buyers').length,
+    nonbuyers: audienceIds('nonbuyers').length,
+    blocked: Object.keys((bot().blocked && typeof bot().blocked === 'object') ? bot().blocked : {}).length
+  };
+}
+
+function markBlocked(userId) {
+  const b = bot();
+  if (!b.blocked || typeof b.blocked !== 'object') b.blocked = {};
+  b.blocked[String(userId)] = Date.now();
+}
+
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+
+/**
+ * Send it. Returns as soon as the sending has started; the page watches
+ * `broadcastStatus()` for the rest.
+ */
+async function startBroadcast(text, which, opts) {
+  const body = String(text || '').trim();
+  if (!body) throw new Error('write the message first');
+  if (!bot().token) throw new Error('the bot has no token');
+  if (broadcast.running) throw new Error('a broadcast is already going out');
+
+  const ids = audienceIds(which).slice(0, BROADCAST_MAX);
+  if (!ids.length) throw new Error('there is nobody in that group yet');
+
+  Object.assign(broadcast, {
+    running: true,
+    startedAt: Date.now(),
+    finishedAt: 0,
+    total: ids.length,
+    sent: 0,
+    blocked: 0,
+    failed: 0,
+    audience: which || 'all',
+    text: body,
+    error: '',
+    lastError: ''
+  });
+
+  const keyboard = (opts && opts.button && opts.button.text && opts.button.url)
+    ? [[{ text: String(opts.button.text).slice(0, 40), url: String(opts.button.url) }]]
+    : null;
+
+  /* deliberately not awaited: the caller is an HTTP request and this takes as
+     long as it takes */
+  (async () => {
+    for (const id of ids) {
+      if (!broadcast.running) break;
+      try {
+        await call('sendMessage', {
+          chat_id: id,
+          text: body,
+          parse_mode: 'HTML',
+          disable_web_page_preview: true,
+          reply_markup: keyboard ? { inline_keyboard: styled(keyboard) } : undefined
+        });
+        broadcast.sent += 1;
+        runtime.sent += 1;
+      } catch (err) {
+        const said = String(err.message || '');
+        const retry = /retry[_ ]after[^0-9]*(\d+)/i.exec(said);
+        if (retry) {
+          /* too fast: wait exactly as long as Telegram asked, then try this
+             same person again rather than writing them off */
+          await sleep((Number(retry[1]) + 1) * 1000);
+          try {
+            await call('sendMessage', { chat_id: id, text: body, parse_mode: 'HTML', disable_web_page_preview: true });
+            broadcast.sent += 1;
+            continue;
+          } catch (second) { err.message = second.message; }
+        }
+        if (/bot was blocked|user is deactivated|chat not found|bot can't initiate/i.test(String(err.message))) {
+          markBlocked(id);
+          broadcast.blocked += 1;
+        } else {
+          broadcast.failed += 1;
+          broadcast.lastError = String(err.message).slice(0, 200);
+        }
+      }
+      await sleep(BROADCAST_GAP_MS);
+    }
+
+    broadcast.running = false;
+    broadcast.finishedAt = Date.now();
+    db.data.logs.unshift({ at: Date.now(), type: 'bot',
+      message: `broadcast to ${broadcast.audience}: ${broadcast.sent} sent, `
+        + `${broadcast.blocked} blocked, ${broadcast.failed} failed` });
+    if (db.data.logs.length > 500) db.data.logs.length = 500;
+    db.saveNow();
+  })().catch((err) => {
+    broadcast.running = false;
+    broadcast.error = err.message;
+  });
+
+  return broadcastStatus();
+}
+
+function stopBroadcast() {
+  if (!broadcast.running) return broadcastStatus();
+  broadcast.running = false;
+  broadcast.finishedAt = Date.now();
+  return broadcastStatus();
+}
+
+function broadcastStatus() {
+  return {
+    running: broadcast.running,
+    total: broadcast.total,
+    sent: broadcast.sent,
+    blocked: broadcast.blocked,
+    failed: broadcast.failed,
+    audience: broadcast.audience,
+    startedAt: broadcast.startedAt,
+    finishedAt: broadcast.finishedAt,
+    error: broadcast.error,
+    lastError: broadcast.lastError,
+    counts: audienceCounts()
+  };
+}
+
 /* ------------------------------ the reward ------------------------------- */
 /*
  * Bring people to the bot, get a subscription.
@@ -2153,7 +2412,6 @@ async function showReward(ctx) {
 
   const code = rewardCode(ctx.userId);
   const link = `https://t.me/${me}?start=ref_${code}`;
-  const bar = progressBar(standing.credited, standing.need);
 
   /*
    * The link first, then where they stand, then the explanation.
@@ -2169,7 +2427,7 @@ async function showReward(ctx) {
     '🔗 <b>لینک اختصاصی شما</b> — برای کپی روی آن بزنید:',
     `<code>${escapeHtml(link)}</code>`,
     '',
-    `${bar}  <b>${standing.credited}</b> از <b>${standing.need}</b> نفر`,
+    `👥 تا اینجا <b>${standing.credited}</b> نفر از <b>${standing.need}</b> نفر`,
     standing.left === 1
       ? '🔥 فقط یک نفر دیگر مانده!'
       : `هنوز <b>${standing.left}</b> نفر دیگر لازم است.`,
@@ -2187,12 +2445,14 @@ async function showReward(ctx) {
   ]);
 }
 
-/** Ten squares, because "3 of 5" is a fact and a bar is a feeling. */
-function progressBar(have, need) {
-  const width = 10;
-  const full = Math.max(0, Math.min(width, Math.round((have / Math.max(1, need)) * width)));
-  return `${'🟩'.repeat(full)}${'⬜️'.repeat(width - full)}`;
-}
+/*
+ * There was a bar of ten squares here, and it is gone.
+ *
+ * It read as a row of empty boxes rather than as progress - the green and the
+ * grey are two emoji that many clients draw at different widths and some draw
+ * as the same plain square, so what the admin saw was a line of grey boxes
+ * above the number that already said the same thing. The number says it.
+ */
 
 /** A date somebody reads, on their own calendar. */
 function faDate(at) {
@@ -2934,8 +3194,7 @@ function configCard(client, opts) {
     lines.push(`💾  حجم کل:  <b>${quota ? bytes(quota) : 'نامحدود'}</b>`);
     if (quota) {
       const left = Math.max(0, quota - used);
-      lines.push(`📉  باقی‌مانده:  <b>${bytes(left)}</b>`,
-        `${progressBar(used, quota)}  ${Math.min(100, Math.round((used / quota) * 100))}٪`);
+      lines.push(`📉  باقی‌مانده:  <b>${bytes(left)}</b>  (${Math.max(0, 100 - Math.min(100, Math.round((used / quota) * 100)))}٪)`);
     }
     lines.push(`⏳  زمان باقی‌مانده:  <b>${timeLeft(client)}</b>`);
     if (where) lines.push(`🌐  سرور:  <b>${escapeHtml(where)}</b>`);
@@ -3825,6 +4084,7 @@ async function handle(update) {
     }
     /* the start payload, read once: two things below look at it */
     const started = /^\/start\s+(\S+)/.exec(text);
+    if (/^\/start\b/.test(text)) countStart();
 
     /*
      * Somebody arriving on an invite link.
@@ -4508,6 +4768,8 @@ module.exports = {
   creditReferral, showReward, claimReward, grantReward, resetRewards, shareText, shareUrl,
   knownPeople, meetPerson, hasMetBefore,
   rewardStats, keyboardFor, pairStartRows,
+  startBroadcast, stopBroadcast, broadcastStatus, audienceCounts, audienceIds,
+  botStats,
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
   sendBackup, backupStatus, backupSettings, backupTimes, watchBackups, minutesOf, nextBackupAt, backupTick,
   backupOnChange, stateFingerprint, backupBeat,
