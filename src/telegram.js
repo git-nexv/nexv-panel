@@ -967,8 +967,34 @@ function clientsOf(userId) {
 /* ------------------------------- the actions ----------------------------- */
 
 async function showScreen(ctx, key) {
-  const screen = screenByKey(key) || screenByKey('start');
+  let screen = screenByKey(key) || screenByKey('start');
   if (!screen) return reply(ctx, 'This bot has no screens yet.');
+
+  /*
+   * A screen that has lost its keys, repaired at the moment it is shown.
+   *
+   * The guide is "choose your device" above a row of devices, and a bot whose
+   * stored copy has only the back key shows the sentence above nothing at
+   * all - which is what somebody pressing "connection guide" after paying was
+   * looking at. There is a migration that puts the keys back, but it runs
+   * when the bot starts, so a bot that has been up since before it existed
+   * never got it, and the screen stays broken for as long as nobody restarts.
+   *
+   * Checked here instead: if what we are about to draw is a screen with
+   * nothing on it but a way back, and the starter set has more than that for
+   * this key, the migration runs now and the screen is read again. It costs a
+   * comparison on screens that are fine, which is all of them after the first
+   * time.
+   */
+  const bare = (one) => keyboardFor(one).every((row) => row.every((b) => BACK_ARROW.test(String(b.text || ''))));
+  if (bare(screen)) {
+    const fresh = starterScreens().find((one) => one.key === screen.key);
+    if (fresh && !bare(fresh)) {
+      migrateHelp();
+      screen = screenByKey(key) || screen;
+    }
+  }
+
   trail.set(ctx.chatId, key);
   return reply(ctx, fill(screen.text, ctx), keyboardFor(screen));
 }
@@ -1315,34 +1341,10 @@ async function showConfig(ctx, clientId) {
   const c = myConfig(ctx, clientId);
   if (!c) return showConfigs(ctx);
 
-  const subUrl = require('./routes/api').subUrl;
-  const used = (c.up || 0) + (c.down || 0);
-  const quota = (c.totalGB || 0) * 1024 ** 3;
-  const price = priceOf(c);
-  const where = membership.inboundsOf(c, db.data.inbounds).map((i) => i.remark).join(' + ');
-  const off = c.enable === false || c.autoDisabled;
-
-  const lines = [
-    `🔑  <b>${escapeHtml(c.email)}</b>`,
-    '',
-    `📊  مصرف‌شده:  <b>${bytes(used)}</b>`,
-    `💾  حجم کل:  <b>${quota ? bytes(quota) : 'نامحدود'}</b>`
-  ];
-  if (quota) lines.push(`📉  باقی‌مانده:  <b>${bytes(Math.max(0, quota - used))}</b>`);
-  lines.push(`⏳  زمان باقی‌مانده:  <b>${timeLeft(c)}</b>`);
-  if (price) lines.push(`💰  قیمت سرویس:  <b>${escapeHtml(price)}</b>`);
-  if (where) lines.push(`🌐  سرور:  <b>${escapeHtml(where)}</b>`);
-  lines.push(
-    `${off ? '⛔️' : '✅'}  وضعیت:  <b>${off ? 'غیرفعال' : 'فعال'}</b>`,
-    '',
-    '🔗  <b>لینک اشتراک</b>',
-    `<code>${escapeHtml(subUrl(c.subId))}</code>`,
-    '',
-    'این لینک را در برنامه‌تان به عنوان Subscription اضافه کنید.'
-  );
-
   const id = shortId(c);
-  return reply(ctx, lines.join('\n'), [
+  const off = c.enable === false || c.autoDisabled;
+  const keys = [
+    [{ text: '❓ راهنمای اتصال', callback_data: 'b:screen:help' }],
     [{ text: '🔄 تمدید / ارتقا اشتراک', callback_data: `b:renew:${id}` }],
     [
       { text: off ? '🔛 روشن کردن' : '⏸ خاموش کردن', callback_data: `b:power:${id}` },
@@ -1353,7 +1355,18 @@ async function showConfig(ctx, clientId) {
       { text: '🗑 حذف کانفیگ', callback_data: `b:del:${id}` }
     ],
     [{ text: '⬅️ بازگشت', callback_data: 'b:configs:' }]
-  ]);
+  ];
+
+  /*
+   * Sent as its own card rather than written over the list.
+   *
+   * This used to edit the message into a block of text, which is why it never
+   * carried the QR: a text message cannot become a photo. Somebody opening
+   * their own config should see what the buyer saw - the code to scan, the
+   * subscription, the direct links in their box - and the only way to do that
+   * is to send it. The management keys ride along underneath.
+   */
+  return sendConfig(ctx.chatId, c, '', '', { usage: true, keys });
 }
 
 /** Turn one of their own configs off, or back on. */
@@ -1894,13 +1907,27 @@ function ownerOfCode(code) {
   return led.codes[String(code || '')] || '';
 }
 
-/** How many of this person's arrivals have not been spent on a reward yet. */
+/**
+ * Where somebody stands, and whether they may have it.
+ *
+ * One reward per account, until the admin resets - so this is not a running
+ * balance that spends five arrivals and carries the rest. Somebody who has
+ * taken theirs has taken it, and the screen says so instead of inviting them
+ * to collect a second.
+ */
 function rewardStanding(userId) {
   const rec = rewardRecord(userId);
   const need = rewardSettings().need;
   const credited = rec.invited.length;
-  const spent = Number(rec.claimed) * need;
-  return { credited, spent, spare: Math.max(0, credited - spent), need };
+  const taken = Number(rec.claimed) > 0;
+  return {
+    credited,
+    need,
+    taken,
+    takenAt: Number(rec.claimedAt) || 0,
+    ready: !taken && credited >= need,
+    left: Math.max(0, need - credited)
+  };
 }
 
 /**
@@ -1929,27 +1956,41 @@ function creditReferral(ctx, code, wasNew) {
   return { counted: true, owner, standing: rewardStanding(owner) };
 }
 
-/** Tell the inviter, when there is something worth telling them. */
+/**
+ * Somebody arrived. Tell the inviter - and if that was the last one they
+ * needed, hand the reward over there and then.
+ *
+ * Waiting for them to come back and press a button was one step too many: the
+ * bot already knows they have earned it and already has them in a chat. So
+ * the config arrives by itself, the moment it is due, and the only thing left
+ * for the button to do is say where somebody stands.
+ */
 async function tellInviter(owner) {
   const standing = rewardStanding(owner);
   const plan = rewardPlan();
   if (!plan) return;
-  const left = standing.need - (standing.spare % standing.need || 0);
-  if (standing.spare >= standing.need) {
+
+  if (standing.ready) {
     await send(owner, [
-      '🎉 <b>جایزه‌تان آماده است!</b>',
+      '🎉 <b>آفرین! جایزه‌تان را بردید</b>',
       '',
       `${standing.need} نفر با لینک شما وارد ربات شدند.`,
-      `حالا می‌توانید <b>${escapeHtml(plan.name)}</b> را رایگان بگیرید.`
-    ].join('\n'), [[{ text: '🎁 دریافت جایزه', callback_data: 'b:reward:' }]]);
+      `<b>${escapeHtml(plan.name)}</b> همین حالا برایتان ساخته می‌شود…`
+    ].join('\n'));
+    await grantReward(owner, owner).catch((err) => {
+      if (process.env.NEXV_TG_DEBUG) console.error('[bot] reward:', err.message);
+    });
     return;
   }
+
   await send(owner, [
     '👤 <b>یک نفر با لینک شما وارد ربات شد</b>',
     '',
-    `تا اینجا: ${standing.spare} از ${standing.need}`,
-    `${left} نفر دیگر تا <b>${escapeHtml(plan.name)}</b> رایگان.`
-  ].join('\n'), [[{ text: '🎁 وضعیت جایزه', callback_data: 'b:reward:' }]]);
+    `تا اینجا <b>${standing.credited}</b> نفر از <b>${standing.need}</b> نفر.`,
+    standing.left === 1
+      ? `فقط <b>۱ نفر</b> دیگر مانده تا <b>${escapeHtml(plan.name)}</b> رایگان مال شما شود 🎁`
+      : `<b>${standing.left}</b> نفر دیگر تا <b>${escapeHtml(plan.name)}</b> رایگان.`
+  ].join('\n'), [[{ text: '🔄 بررسی وضعیت', callback_data: 'b:reward:' }]]);
 }
 
 /**
@@ -1974,8 +2015,11 @@ function rewardStats() {
       userId,
       username: client ? (client.tgUsername || '') : '',
       invited: count,
-      claimed,
-      spare: Math.max(0, count - claimed * need)
+      taken: claimed > 0,
+      takenAt: Number(rec.claimedAt) || 0,
+      /* one per account, so what is left to say is how far off the next one
+         they are - not a balance they can spend again */
+      left: claimed > 0 ? 0 : Math.max(0, need - count)
     });
   }
   rows.sort((a, b) => b.invited - a.invited);
@@ -1983,18 +2027,91 @@ function rewardStats() {
     need,
     invited,
     given,
+    resetAt: Number(led.resetAt) || 0,
     people: rows.slice(0, 100),
     known: Object.keys(knownPeople()).length
   };
 }
 
-/** The reward screen: the link, where they stand, and the button to claim. */
+/**
+ * What the invite link says when it is forwarded.
+ *
+ * This is the one piece of the whole feature a stranger reads. It is not a
+ * caption on a link, it is the pitch: somebody is receiving it from a friend
+ * with no idea what it is, and "come to this bot" persuades nobody. So it
+ * says what the service is, what they get for nothing by turning up, and that
+ * the same offer is waiting for them afterwards.
+ */
+function shareText() {
+  const r = rewardSettings();
+  const b = bot();
+  const brand = b.brand || 'NexV';
+  const plan = rewardPlan();
+  const lines = [
+    `🚀 ${brand} — اینترنت بدون محدودیت، ساده و سریع`,
+    '',
+    'من از این سرویس استفاده می‌کنم و راضی‌ام، گفتم به تو هم بگم 👇',
+    '',
+    '✅ سرعت بالا و اتصال پایدار، مخصوص ایران',
+    '✅ مناسب موبایل، کامپیوتر و تلویزیون',
+    '🎁 کانفیگ تست رایگان، همین اول کار',
+    '💳 خرید مستقیم داخل ربات، چند ثانیه‌ای',
+    '🎉 جایزه: با دعوت دوستانت اشتراک رایگان بگیر',
+    '💬 پشتیبانی همیشه در دسترس'
+  ];
+  if (plan) lines.push('', `همین حالا وارد شو و ببین: با دعوت ${r.need} نفر، «${plan.name}» رایگان است.`);
+  lines.push('', '👇 روی لینک بزن و استارت کن');
+  return lines.join('\n');
+}
+
+/** The friendly default, when the admin has not written their own. */
+function rewardBlurb(plan, need) {
+  return [
+    'سلام 👋',
+    '',
+    `اگر از ${escapeHtml(bot().brand || 'ما')} راضی هستید، می‌توانید بدون پرداخت هیچ هزینه‌ای یک اشتراک کامل هدیه بگیرید.`,
+    '',
+    `کافی است لینک اختصاصی زیر را برای دوستانتان بفرستید. وقتی <b>${need}</b> نفر با همین لینک وارد ربات شوند و استارت بزنند، `
+      + `<b>${escapeHtml(plan.name)}</b> به‌صورت خودکار و رایگان برای شما ساخته می‌شود — لازم نیست کار دیگری بکنید.`,
+    '',
+    '📌 فقط کسانی حساب می‌شوند که تا به حال وارد این ربات نشده‌اند.'
+  ].join('\n');
+}
+
+/**
+ * The reward screen.
+ *
+ * Three states, and they look different on purpose: not started, part way
+ * there, and done. Somebody who has already taken theirs is not shown a link
+ * to share or a button to press - there is nothing left for them to do until
+ * the admin opens it again, and leaving the buttons there would be an
+ * invitation to go and collect something that is not coming.
+ */
 async function showReward(ctx) {
   const r = rewardSettings();
   const plan = rewardPlan();
   if (!r.enable) return reply(ctx, 'فعلاً جایزه‌ای تعریف نشده است.', backRow());
   if (!plan) {
     return reply(ctx, 'جایزه فعال است اما اشتراکش تنظیم نشده. لطفاً به پشتیبانی بگویید.', backRow());
+  }
+
+  const standing = rewardStanding(ctx.userId);
+
+  /* already taken: the whole screen is a thank-you, with nothing to press */
+  if (standing.taken) {
+    return reply(ctx, [
+      '🎁 <b>جایزه شما قبلاً تحویل داده شده است</b>',
+      '',
+      `اشتراک <b>${escapeHtml(plan.name)}</b> به حساب شما اضافه شد${standing.takenAt ? ` (${faDate(standing.takenAt)})` : ''}.`,
+      'آن را در بخش <b>🔑 کانفیگ‌های من</b> می‌بینید.',
+      '',
+      'هر حساب فقط یک بار می‌تواند جایزه بگیرد. اگر دوباره باز شد، همین‌جا خبردار می‌شوید 🙂',
+      '',
+      'ممنون که ما را به دوستانتان معرفی کردید ❤️'
+    ].join('\n'), [
+      [{ text: '🔑 کانفیگ‌های من', callback_data: 'b:configs:' }],
+      backRow()[0]
+    ]);
   }
 
   const me = await botUsername();
@@ -2004,54 +2121,67 @@ async function showReward(ctx) {
 
   const code = rewardCode(ctx.userId);
   const link = `https://t.me/${me}?start=ref_${code}`;
-  const standing = rewardStanding(ctx.userId);
-  const ready = standing.spare >= standing.need;
+  const bar = progressBar(standing.credited, standing.need);
 
   const lines = [
     `<b>${escapeHtml(r.label)}</b>`,
     '',
-    r.text ? escapeHtml(r.text) : `${standing.need} نفر را به ربات بیاورید و <b>${escapeHtml(plan.name)}</b> را رایگان بگیرید.`,
+    r.text ? escapeHtml(r.text) : rewardBlurb(plan, standing.need),
     '',
+    '━━━━━━━━━━━━━━',
     '🔗 <b>لینک اختصاصی شما</b>',
     `<code>${escapeHtml(link)}</code>`,
     '',
-    `👥 تا اینجا: <b>${standing.spare}</b> از <b>${standing.need}</b>`,
-    Number(rewardRecord(ctx.userId).claimed) > 0
-      ? `🎁 جایزه‌های گرفته‌شده: <b>${Number(rewardRecord(ctx.userId).claimed)}</b>` : '',
+    `${bar}  <b>${standing.credited}</b> از <b>${standing.need}</b> نفر`,
+    standing.left === 1
+      ? '🔥 فقط یک نفر دیگر مانده!'
+      : `هنوز <b>${standing.left}</b> نفر دیگر لازم است.`,
     '',
-    'فقط کسانی حساب می‌شوند که قبلاً ربات را استارت نکرده باشند.'
-  ].filter(Boolean);
-  if (ready) lines.push('', '✅ جایزه‌تان آماده است — دکمه زیر را بزنید.');
+    '⚡️ به‌محض رسیدن به عدد لازم، اشتراک خودکار برایتان ساخته و همین‌جا فرستاده می‌شود.'
+  ];
 
-  const rows = [];
-  rows.push([{
-    text: '📤 فرستادن لینک برای دوستان',
-    url: `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(r.text || 'با این لینک وارد ربات شو')}`
-  }]);
-  rows.push([{ text: ready ? '🎁 دریافت جایزه' : '🔄 بررسی وضعیت', callback_data: 'b:rewardget:' }]);
-  rows.push(backRow()[0]);
-  return reply(ctx, lines.join('\n'), rows);
+  return reply(ctx, lines.join('\n'), [
+    [{
+      text: '📤 فرستادن لینک برای دوستان',
+      url: `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(shareText())}`
+    }],
+    [{ text: '🔄 بررسی وضعیت', callback_data: 'b:reward:' }],
+    backRow()[0]
+  ]);
+}
+
+/** Ten squares, because "3 of 5" is a fact and a bar is a feeling. */
+function progressBar(have, need) {
+  const width = 10;
+  const full = Math.max(0, Math.min(width, Math.round((have / Math.max(1, need)) * width)));
+  return `${'🟩'.repeat(full)}${'⬜️'.repeat(width - full)}`;
+}
+
+/** A date somebody reads, on their own calendar. */
+function faDate(at) {
+  try {
+    return new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium', timeZone: 'Asia/Tehran' }).format(new Date(at));
+  } catch (_) { return ''; }
 }
 
 /**
- * Claim it.
+ * Hand the reward over.
  *
  * The config is cut by the same function a sale uses, with an order written
  * down at a price of zero - so it shows up in the admin's list as what it was,
  * and so the config carries the plan's quota and term without any of that
  * being worked out a second time here.
+ *
+ * Called from the arrival that completes the count, and from the button for
+ * anybody who earned it before this was automatic.
  */
-async function claimReward(ctx) {
+async function grantReward(userId, chatId, ctx) {
   const plan = rewardPlan();
-  if (!rewardOn() || !plan) return showReward(ctx);
+  if (!rewardOn() || !plan) return { ok: false, reason: 'no reward on offer' };
 
-  const standing = rewardStanding(ctx.userId);
-  if (standing.spare < standing.need) {
-    if (ctx.answer) {
-      ctx.answer(`هنوز ${standing.need - standing.spare} نفر دیگر لازم است.`, true);
-    }
-    return showReward(ctx);
-  }
+  const standing = rewardStanding(userId);
+  if (standing.taken) return { ok: false, reason: 'already taken' };
+  if (!standing.ready) return { ok: false, reason: 'not enough yet' };
 
   const b = bot();
   const order = {
@@ -2060,10 +2190,10 @@ async function claimReward(ctx) {
     planId: plan.id,
     planName: plan.name,
     price: 0,
-    userId: ctx.userId,
-    chatId: ctx.chatId || ctx.userId,
-    username: ctx.username || '',
-    name: ctx.name || '',
+    userId,
+    chatId: chatId || userId,
+    username: (ctx && ctx.username) || '',
+    name: (ctx && ctx.name) || '',
     clientName: '',
     renewClientId: '',
     method: 'reward',
@@ -2072,19 +2202,22 @@ async function claimReward(ctx) {
   b.orders.unshift(order);
   if (b.orders.length > 500) b.orders.length = 500;
 
-  /* spent before the config is cut, not after: a second tap while the first
-     is still running would otherwise hand out two */
-  const rec = rewardRecord(ctx.userId);
+  /* marked taken before the config is cut, not after: two arrivals landing at
+     the same moment would otherwise each find the count complete */
+  const rec = rewardRecord(userId);
   rec.claimed = Number(rec.claimed) + 1;
+  rec.claimedAt = Date.now();
   db.saveNow();
 
   const handed = await deliverOrder(order);
   if (!handed.ok) {
     rec.claimed = Math.max(0, Number(rec.claimed) - 1);
+    rec.claimedAt = 0;
     order.status = 'failed';
     order.error = handed.error;
     db.saveNow();
-    return reply(ctx, `ساخت کانفیگ جایزه ممکن نشد: ${escapeHtml(handed.error)}`, backRow());
+    await send(order.chatId, `ساخت کانفیگ جایزه ممکن نشد: ${escapeHtml(handed.error)}\nلطفاً به پشتیبانی بگویید.`);
+    return { ok: false, reason: handed.error };
   }
 
   order.status = 'done';
@@ -2097,9 +2230,46 @@ async function claimReward(ctx) {
     ...buyerLines(order)
   ].join('\n')).catch(() => {});
 
-  return sendConfig(order.chatId, handed.client,
+  await sendConfig(order.chatId, handed.client,
     '<b>🎁 جایزه شما آماده شد</b>',
-    `${escapeHtml(plan.name)} — رایگان، بابت دعوت ${rewardSettings().need} نفر`);
+    `${escapeHtml(plan.name)} — رایگان، بابت دعوت ${standing.need} نفر`);
+  return { ok: true, client: handed.client };
+}
+
+/**
+ * The button. It only ever reports where somebody stands now - the reward
+ * itself goes out by itself the moment it is earned - but it also catches
+ * anybody who crossed the line while the bot was down.
+ */
+async function claimReward(ctx) {
+  const standing = rewardStanding(ctx.userId);
+  if (standing.ready) {
+    const out = await grantReward(ctx.userId, ctx.chatId, ctx);
+    if (out.ok) return null;
+  }
+  return showReward(ctx);
+}
+
+/**
+ * Let everybody have another one.
+ *
+ * Both halves are cleared, not just the "taken" mark: leaving the arrivals
+ * behind would mean everybody who had already earned one qualified again the
+ * instant the reset ran, off invitations they were paid for once already. The
+ * codes stay, so the links people are holding keep working.
+ */
+function resetRewards() {
+  const led = rewardLedger();
+  let people = 0;
+  for (const rec of Object.values(led.people || {})) {
+    if (Number(rec.claimed) > 0 || (rec.invited || []).length) people += 1;
+    rec.claimed = 0;
+    rec.claimedAt = 0;
+    rec.invited = [];
+  }
+  led.resetAt = Date.now();
+  db.saveNow();
+  return { people };
 }
 
 function backRow() {
@@ -2642,16 +2812,50 @@ function visibleLength(text) {
   return text.replace(/<[^>]+>/g, '').length;
 }
 
-async function sendConfig(chatId, client, title, extra) {
+/**
+ * Everything about one config, in the order somebody reads it.
+ *
+ * Written once and used twice - by the delivery a buyer gets and by the card
+ * behind "my configs" - because they were two different screens showing the
+ * same thing, and the one you got after paying was the better of the two. A
+ * config somebody comes back to look at is the same config; there is no
+ * reason for it to arrive stripped of its QR, its direct links and its
+ * explanation just because the asking was done with a button.
+ *
+ * `usage` adds the figures - what is spent, what is left, how long - which
+ * belong on the card somebody opens on purpose and would only be noise on the
+ * one that arrives the second they have paid.
+ */
+function configCard(client, opts) {
+  const o = opts || {};
   const api = require('./routes/api');
   const url = api.subUrl(client.subId);
+  const lines = [];
 
-  const lines = [
-    title,
-    `<b>${escapeHtml(client.email)}</b>`,
-    ''
-  ];
-  if (extra) lines.push(extra, '');
+  if (o.title) lines.push(o.title);
+  lines.push(`🔑  <b>${escapeHtml(client.email)}</b>`, '');
+  if (o.extra) lines.push(o.extra, '');
+
+  if (o.usage) {
+    const used = (client.up || 0) + (client.down || 0);
+    const quota = (client.totalGB || 0) * 1024 ** 3;
+    const plan = planOf(client);
+    const where = membership.inboundsOf(client, db.data.inbounds).map((i) => i.remark).join(' + ');
+    const off = client.enable === false || client.autoDisabled;
+
+    if (plan) lines.push(`📦  اشتراک:  <b>${escapeHtml(plan)}</b>`);
+    lines.push(`📊  مصرف‌شده:  <b>${bytes(used)}</b>`);
+    lines.push(`💾  حجم کل:  <b>${quota ? bytes(quota) : 'نامحدود'}</b>`);
+    if (quota) {
+      const left = Math.max(0, quota - used);
+      lines.push(`📉  باقی‌مانده:  <b>${bytes(left)}</b>`,
+        `${progressBar(used, quota)}  ${Math.min(100, Math.round((used / quota) * 100))}٪`);
+    }
+    lines.push(`⏳  زمان باقی‌مانده:  <b>${timeLeft(client)}</b>`);
+    if (where) lines.push(`🌐  سرور:  <b>${escapeHtml(where)}</b>`);
+    lines.push(`${off ? '⛔️' : '✅'}  وضعیت:  <b>${off ? 'غیرفعال' : 'فعال'}</b>`, '');
+  }
+
   lines.push(
     '🔗  <b>لینک اشتراک</b>',
     `<code>${escapeHtml(url)}</code>`,
@@ -2666,10 +2870,24 @@ async function sendConfig(chatId, client, title, extra) {
     lines.push('', '⚙️  <b>کانفیگ مستقیم</b> — برای دیدن، روی کادر زیر بزنید');
     lines.push(collapsed(direct.map((one) => `<code>${escapeHtml(one)}</code>`)));
   }
-  lines.push('', '❓ اگر بلد نیستید، از منوی اصلی <b>راهنما</b> را بزنید.');
+  lines.push('', '❓ اگر بلد نیستید، دکمه <b>راهنمای اتصال</b> را بزنید.');
+  return { text: lines.join('\n'), url };
+}
 
-  const text = lines.join('\n');
-  const keys = [[{ text: '❓ راهنمای اتصال', callback_data: 'b:screen:help' }], ...backRow()];
+/** What this config was sold as, when we can still tell. */
+function planOf(client) {
+  const order = (bot().orders || []).find((o) => o.clientId === client.id);
+  if (order && order.planName) return order.planName;
+  if (client.isTrial) return 'کانفیگ تست';
+  return '';
+}
+
+async function sendConfig(chatId, client, title, extra, opts) {
+  const o = opts || {};
+  const built = configCard(client, { title, extra, usage: !!o.usage });
+  const url = built.url;
+  const text = built.text;
+  const keys = o.keys || [[{ text: '❓ راهنمای اتصال', callback_data: 'b:screen:help' }], ...backRow()];
 
   /*
    * The picture carries the message when it can - one bubble, not two - and
@@ -4177,7 +4395,8 @@ module.exports = {
   resetTrials, trialsTaken, repairOrphanClients, dateUndatedClients, customTerms,
   /* the reward: its settings, where everybody stands, and the admin's view */
   rewardSettings, rewardPlan, rewardOn, rewardStanding, rewardRecord, rewardCode,
-  creditReferral, showReward, claimReward, knownPeople, meetPerson, hasMetBefore,
+  creditReferral, showReward, claimReward, grantReward, resetRewards, shareText,
+  knownPeople, meetPerson, hasMetBefore,
   rewardStats, keyboardFor, pairStartRows,
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
   sendBackup, backupStatus, backupSettings, backupTimes, watchBackups, minutesOf, nextBackupAt, backupTick,

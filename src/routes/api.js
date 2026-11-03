@@ -870,6 +870,20 @@ router.post('/bot/trial/reset', (req, res) => {
   res.json({ ok: true, cleared });
 });
 
+/**
+ * Let everybody earn the reward again.
+ *
+ * Both the taken mark and the arrivals are cleared - leaving the arrivals
+ * would hand a second subscription to everybody who had already earned one,
+ * the instant this ran, off invitations that were paid for once already. The
+ * invite links people are holding keep working.
+ */
+router.post('/bot/reward/reset', (req, res) => {
+  const out = telegram.resetRewards();
+  logEvent('bot', `invite rewards reset for ${out.people} people`);
+  res.json(Object.assign({ ok: true }, out, { stats: telegram.rewardStats() }));
+});
+
 /* ------------------------------- the guide ------------------------------- */
 
 const HELP_SCREENS = [

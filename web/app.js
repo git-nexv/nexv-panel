@@ -6644,7 +6644,7 @@ async function renderBot(view) {
     rewardTable.append(el('div', { class: 'empty', text: t('Nobody has invited anybody yet.') }));
   } else {
     const table = el('table');
-    table.innerHTML = `<thead><tr><th>Telegram</th><th>Brought in</th><th>Rewards taken</th><th>Towards the next</th></tr></thead>`;
+    table.innerHTML = `<thead><tr><th>Telegram</th><th>Brought in</th><th>Reward</th></tr></thead>`;
     const body = el('tbody');
     for (const row of rewardStats.people) {
       body.append(el('tr', {}, [
@@ -6652,14 +6652,33 @@ async function renderBot(view) {
           el('strong', { text: row.username ? `@${row.username}` : row.userId }),
           row.username ? el('div', { class: 'faint mono sub', text: row.userId }) : null
         ])]),
-        el('td', { class: 'num', text: String(row.invited) }),
-        el('td', { class: 'num', text: String(row.claimed) }),
-        el('td', { class: 'num muted', text: `${row.spare} / ${rewardStats.need}` })
+        el('td', { class: 'num', text: `${row.invited} / ${rewardStats.need}` }),
+        el('td', {}, [row.taken
+          ? el('span', { class: 'chip ok', html: `<i></i>${t('Taken')}` })
+          : el('span', { class: 'chip', text: row.left === 1
+            ? t('1 more to go') : t(`${row.left} more to go`) })])
       ]));
     }
     table.append(body);
     rewardTable.append(table);
   }
+
+  /* ---- and the way to open it again, the way the test config has one ---- */
+  const rewardReset = el('button', {
+    class: 'btn', html: `${icon('update')} Let everyone earn it again`,
+    onclick: () => confirmDialog(
+      'Everybody who has already taken the reward will be able to earn another one, '
+      + 'and everybody\u2019s count starts again from zero. The configs they already have '
+      + 'are not touched, and the links they have handed out keep working.',
+      async () => {
+        try {
+          const out = await api.post('/bot/reward/reset', {});
+          toast(out.people ? `Reset for ${out.people} people` : 'Nothing to reset');
+          render();
+        } catch (err) { toast(err.message, 'err'); }
+      }
+    )
+  });
 
   panels.Reward.append(el('div', { class: 'card', style: 'margin-top:16px' }, [
     el('div', { class: 'between', style: 'margin-bottom:12px' }, [
@@ -6668,7 +6687,10 @@ async function renderBot(view) {
     ]),
     rewardTable,
     el('div', { class: 'hint', style: 'margin-top:10px',
-      text: t(`The bot has met ${rewardStats.known} people in all. Anybody already in that list cannot be counted as a new arrival.`) })
+      text: t(`The bot has met ${rewardStats.known} people in all. Anybody already in that list cannot be counted as a new arrival.`) }),
+    el('div', { class: 'row', style: 'margin-top:12px' }, [rewardReset]),
+    el('div', { class: 'hint', style: 'margin-top:6px',
+      text: t('Each account gets the reward once. This opens it for everybody again.') })
   ]));
   hydrateIcons(panels.Reward);
 
