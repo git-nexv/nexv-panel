@@ -6260,6 +6260,8 @@ async function renderBot(view) {
     pricePerGB: Number(data.pricePerGB) || 0,
     trial: JSON.parse(JSON.stringify(data.trial || { enable: true, mb: 100, days: 1, inboundId: '', oncePerUser: true })),
     custom: JSON.parse(JSON.stringify(data.custom || { enable: false, minGB: 1, maxGB: 0, days: 30, inboundId: '' })),
+    reward: JSON.parse(JSON.stringify(data.reward
+      || { enable: false, need: 5, planId: '', label: '🎁 اشتراک رایگان', text: '' })),
     access: JSON.parse(JSON.stringify(data.access || { chooseName: true }))
   };
 
@@ -6270,7 +6272,7 @@ async function renderBot(view) {
    * untouched: they are still loaded, still saved, and still what the bot
    * shows; there is just no longer a tab for rewriting them.
    */
-  const { wrap, panels } = tabbed(['Setup', 'Plans', 'Test config', 'Manual plan', 'Access user', 'Payment', 'Help', 'Backup', 'Channel', 'Orders', 'AI']);
+  const { wrap, panels } = tabbed(['Setup', 'Plans', 'Test config', 'Reward', 'Manual plan', 'Access user', 'Payment', 'Help', 'Backup', 'Channel', 'Orders', 'AI']);
   for (const panel of Object.values(panels)) panel.className = 'tab-panel';
   view.append(wrap);
 
@@ -6279,6 +6281,7 @@ async function renderBot(view) {
       brand: draft.brand, currency: draft.currency, adminId: draft.adminId,
       screens: draft.screens, plans: draft.plans, pay: draft.pay, channel: draft.channel,
       pricePerGB: draft.pricePerGB, trial: draft.trial, custom: draft.custom,
+      reward: draft.reward,
       access: draft.access, startOnFirstUse: draft.startOnFirstUse,
       buttonStyle: draft.buttonStyle, viaOutbound: draft.viaOutbound, backup: draft.backup
     }, extra || {});
@@ -6583,6 +6586,91 @@ async function renderBot(view) {
     el('div', { class: 'row' }, [resetBtn])
   ]));
   hydrateIcons(panels['Test config']);
+
+  /* ----------------------------- the reward ----------------------------- */
+  /*
+   * Bring people to the bot, get a subscription.
+   *
+   * The plan is picked from the ones already on the Plans tab rather than
+   * typed as a quota and a number of months: a reward that is "10 GB for a
+   * month" written out a second time is one more place for those two numbers
+   * to drift apart from the plan everybody else is buying.
+   */
+  const reward = draft.reward = draft.reward
+    || { enable: false, need: 5, planId: '', label: '🎁 اشتراک رایگان', text: '' };
+  const rewardStats = data.rewardStats || { invited: 0, given: 0, people: [], known: 0 };
+
+  const rewardGrid = el('div', { class: 'form-grid' });
+  formField(rewardGrid, 'People needed', bindTo(reward, 'need',
+    el('input', { type: 'number', min: '1', max: '1000', value: reward.need ?? 5 }), Number), {
+    hint: 'How many new people have to start the bot through somebody\u2019s link before they get the plan.'
+  });
+  const planOptions = [{ value: '', label: 'Pick a plan' }]
+    .concat((draft.plans || []).map((p) => ({ value: p.id, label: `${p.name} — ${p.gb || 0}GB · ${p.days || 0}d` })));
+  const rewardPlan = selectOf(planOptions, reward.planId || '');
+  rewardPlan.addEventListener('change', () => { reward.planId = rewardPlan.value; });
+  formField(rewardGrid, 'What they get', rewardPlan, {
+    hint: 'One of the plans above, handed over free. Without one the reward stays off, because there would be nothing to give.'
+  });
+  formField(rewardGrid, 'Button', bindTo(reward, 'label',
+    el('input', { value: reward.label || '🎁 اشتراک رایگان', maxLength: 40 })), {
+    hint: 'Appears on the bot\u2019s first screen while the reward is on.'
+  });
+  formField(rewardGrid, 'What the bot says', bindTo(reward, 'text',
+    el('textarea', { rows: 3, value: reward.text || '' })), {
+    full: true,
+    hint: 'Left empty, the bot writes the sentence itself from the number and the plan.'
+  });
+
+  panels.Reward.append(el('div', { class: 'card' }, [
+    el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+      el('strong', { text: '🎁 Invite reward' }), switchFor(reward, 'enable', 'Offer it')
+    ]),
+    rewardGrid,
+    el('div', { class: 'hint' }, [
+      'Everyone who taps the button gets a link to this bot with a code of their own. '
+      + 'Only people who have never started the bot count \u2014 not the sender, not anybody '
+      + 'who already has a config or has ordered before, and nobody twice. Extra arrivals '
+      + 'carry over towards the next one.'
+    ]),
+    el('div', { class: 'row', style: 'margin-top:12px' }, [
+      el('button', { class: 'btn primary', text: 'Save', onclick: () => save() })
+    ])
+  ]));
+
+  /* ---- and who is actually bringing people in ---- */
+  const rewardTable = el('div', { class: 'table-wrap' });
+  if (!rewardStats.people.length) {
+    rewardTable.append(el('div', { class: 'empty', text: t('Nobody has invited anybody yet.') }));
+  } else {
+    const table = el('table');
+    table.innerHTML = `<thead><tr><th>Telegram</th><th>Brought in</th><th>Rewards taken</th><th>Towards the next</th></tr></thead>`;
+    const body = el('tbody');
+    for (const row of rewardStats.people) {
+      body.append(el('tr', {}, [
+        el('td', {}, [el('div', { class: 'cell-stack' }, [
+          el('strong', { text: row.username ? `@${row.username}` : row.userId }),
+          row.username ? el('div', { class: 'faint mono sub', text: row.userId }) : null
+        ])]),
+        el('td', { class: 'num', text: String(row.invited) }),
+        el('td', { class: 'num', text: String(row.claimed) }),
+        el('td', { class: 'num muted', text: `${row.spare} / ${rewardStats.need}` })
+      ]));
+    }
+    table.append(body);
+    rewardTable.append(table);
+  }
+
+  panels.Reward.append(el('div', { class: 'card', style: 'margin-top:16px' }, [
+    el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+      el('strong', { text: 'Who is inviting' }),
+      el('span', { class: 'muted', text: t(`${rewardStats.invited} brought in · ${rewardStats.given} rewards given`) })
+    ]),
+    rewardTable,
+    el('div', { class: 'hint', style: 'margin-top:10px',
+      text: t(`The bot has met ${rewardStats.known} people in all. Anybody already in that list cannot be counted as a new arrival.`) })
+  ]));
+  hydrateIcons(panels.Reward);
 
   /* ---- Manual plan: buying by the gigabyte, on a tab of its own ---- */
   const custom = draft.custom = draft.custom || { enable: false, minGB: 1, maxGB: 0, days: 30, inboundId: '' };

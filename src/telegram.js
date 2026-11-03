@@ -267,6 +267,10 @@ function defaults() {
        server works from the buyer's own phone, not to be a plan. */
     trial: { enable: true, mb: 100, days: 1, inboundId: '', oncePerUser: true },
 
+    /* bring people to the bot, get a subscription. Off until the admin picks
+       which plan it hands over - there is no sensible default for that */
+    reward: { enable: false, need: 5, planId: '', label: '🎁 اشتراک رایگان', text: '' },
+
     /*
      * Buying by the gigabyte instead of from the fixed list.
      *
@@ -888,13 +892,29 @@ function screenByKey(key) {
 /** One screen's inline keyboard, as Telegram wants it. */
 function keyboardFor(screen) {
   const rows = Array.isArray(screen.buttons) ? screen.buttons : [];
-  return rows
+  const out = rows
     .map((row) => (Array.isArray(row) ? row : [row])
       .filter((btn) => btn && btn.label)
       .map((btn) => (btn.action === 'url'
         ? { text: btn.label, url: btn.value || 'https://t.me' }
         : { text: btn.label, callback_data: `b:${btn.action}:${btn.value || ''}`.slice(0, 64) })))
     .filter((row) => row.length);
+
+  /*
+   * The reward button, added to the first screen rather than stored in it.
+   *
+   * The screens are the admin's: they are kept in the store and edited on the
+   * Bot page, so a button written into the starter set would never appear on
+   * a bot that already exists. Switching the reward on in the panel should put
+   * the button there, and switching it off should take it away, which is what
+   * deciding it here does. An admin who has already placed a reward button of
+   * their own gets no second one.
+   */
+  if (screen.key === 'start' && rewardOn()) {
+    const already = out.some((row) => row.some((b) => String(b.callback_data || '').startsWith('b:reward')));
+    if (!already) out.splice(1, 0, [{ text: rewardSettings().label, callback_data: 'b:reward:' }]);
+  }
+  return out;
 }
 
 function clientsOf(userId) {
@@ -1663,6 +1683,381 @@ async function takeTrialName(ctx, raw) {
   }
 }
 
+
+/* ------------------------------ the reward ------------------------------- */
+/*
+ * Bring people to the bot, get a subscription.
+ *
+ * The admin names a plan and a number. Somebody taps the button, the bot gives
+ * them a link to itself with their own code in it, and when that many people
+ * have started the bot through their link they are handed that plan for
+ * nothing - the same config a buyer gets, cut the same way, so there is no
+ * second kind of subscription to maintain.
+ *
+ * Three rules decide whether an arrival counts, and all three matter:
+ *
+ *   it must be somebody new     the whole point is new people, so anybody the
+ *                               bot has already met - or who already has a
+ *                               config, or has ever ordered - is not one
+ *   it must not be themselves   an invite link opened by its own owner is the
+ *                               oldest trick there is
+ *   it counts once              the same person arriving again, through the
+ *                               same link or another one, is still one person
+ *
+ * The first rule needs a record of who the bot has met, and there was none -
+ * the bot knew its buyers and nobody else. So one is kept from now on, seeded
+ * once from everybody already visible in the store. That seeding is what stops
+ * the reward being farmed with an existing customer list on the first day.
+ */
+function rewardSettings() {
+  const r = bot().reward || {};
+  return {
+    enable: !!r.enable,
+    need: Math.max(1, Math.min(1000, Math.round(Number(r.need) || 5))),
+    planId: String(r.planId || ''),
+    label: String(r.label || '🎁 اشتراک رایگان'),
+    text: String(r.text || '')
+  };
+}
+
+/**
+ * The bot's own @name, which the invite link is built from.
+ *
+ * `runtime.me` is filled in when the bot is started and is normally all this
+ * needs - but a reward link that reads "the bot is not ready" because one
+ * lookup never happened is a dead end on the one screen that cannot have one.
+ * So it is asked for when it is missing and kept in the store afterwards,
+ * where it survives a restart.
+ */
+async function botUsername() {
+  if (runtime.me && runtime.me.username) return runtime.me.username;
+  const b = bot();
+  if (b.username) return b.username;
+  if (!b.token) return '';
+  try {
+    const me = await whoAmI(b.token);
+    if (me && me.username) {
+      runtime.me = me;
+      b.username = me.username;
+      db.save();
+      return me.username;
+    }
+  } catch (_) { /* the screen says it is not ready, which is true */ }
+  return '';
+}
+
+/** The plan the reward hands over, if it is still there and still on sale. */
+function rewardPlan() {
+  const r = rewardSettings();
+  if (!r.planId) return null;
+  return (bot().plans || []).find((p) => p.id === r.planId) || null;
+}
+
+/** Is the reward actually offerable right now? */
+function rewardOn() {
+  const r = rewardSettings();
+  return !!(r.enable && rewardPlan());
+}
+
+function rewardLedger() {
+  const b = bot();
+  b.reward = b.reward || {};
+  if (!b.reward.people || typeof b.reward.people !== 'object') b.reward.people = {};
+  if (!b.reward.codes || typeof b.reward.codes !== 'object') b.reward.codes = {};
+  return b.reward;
+}
+
+/**
+ * Everybody the bot has ever met.
+ *
+ * Seeded once from the store, because an install that has been selling for
+ * months has hundreds of people the bot plainly knows and an empty ledger
+ * would call every one of them a new arrival. After that it is written to on
+ * every update the bot handles.
+ */
+function knownPeople() {
+  const b = bot();
+  if (!b.known || typeof b.known !== 'object') {
+    b.known = {};
+    const at = Date.now();
+    for (const c of (db.data.clients || [])) {
+      const id = String(c.tgId || '').trim();
+      if (id) b.known[id] = Number(c.createdAt) || at;
+    }
+    for (const o of (b.orders || [])) {
+      const id = String(o.userId || '').trim();
+      if (id && !b.known[id]) b.known[id] = Number(o.at) || at;
+    }
+    for (const id of Object.keys((b.trial && b.trial.taken) || {})) {
+      if (!b.known[id]) b.known[id] = Number(b.trial.taken[id]) || at;
+    }
+    b.knownSeededAt = at;
+    db.saveNow();
+  }
+  return b.known;
+}
+
+function hasMetBefore(userId) {
+  return !!knownPeople()[String(userId)];
+}
+
+/** Write somebody down, and say whether this was the first time. */
+function meetPerson(userId) {
+  if (!userId) return false;
+  const known = knownPeople();
+  const key = String(userId);
+  if (known[key]) return false;
+  known[key] = Date.now();
+  db.save();
+  return true;
+}
+
+/** One person's reward record, made on demand. */
+function rewardRecord(userId) {
+  const led = rewardLedger();
+  const key = String(userId);
+  if (!led.people[key]) led.people[key] = { code: '', invited: [], claimed: 0, at: Date.now() };
+  const rec = led.people[key];
+  if (!Array.isArray(rec.invited)) rec.invited = [];
+  if (!(Number(rec.claimed) >= 0)) rec.claimed = 0;
+  return rec;
+}
+
+/**
+ * The code that travels in the link.
+ *
+ * Random rather than the user's own id: a start payload is visible to
+ * everybody the link is forwarded to, and a Telegram id is not the bot's to
+ * publish. Made once and kept, so a link handed out stays good.
+ */
+function rewardCode(userId) {
+  const led = rewardLedger();
+  const rec = rewardRecord(userId);
+  if (rec.code && led.codes[rec.code] === String(userId)) return rec.code;
+  let code = '';
+  for (let i = 0; i < 20 && !code; i += 1) {
+    const candidate = crypto.randomBytes(6).toString('base64url');
+    if (!led.codes[candidate]) code = candidate;
+  }
+  if (!code) code = crypto.randomBytes(9).toString('base64url');
+  rec.code = code;
+  led.codes[code] = String(userId);
+  db.saveNow();
+  return code;
+}
+
+function ownerOfCode(code) {
+  const led = rewardLedger();
+  return led.codes[String(code || '')] || '';
+}
+
+/** How many of this person's arrivals have not been spent on a reward yet. */
+function rewardStanding(userId) {
+  const rec = rewardRecord(userId);
+  const need = rewardSettings().need;
+  const credited = rec.invited.length;
+  const spent = Number(rec.claimed) * need;
+  return { credited, spent, spare: Math.max(0, credited - spent), need };
+}
+
+/**
+ * Somebody arrived through a link. Count them, if they count.
+ *
+ * Called from the start handler before anything else is done with the update,
+ * because the one fact this depends on - whether the bot had met this person
+ * before - stops being true the moment the update is handled.
+ */
+function creditReferral(ctx, code, wasNew) {
+  if (!rewardOn()) return null;
+  const owner = ownerOfCode(code);
+  if (!owner) return null;
+  if (String(owner) === String(ctx.userId)) return { self: true };
+  if (!wasNew) return { known: true };
+  /* never met by the bot, but a config or an order would still make them an
+     existing customer: the ledger is seeded from both, so this is belt and
+     braces for anybody added in between */
+  const hasConfig = db.data.clients.some((c) => String(c.tgId || '') === String(ctx.userId));
+  if (hasConfig) return { known: true };
+
+  const rec = rewardRecord(owner);
+  if (rec.invited.includes(String(ctx.userId))) return { already: true };
+  rec.invited.push(String(ctx.userId));
+  db.saveNow();
+  return { counted: true, owner, standing: rewardStanding(owner) };
+}
+
+/** Tell the inviter, when there is something worth telling them. */
+async function tellInviter(owner) {
+  const standing = rewardStanding(owner);
+  const plan = rewardPlan();
+  if (!plan) return;
+  const left = standing.need - (standing.spare % standing.need || 0);
+  if (standing.spare >= standing.need) {
+    await send(owner, [
+      '🎉 <b>جایزه‌تان آماده است!</b>',
+      '',
+      `${standing.need} نفر با لینک شما وارد ربات شدند.`,
+      `حالا می‌توانید <b>${escapeHtml(plan.name)}</b> را رایگان بگیرید.`
+    ].join('\n'), [[{ text: '🎁 دریافت جایزه', callback_data: 'b:reward:' }]]);
+    return;
+  }
+  await send(owner, [
+    '👤 <b>یک نفر با لینک شما وارد ربات شد</b>',
+    '',
+    `تا اینجا: ${standing.spare} از ${standing.need}`,
+    `${left} نفر دیگر تا <b>${escapeHtml(plan.name)}</b> رایگان.`
+  ].join('\n'), [[{ text: '🎁 وضعیت جایزه', callback_data: 'b:reward:' }]]);
+}
+
+/**
+ * What the panel shows about the reward: who is inviting, and what it has
+ * cost. Sorted by who has brought the most, because that is the only ordering
+ * anybody asks for.
+ */
+function rewardStats() {
+  const led = rewardLedger();
+  const need = rewardSettings().need;
+  const rows = [];
+  let invited = 0;
+  let given = 0;
+  for (const [userId, rec] of Object.entries(led.people || {})) {
+    const count = Array.isArray(rec.invited) ? rec.invited.length : 0;
+    const claimed = Number(rec.claimed) || 0;
+    if (!count && !claimed) continue;
+    invited += count;
+    given += claimed;
+    const client = db.data.clients.find((c) => String(c.tgId || '') === String(userId));
+    rows.push({
+      userId,
+      username: client ? (client.tgUsername || '') : '',
+      invited: count,
+      claimed,
+      spare: Math.max(0, count - claimed * need)
+    });
+  }
+  rows.sort((a, b) => b.invited - a.invited);
+  return {
+    need,
+    invited,
+    given,
+    people: rows.slice(0, 100),
+    known: Object.keys(knownPeople()).length
+  };
+}
+
+/** The reward screen: the link, where they stand, and the button to claim. */
+async function showReward(ctx) {
+  const r = rewardSettings();
+  const plan = rewardPlan();
+  if (!r.enable) return reply(ctx, 'فعلاً جایزه‌ای تعریف نشده است.', backRow());
+  if (!plan) {
+    return reply(ctx, 'جایزه فعال است اما اشتراکش تنظیم نشده. لطفاً به پشتیبانی بگویید.', backRow());
+  }
+
+  const me = await botUsername();
+  if (!me) {
+    return reply(ctx, 'ربات هنوز آماده نیست. چند لحظه بعد دوباره امتحان کنید.', backRow());
+  }
+
+  const code = rewardCode(ctx.userId);
+  const link = `https://t.me/${me}?start=ref_${code}`;
+  const standing = rewardStanding(ctx.userId);
+  const ready = standing.spare >= standing.need;
+
+  const lines = [
+    `<b>${escapeHtml(r.label)}</b>`,
+    '',
+    r.text ? escapeHtml(r.text) : `${standing.need} نفر را به ربات بیاورید و <b>${escapeHtml(plan.name)}</b> را رایگان بگیرید.`,
+    '',
+    '🔗 <b>لینک اختصاصی شما</b>',
+    `<code>${escapeHtml(link)}</code>`,
+    '',
+    `👥 تا اینجا: <b>${standing.spare}</b> از <b>${standing.need}</b>`,
+    Number(rewardRecord(ctx.userId).claimed) > 0
+      ? `🎁 جایزه‌های گرفته‌شده: <b>${Number(rewardRecord(ctx.userId).claimed)}</b>` : '',
+    '',
+    'فقط کسانی حساب می‌شوند که قبلاً ربات را استارت نکرده باشند.'
+  ].filter(Boolean);
+  if (ready) lines.push('', '✅ جایزه‌تان آماده است — دکمه زیر را بزنید.');
+
+  const rows = [];
+  rows.push([{
+    text: '📤 فرستادن لینک برای دوستان',
+    url: `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(r.text || 'با این لینک وارد ربات شو')}`
+  }]);
+  rows.push([{ text: ready ? '🎁 دریافت جایزه' : '🔄 بررسی وضعیت', callback_data: 'b:rewardget:' }]);
+  rows.push(backRow()[0]);
+  return reply(ctx, lines.join('\n'), rows);
+}
+
+/**
+ * Claim it.
+ *
+ * The config is cut by the same function a sale uses, with an order written
+ * down at a price of zero - so it shows up in the admin's list as what it was,
+ * and so the config carries the plan's quota and term without any of that
+ * being worked out a second time here.
+ */
+async function claimReward(ctx) {
+  const plan = rewardPlan();
+  if (!rewardOn() || !plan) return showReward(ctx);
+
+  const standing = rewardStanding(ctx.userId);
+  if (standing.spare < standing.need) {
+    if (ctx.answer) {
+      ctx.answer(`هنوز ${standing.need - standing.spare} نفر دیگر لازم است.`, true);
+    }
+    return showReward(ctx);
+  }
+
+  const b = bot();
+  const order = {
+    id: db.id(),
+    at: Date.now(),
+    planId: plan.id,
+    planName: plan.name,
+    price: 0,
+    userId: ctx.userId,
+    chatId: ctx.chatId || ctx.userId,
+    username: ctx.username || '',
+    name: ctx.name || '',
+    clientName: '',
+    renewClientId: '',
+    method: 'reward',
+    status: 'reward'
+  };
+  b.orders.unshift(order);
+  if (b.orders.length > 500) b.orders.length = 500;
+
+  /* spent before the config is cut, not after: a second tap while the first
+     is still running would otherwise hand out two */
+  const rec = rewardRecord(ctx.userId);
+  rec.claimed = Number(rec.claimed) + 1;
+  db.saveNow();
+
+  const handed = await deliverOrder(order);
+  if (!handed.ok) {
+    rec.claimed = Math.max(0, Number(rec.claimed) - 1);
+    order.status = 'failed';
+    order.error = handed.error;
+    db.saveNow();
+    return reply(ctx, `ساخت کانفیگ جایزه ممکن نشد: ${escapeHtml(handed.error)}`, backRow());
+  }
+
+  order.status = 'done';
+  order.clientId = handed.client.id;
+  db.saveNow();
+
+  await tellAdmin([
+    '<b>جایزه دعوت تحویل شد</b>',
+    `اشتراک: ${escapeHtml(plan.name)}`,
+    ...buyerLines(order)
+  ].join('\n')).catch(() => {});
+
+  return sendConfig(order.chatId, handed.client,
+    '<b>🎁 جایزه شما آماده شد</b>',
+    `${escapeHtml(plan.name)} — رایگان، بابت دعوت ${rewardSettings().need} نفر`);
+}
 
 function backRow() {
   return [[{ text: '⬅️ بازگشت', callback_data: 'b:screen:start' }]];
@@ -2896,6 +3291,8 @@ async function act(ctx, action, value) {
     }
     case 'renew': return showPlans(ctx, value);
     case 'trial': return startTrial(ctx);
+    case 'reward': return showReward(ctx);
+    case 'rewardget': return claimReward(ctx);
     case 'custom': {
       const renewing = value ? myConfig(ctx, value) : null;
       return startCustom(ctx, renewing ? renewing.id : '');
@@ -2974,6 +3371,13 @@ async function handle(update) {
       isAdmin: isAdmin(from)
     };
     rememberUser(ctx);
+    /*
+     * Whether the bot had met this person before, decided here and nowhere
+     * else. It is the one fact the reward rests on, and it stops being true
+     * the moment anything writes them down - so it is read first, before the
+     * update is handled at all.
+     */
+    const firstEver = meetPerson(ctx.userId);
     // remembering the admin's chat is what lets an @username admin be reached
     if (ctx.isAdmin && String(b.adminChatId) !== String(ctx.chatId)) {
       b.adminChatId = String(ctx.chatId);
@@ -3051,6 +3455,30 @@ async function handle(update) {
         `سفارش در انتظار: ${b.orders.filter((o) => o.status === 'pending').length}`
       ].join('\n'));
     }
+    /* the start payload, read once: two things below look at it */
+    const started = /^\/start\s+(\S+)/.exec(text);
+
+    /*
+     * Somebody arriving on an invite link.
+     *
+     * Counted before the channel gate, not after. They have started the bot,
+     * which is the thing being counted, and whether they then go and join a
+     * channel is a different question with its own screen - leaving the
+     * credit on the far side of the gate would mean an admin who runs one
+     * quietly gets no reward counts at all.
+     *
+     * The inviter is told while their friend is still looking at the bot, and
+     * a link opened a second time does not count twice. Either way the
+     * arrival goes on to the ordinary start screen, through the gate if there
+     * is one: they came here to use the bot, not to be a statistic.
+     */
+    if (started && /^ref_/i.test(started[1])) {
+      const out = creditReferral(ctx, started[1].slice(4), firstEver);
+      if (out && out.counted) await tellInviter(out.owner).catch(() => {});
+      if (await gate(ctx)) return null;
+      return showScreen(ctx, 'start');
+    }
+
     if (await gate(ctx)) return null;
 
     /*
@@ -3064,7 +3492,6 @@ async function handle(update) {
      * who had just paid was shown the main menu, with no sign their money had
      * arrived until the sweep caught up minutes later.
      */
-    const started = /^\/start\s+(\S+)/.exec(text);
     if (started && /^paid-/i.test(started[1])) {
       const order = orderByPayRef(started[1]);
       if (!order) return reply(ctx, 'این سفارش پیدا نشد. اگر پرداخت کرده‌اید، چند لحظه دیگر خودکار بررسی می‌شود.', backRow());
@@ -3101,6 +3528,7 @@ async function handle(update) {
       isAdmin: isAdmin(from)
     };
     rememberUser(ctx);
+    meetPerson(ctx.userId);
     // held until the gate has spoken, so its message can be the alert
     ctx.answer = (text, alert) => answer(query.id, text, alert);
     const [, action, ...rest] = String(query.data || '').split(':');
@@ -3704,6 +4132,10 @@ function nextBackupAt() {
 module.exports = {
   bot, defaults, starterScreens, checkAdmin, migrateStarter, migrateUsageButton, migrateHelp, start, stop, status, whoAmI, resume,
   resetTrials, trialsTaken, repairOrphanClients, dateUndatedClients, customTerms,
+  /* the reward: its settings, where everybody stands, and the admin's view */
+  rewardSettings, rewardPlan, rewardOn, rewardStanding, rewardRecord, rewardCode,
+  creditReferral, showReward, claimReward, knownPeople, meetPerson, hasMetBefore,
+  rewardStats, keyboardFor,
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
   sendBackup, backupStatus, backupSettings, backupTimes, watchBackups, minutesOf, nextBackupAt, backupTick,
   backupOnChange, stateFingerprint, backupBeat,

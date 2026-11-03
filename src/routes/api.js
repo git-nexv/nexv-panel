@@ -361,6 +361,12 @@ function botView() {
     pricePerGB: Number(b.pricePerGB) || 0,
     trial: b.trial || telegram.defaults().trial,
     trialsTaken: telegram.trialsTaken(),
+    reward: Object.assign({}, telegram.defaults().reward, b.reward || {}, {
+      /* the ledgers live in the same object and are not settings - the page
+         gets the figures it needs through `rewardStats` instead */
+      people: undefined, codes: undefined
+    }),
+    rewardStats: telegram.rewardStats(),
     custom: Object.assign({}, telegram.defaults().custom, b.custom || {},
       { terms: telegram.customTerms() }),
     startOnFirstUse: b.startOnFirstUse === true,
@@ -472,6 +478,21 @@ router.put('/bot', async (req, res) => {
       mb: Math.max(1, num(body.trial.mb, 100)),
       days: Math.max(1, num(body.trial.days, 1)),
       oncePerUser: body.trial.oncePerUser !== false
+    });
+  }
+  if (body.reward && typeof body.reward === 'object') {
+    /*
+     * Written over what is there, like the trial, and for the same reason:
+     * everybody's invite code and everybody's count live in this object. A
+     * save that replaced it would wipe every link already handed out and
+     * every arrival they have earned.
+     */
+    b.reward = Object.assign({}, b.reward, {
+      enable: !!body.reward.enable,
+      need: Math.max(1, Math.min(1000, num(body.reward.need, 5))),
+      planId: String(body.reward.planId || ''),
+      label: String(body.reward.label || '').slice(0, 40) || '🎁 اشتراک رایگان',
+      text: String(body.reward.text || '').slice(0, 400)
     });
   }
   if (body.custom && typeof body.custom === 'object') {
