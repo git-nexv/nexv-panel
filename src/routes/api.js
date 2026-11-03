@@ -365,6 +365,7 @@ function botView() {
     pricePerGB: Number(b.pricePerGB) || 0,
     trial: b.trial || telegram.defaults().trial,
     trialsTaken: telegram.trialsTaken(),
+    offer: Object.assign({ enable: false, percent: 0, plans: {}, custom: true, label: '' }, b.offer || {}),
     reward: Object.assign({}, telegram.defaults().reward, b.reward || {}, {
       /* the ledgers live in the same object and are not settings - the page
          gets the figures it needs through `rewardStats` instead */
@@ -498,6 +499,24 @@ router.put('/bot', async (req, res) => {
       label: String(body.reward.label || '').slice(0, 40) || '🎁 اشتراک رایگان',
       text: String(body.reward.text || '').slice(0, 400)
     });
+  }
+  if (body.offer && typeof body.offer === 'object') {
+    const perPlan = {};
+    if (body.offer.plans && typeof body.offer.plans === 'object') {
+      for (const [id, value] of Object.entries(body.offer.plans)) {
+        const pc = Math.round(num(value));
+        /* zero is "no discount on this one", which is said by leaving it out
+           rather than by storing a row that means nothing */
+        if (pc > 0) perPlan[String(id)] = Math.min(95, pc);
+      }
+    }
+    b.offer = {
+      enable: !!body.offer.enable,
+      percent: Math.min(95, Math.max(0, Math.round(num(body.offer.percent)))),
+      plans: perPlan,
+      custom: body.offer.custom !== false,
+      label: String(body.offer.label || '').slice(0, 80)
+    };
   }
   if (body.custom && typeof body.custom === 'object') {
     b.custom = {

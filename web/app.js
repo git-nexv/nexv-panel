@@ -6305,6 +6305,8 @@ async function renderBot(view) {
     pricePerGB: Number(data.pricePerGB) || 0,
     trial: JSON.parse(JSON.stringify(data.trial || { enable: true, mb: 100, days: 1, inboundId: '', oncePerUser: true })),
     custom: JSON.parse(JSON.stringify(data.custom || { enable: false, minGB: 1, maxGB: 0, days: 30, inboundId: '' })),
+    offer: JSON.parse(JSON.stringify(data.offer
+      || { enable: false, percent: 0, plans: {}, custom: true, label: '' })),
     reward: JSON.parse(JSON.stringify(data.reward
       || { enable: false, need: 5, planId: '', label: '🎁 اشتراک رایگان', text: '' })),
     access: JSON.parse(JSON.stringify(data.access || { chooseName: true }))
@@ -6317,7 +6319,7 @@ async function renderBot(view) {
    * untouched: they are still loaded, still saved, and still what the bot
    * shows; there is just no longer a tab for rewriting them.
    */
-  const { wrap, panels } = tabbed(['Setup', 'Plans', 'Test config', 'Reward', 'Message', 'Manual plan', 'Access user', 'Payment', 'Help', 'Backup', 'Channel', 'Orders', 'AI']);
+  const { wrap, panels } = tabbed(['Setup', 'Plans', 'Offer', 'Test config', 'Reward', 'Message', 'Manual plan', 'Access user', 'Payment', 'Help', 'Backup', 'Channel', 'Orders', 'AI']);
   for (const panel of Object.values(panels)) panel.className = 'tab-panel';
   view.append(wrap);
 
@@ -6326,7 +6328,7 @@ async function renderBot(view) {
       brand: draft.brand, currency: draft.currency, adminId: draft.adminId,
       screens: draft.screens, plans: draft.plans, pay: draft.pay, channel: draft.channel,
       pricePerGB: draft.pricePerGB, trial: draft.trial, custom: draft.custom,
-      reward: draft.reward,
+      reward: draft.reward, offer: draft.offer,
       access: draft.access, startOnFirstUse: draft.startOnFirstUse,
       buttonStyle: draft.buttonStyle, viaOutbound: draft.viaOutbound, backup: draft.backup
     }, extra || {});
@@ -6756,6 +6758,128 @@ async function renderBot(view) {
       text: t('Each account gets the reward once. This opens it for everybody again.') })
   ]));
   hydrateIcons(panels.Reward);
+
+  /* ------------------------------- Offer -------------------------------- */
+  /*
+   * A sale, across the shop or one plan at a time.
+   *
+   * Both are things a shop wants to say: ten per cent off everything is a
+   * sale, and ten off the small one with twenty off the big one is pushing
+   * people up the list. So there is one figure for everything and a figure
+   * per plan that overrides it, and the table shows what each plan will
+   * actually cost so nobody has to do the arithmetic to find out.
+   *
+   * Nothing here rewrites a plan's price. The prices stay as they were typed
+   * and the discount is worked out wherever money is shown or taken, so
+   * ending the sale is this one switch rather than editing every plan back.
+   */
+  const offer = draft.offer = draft.offer
+    || { enable: false, percent: 0, plans: {}, custom: true, label: '' };
+  if (!offer.plans || typeof offer.plans !== 'object') offer.plans = {};
+
+  const offerRows = el('div');
+  const priceOf = (p) => Number(String(p.price || '').replace(/[^\d.]/g, '')) || 0;
+  const tidy = (n) => {
+    const v = Math.max(0, Math.round(n));
+    if (v >= 10000) return Math.round(v / 1000) * 1000;
+    if (v >= 1000) return Math.round(v / 100) * 100;
+    return v;
+  };
+  const cut = (p) => {
+    const own = Number(offer.plans[p.id]) || 0;
+    return own > 0 ? own : (Number(offer.percent) || 0);
+  };
+
+  const drawOffer = () => {
+    offerRows.innerHTML = '';
+    const list = (draft.plans || []).filter((p) => !p.custom);
+    if (!list.length) {
+      offerRows.append(el('div', { class: 'empty', text: t('Add a plan first.') }));
+      return;
+    }
+    const table = el('table');
+    table.innerHTML = '<thead><tr><th>Plan</th><th>Price</th><th>Discount %</th><th>They pay</th></tr></thead>';
+    const body = el('tbody');
+    for (const plan of list) {
+      const was = priceOf(plan);
+      const nowCell = el('td', { class: 'num' });
+      const box = el('input', {
+        type: 'number', min: '0', max: '95', style: 'max-width:90px',
+        value: offer.plans[plan.id] || '',
+        placeholder: String(offer.percent || 0)
+      });
+      const paint = () => {
+        const percent = offer.enable ? cut(plan) : 0;
+        const now = percent ? tidy(was * (1 - percent / 100)) : was;
+        nowCell.innerHTML = '';
+        if (percent && now < was) {
+          nowCell.append(
+            el('span', { class: 'muted', style: 'text-decoration:line-through', text: was.toLocaleString('en-US') }),
+            el('span', { text: ` ${now.toLocaleString('en-US')}` }),
+            el('span', { class: 'chip ok', style: 'margin-inline-start:8px', text: `${percent}%` })
+          );
+        } else {
+          nowCell.textContent = was.toLocaleString('en-US');
+        }
+      };
+      box.addEventListener('input', () => {
+        const n = Math.round(Number(box.value) || 0);
+        if (n > 0) offer.plans[plan.id] = Math.min(95, n);
+        else delete offer.plans[plan.id];
+        paint();
+      });
+      paint();
+      body.append(el('tr', {}, [
+        el('td', {}, [el('strong', { text: plan.name })]),
+        el('td', { class: 'num muted', text: was.toLocaleString('en-US') }),
+        el('td', {}, [box]),
+        nowCell
+      ]));
+    }
+    table.append(body);
+    const wrapTable = el('div', { class: 'table-wrap' });
+    wrapTable.append(table);
+    offerRows.append(wrapTable);
+  };
+
+  const offerGrid = el('div', { class: 'form-grid' });
+  const allPercent = bindTo(offer, 'percent',
+    el('input', { type: 'number', min: '0', max: '95', value: offer.percent || 0 }), Number);
+  allPercent.addEventListener('input', () => drawOffer());
+  formField(offerGrid, 'Off everything (%)', allPercent, {
+    hint: 'Applied to every plan that has no figure of its own below. 0 means only the per-plan ones count.'
+  });
+  formField(offerGrid, 'Banner', bindTo(offer, 'label',
+    el('input', { value: offer.label || '', maxLength: 80, placeholder: 'تخفیف ویژه پاییز' })), {
+    hint: 'The line above the plan list. Left empty, the bot writes it from the percentage.'
+  });
+  offerGrid.append(el('div', { class: 'field full' }, [
+    switchFor(offer, 'custom', 'Also on per-gigabyte purchases', true)
+  ]));
+
+  const offerSwitch = switchFor(offer, 'enable', 'Offer it');
+  offerSwitch.querySelector('input').addEventListener('change', () => drawOffer());
+
+  panels.Offer.append(el('div', { class: 'card' }, [
+    el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+      el('strong', { text: '🔥 Discount' }), offerSwitch
+    ]),
+    offerGrid,
+    el('div', { class: 'section-title', style: 'margin-top:8px', text: 'Per plan' }),
+    el('div', { class: 'hint', style: 'margin-bottom:10px' }, [
+      'Leave a plan empty and it follows the figure above. Fill one in and that plan uses its own.'
+    ]),
+    offerRows,
+    el('div', { class: 'hint', style: 'margin-top:10px' }, [
+      'Plan prices are never rewritten \u2014 the discount is worked out when a price is shown or '
+      + 'charged, so switching this off puts every price back exactly as it was.'
+    ]),
+    el('div', { class: 'row', style: 'margin-top:12px' }, [
+      el('button', { class: 'btn primary', text: 'Save', onclick: () => save() })
+    ])
+  ]));
+  drawOffer();
+  hydrateIcons(panels.Offer);
 
   /* ------------------------------ Message ------------------------------- */
   /*

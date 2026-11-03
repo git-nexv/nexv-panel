@@ -303,6 +303,10 @@ function defaults() {
        server works from the buyer's own phone, not to be a plan. */
     trial: { enable: true, mb: 100, days: 1, inboundId: '', oncePerUser: true },
 
+    /* a sale, across the shop or one plan at a time. The plans keep their own
+       prices; this is applied on top wherever money is shown or taken */
+    offer: { enable: false, percent: 0, plans: {}, custom: true, label: '' },
+
     /* bring people to the bot, get a subscription. Off until the admin picks
        which plan it hands over - there is no sensible default for that */
     reward: { enable: false, need: 5, planId: '', label: '🎁 اشتراک رایگان', text: '' },
@@ -906,16 +910,116 @@ function planPrice(plan) {
   return `${price} ${String(bot().currency || '').trim()}`.trim();
 }
 
+/* -------------------------------- the offer ------------------------------ */
+/*
+ * A discount, either across the shop or on one plan at a time.
+ *
+ * Two levels, because both are things a shop actually wants to say: "ten per
+ * cent off everything" is a sale, and "ten off the small one, twenty off the
+ * big one" is pushing people up the list. A plan with its own figure uses it;
+ * everything else falls back to the shop-wide one; with the offer switched
+ * off nothing is discounted at all, and the plans' own prices - which are
+ * never rewritten - are what is charged again.
+ *
+ * Nothing stores a discounted price. The plan keeps the price the admin
+ * typed and the discount is worked out wherever a price is shown or taken, so
+ * ending the sale is one switch and not a migration back through every plan.
+ */
+function offerSettings() {
+  const o = bot().offer || {};
+  const perPlan = {};
+  if (o.plans && typeof o.plans === 'object') {
+    for (const [id, value] of Object.entries(o.plans)) {
+      const n = Math.round(Number(value) || 0);
+      if (n > 0) perPlan[id] = Math.min(95, n);
+    }
+  }
+  return {
+    enable: !!o.enable,
+    percent: Math.min(95, Math.max(0, Math.round(Number(o.percent) || 0))),
+    plans: perPlan,
+    /* buying by the gigabyte is a sale like any other, so the shop-wide
+       figure reaches it too unless the admin says otherwise */
+    custom: o.custom !== false,
+    label: String(o.label || '').slice(0, 80)
+  };
+}
+
+/** How much off this plan, as a whole number of per cent. */
+function offerFor(plan) {
+  if (!plan) return 0;
+  const o = offerSettings();
+  if (!o.enable) return 0;
+  const mine = o.plans[plan.id];
+  if (mine > 0) return mine;
+  if (plan.custom && !o.custom) return 0;
+  return o.percent;
+}
+
+/** Is anything at all on offer right now? */
+function offerOn() {
+  const o = offerSettings();
+  if (!o.enable) return false;
+  return o.percent > 0 || Object.keys(o.plans).length > 0;
+}
+
+/* a price somebody reads: 90,000 rather than 89,999.99 */
+function tidyPrice(n) {
+  const value = Math.max(0, Math.round(Number(n) || 0));
+  if (value >= 10000) return Math.round(value / 1000) * 1000;
+  if (value >= 1000) return Math.round(value / 100) * 100;
+  return value;
+}
+
+/**
+ * What a plan costs now, and what it cost before.
+ *
+ * `was` is only set when there is really a discount, so every caller can use
+ * its presence to decide whether to show the old price struck through.
+ */
+function planCost(plan) {
+  const raw = Number(String(plan && plan.price || '').replace(/[^\d.]/g, '')) || 0;
+  const percent = offerFor(plan);
+  if (!raw || !percent) return { now: raw, was: 0, percent: 0 };
+  const now = tidyPrice(raw * (1 - percent / 100));
+  if (now >= raw) return { now: raw, was: 0, percent: 0 };
+  return { now, was: raw, percent };
+}
+
+/** The number an order is actually written for. */
+function chargeFor(plan) {
+  const p = planCost(plan);
+  return String(p.now || plan.price || '0');
+}
+
+const money = (n) => Number(n || 0).toLocaleString('en-US');
+
 /** For a message, where the name is marked up. */
 function planLine(plan) {
-  const price = planPrice(plan);
-  return `<b>${escapeHtml(plan.name)}</b>${price ? ` — ${escapeHtml(price)}` : ''}`;
+  const cur = String(bot().currency || '').trim();
+  const p = planCost(plan);
+  if (!p.now && !p.was) return `<b>${escapeHtml(plan.name)}</b>`;
+  if (!p.was) return `<b>${escapeHtml(plan.name)}</b> — ${money(p.now)} ${escapeHtml(cur)}`.trim();
+  return `<b>${escapeHtml(plan.name)}</b> — <s>${money(p.was)}</s> <b>${money(p.now)}</b> ${escapeHtml(cur)}`
+    + ` 🔥 ${p.percent}٪`;
 }
 
 /** The same thing for a button, where Telegram parses no markup at all. */
 function planButton(plan) {
-  const price = planPrice(plan);
-  return `${plan.name}${price ? ` — ${price}` : ''}`;
+  const cur = String(bot().currency || '').trim();
+  const p = planCost(plan);
+  if (!p.now && !p.was) return plan.name;
+  if (!p.was) return `${plan.name} — ${money(p.now)} ${cur}`.trim();
+  return `${plan.name} — ${money(p.now)} ${cur} (🔥${p.percent}٪)`.trim();
+}
+
+/** The line at the top of the plan list while a sale is on. */
+function offerBanner() {
+  if (!offerOn()) return '';
+  const o = offerSettings();
+  if (o.label) return `🔥 <b>${escapeHtml(o.label)}</b>`;
+  if (o.percent > 0) return `🔥 <b>تخفیف ویژه: ${o.percent}٪ روی اشتراک‌ها</b>`;
+  return '🔥 <b>تخفیف ویژه روی بعضی اشتراک‌ها</b>';
 }
 
 function isAdmin(from) {
@@ -1120,9 +1224,13 @@ async function showPlans(ctx, renewId) {
     ? [{ text: '⬅️ بازگشت', callback_data: `b:cfg:${renewId}` }]
     : backRow()[0]);
 
-  const head = renewId
-    ? '<b>تمدید اشتراک</b>\nحجم یا پلن تازه را انتخاب کنید — روی همین کانفیگ اعمال می‌شود:'
-    : '<b>اشتراک‌ها</b>\nیکی را انتخاب کنید:';
+  const banner = offerBanner();
+  const head = [
+    banner,
+    renewId
+      ? '<b>تمدید اشتراک</b>\nحجم یا پلن تازه را انتخاب کنید — روی همین کانفیگ اعمال می‌شود:'
+      : '<b>اشتراک‌ها</b>\nیکی را انتخاب کنید:'
+  ].filter(Boolean).join('\n\n');
   return reply(ctx, head, rows);
 }
 
@@ -2887,7 +2995,11 @@ async function placeOrder(ctx, planId, clientName, renewId) {
     at: Date.now(),
     planId: plan.id,
     planName: plan.name,
-    price: plan.price,
+    /* what is actually owed: the plan keeps the price the admin typed, and
+       the discount is applied here, once, where the money is decided */
+    price: chargeFor(plan),
+    listPrice: String(plan.price || ''),
+    offerPercent: offerFor(plan),
     userId: ctx.userId,
     /* where to write back to. In a private chat it is the same number as the
        user id, which is why nothing missed it before - but an order settled
@@ -4768,6 +4880,7 @@ module.exports = {
   creditReferral, showReward, claimReward, grantReward, resetRewards, shareText, shareUrl,
   knownPeople, meetPerson, hasMetBefore,
   rewardStats, keyboardFor, pairStartRows,
+  offerSettings, offerFor, offerOn, planCost, chargeFor, offerBanner, planButton, planLine,
   startBroadcast, stopBroadcast, broadcastStatus, audienceCounts, audienceIds,
   botStats,
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
