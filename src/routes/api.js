@@ -1246,8 +1246,18 @@ async function statusView(req, res) {
     });
   }
 
-  const clients = d.clients;
-  const totals = clients.reduce((acc, c) => {
+  /*
+   * The leader's own clients, with the reseller panels' counted separately.
+   *
+   * The figures here and the Clients page have to agree, and that page no
+   * longer shows a reseller's customers - so a dashboard that counted them in
+   * with everything else would be saying one number while the page under it
+   * showed another. They are still reported, as their own figure, because the
+   * server is carrying them either way and the leader should know.
+   */
+  const clients = d.clients.filter((c) => !c.resellerId);
+  const resellerClients = d.clients.filter((c) => c.resellerId);
+  const totals = d.clients.reduce((acc, c) => {
     acc.up += c.up || 0;
     acc.down += c.down || 0;
     return acc;
@@ -1264,7 +1274,10 @@ async function statusView(req, res) {
       clientsExpired: clients.filter((c) => xray.isExpired(c)).length,
       clientsDepleted: clients.filter((c) => xray.isOverQuota(c)).length,
       outbounds: (d.outbounds || []).length,
-      routingRules: (d.routing || []).length
+      routingRules: (d.routing || []).length,
+      /* on the reseller panels, and therefore not on the page above */
+      resellerClients: resellerClients.length,
+      resellerPanels: (d.resellers || []).length
     },
     traffic: totals,
     /* the bot's own figures, for the card on the dashboard. Cheap: all of it
@@ -1905,13 +1918,21 @@ router.get('/inbounds', (req, res) => {
   const mine = req.reseller
     ? resellers.inboundsOf(req.reseller, d.inbounds)
     : d.inbounds;
-  const pool = req.reseller ? resellers.clientsOf(req.reseller) : d.clients;
+  /* the leader counts their own, with the reseller panels' customers counted
+     beside them rather than mixed in - the Clients page no longer shows those,
+     and a count here that included them would disagree with it */
+  const pool = req.reseller
+    ? resellers.clientsOf(req.reseller)
+    : d.clients.filter((c) => !c.resellerId);
+  const theirs = req.reseller ? [] : d.clients.filter((c) => c.resellerId);
   res.json(mine.map((inb) => {
     const clients = membership.clientsOn(pool, inb.id);
+    const sold = membership.clientsOn(theirs, inb.id);
     return Object.assign({}, inb, {
       clientCount: clients.length,
-      up: clients.reduce((a, c) => a + (c.up || 0), 0),
-      down: clients.reduce((a, c) => a + (c.down || 0), 0)
+      resellerCount: sold.length,
+      up: clients.reduce((a, c) => a + (c.up || 0), 0) + sold.reduce((a, c) => a + (c.up || 0), 0),
+      down: clients.reduce((a, c) => a + (c.down || 0), 0) + sold.reduce((a, c) => a + (c.down || 0), 0)
     });
   }));
 });
@@ -2440,13 +2461,32 @@ function normalizeClient(body, existing, inbound) {
   return c;
 }
 
+/**
+ * Whose clients these are.
+ *
+ * A reseller panel's customers belong to that panel, not to the leader's own
+ * list. They were in it - every client anybody had ever sold was in one list -
+ * so the leader's Clients page filled up with people they had never sold to,
+ * cannot price, and have no business renaming or deleting. The reseller's own
+ * page shows them, and so does the Their clients tab on the reseller's entry
+ * in Admins, which is where somebody goes to deal with that panel.
+ *
+ * `?all=1` puts them back for a caller that really does want every client on
+ * the server - nothing in the panel asks for it today, and the counts on the
+ * dashboard say how many there are rather than hiding them.
+ */
+function visibleClients(req, list) {
+  if (req.reseller) return list.filter((c) => c.resellerId === req.reseller.id);
+  if (String(req.query.all || '') === '1') return list;
+  return list.filter((c) => !c.resellerId);
+}
+
 router.get('/clients', (req, res) => {
   const d = db.data;
   let list = req.query.inboundId
     ? membership.clientsOn(d.clients, req.query.inboundId)
     : d.clients;
-  // a reseller sees the people they sold to and nobody else
-  if (req.reseller) list = d.clients.filter((c) => c.resellerId === req.reseller.id);
+  list = visibleClients(req, list);
   res.json(list.map((c) => {
     const mine = membership.inboundsOf(c, d.inbounds);
     const inb = mine[0];
@@ -2658,7 +2698,10 @@ router.post('/clients/purge', async (req, res) => {
   const scoped = body.inboundId
     ? membership.clientsOn(d.clients, body.inboundId)
     : d.clients;
-  const doomed = scoped.filter(scope.match);
+  /* a tidy-up sweeps what the person can see and nothing else: "delete every
+     expired client" from the leader's page must not reach into a reseller's
+     customers, who are not on that page and are not theirs to delete */
+  const doomed = visibleClients(req, scoped).filter(scope.match);
   if (!doomed.length) return res.json({ ok: true, deleted: 0, names: [] });
 
   const ids = new Set(doomed.map((c) => c.id));

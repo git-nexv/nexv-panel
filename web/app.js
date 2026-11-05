@@ -2467,7 +2467,11 @@ async function renderInbounds(view) {
       el('td', { class: 'muted', text: proxy
         ? `FakeTLS · ${proxy.domain || '—'}`
         : `${inb.network}${inb.security !== 'none' ? ` · ${inb.security}` : ''}` }),
-      el('td', { text: proxy ? '—' : String(inb.clientCount) }),
+      el('td', { text: proxy ? '—'
+        : inb.resellerCount
+          ? `${inb.clientCount} + ${inb.resellerCount}`
+          : String(inb.clientCount),
+      title: inb.resellerCount ? `${inb.resellerCount} belong to admin panels` : '' }),
       el('td', { class: 'muted num', text: proxy ? '—' : bytes(inb.up + inb.down) }),
       el('td', {}, [statusChip]),
       el('td', {}, [el('div', { class: 'row-actions' }, [
@@ -3509,12 +3513,36 @@ async function renderClients(view) {
   /* a reseller reads the inbound list too now: it comes back as the ones the
      leader gave them and nothing else, and it is what lets them put a client
      on two of their inbounds instead of being stuck with one */
-  const [inbounds, clients] = await Promise.all([
+  const [inbounds, clients, status] = await Promise.all([
     api.get('/inbounds').catch(() => []),
-    api.get('/clients')
+    api.get('/clients'),
+    /* only for the one figure below: how many clients are on reseller panels
+       and therefore not in the list this page is about to draw */
+    isReseller() ? Promise.resolve(null) : api.get('/status').catch(() => null)
   ]);
   state.inbounds = inbounds;
   state.clients = clients;
+  if (status) state.status = status;
+
+  /*
+   * Say where the missing ones went.
+   *
+   * A reseller panel's customers are not on this page any more, and a page
+   * that is quietly shorter than the server is a page nobody trusts. The
+   * count is stated, with the way through to the panel that holds them.
+   */
+  if (!isReseller()) {
+    const elsewhere = Number((state.status && state.status.counts && state.status.counts.resellerClients) || 0);
+    if (elsewhere) {
+      view.append(el('div', { class: 'hint', style: 'margin-bottom:12px' }, [
+        `${elsewhere} ${t('more clients belong to admin panels and are managed there.')} `,
+        el('a', {
+          href: '#admins', text: t('Open Admins'),
+          onclick: (e) => { e.preventDefault(); navigate('admins'); }
+        })
+      ]));
+    }
+  }
 
   if (!isReseller() && !inbounds.length) return emptyState(wrap, 'Create an inbound first, then add clients to it.');
   if (!clients.length) {
