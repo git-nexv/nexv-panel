@@ -1057,7 +1057,9 @@ function groupIdOf(user) {
  * "permission denied", and the panel believes it wrote a good config.
  */
 async function testConfig() {
-  if (!fs.existsSync(XRAY_BIN)) return { ok: false, stderr: '', message: 'xray binary not found' };
+  if (!fs.existsSync(XRAY_BIN)) {
+    return { ok: false, stderr: '', message: `the xray binary is missing from ${XRAY_BIN} - reinstall it with: nexv update` };
+  }
   const user = await serviceUser();
   if (user && user !== 'root' && process.getuid && process.getuid() === 0) {
     const asUser = await run('runuser', ['-u', user, '--', XRAY_BIN, 'run', '-test', '-config', XRAY_CONFIG]);
@@ -1207,14 +1209,91 @@ async function apply() {
   return { ok: false, error: (await lastServiceError()) || messageOf(restart) || 'failed to restart xray' };
 }
 
-/** The journal line that actually says why xray refused to start. */
+/*
+ * Lines systemd writes about a failure, which say nothing about the failure.
+ *
+ * Every dead unit ends with the same three or four sentences - the job
+ * failed, the process exited with an error code, see systemctl status, see
+ * journalctl. They match any search for "failed" and they come last, so a
+ * search that takes the last match takes one of these and never the line
+ * above them where Xray said what was actually wrong. That is why the panel
+ * was showing "Job for xray.service failed because the control process
+ * exited with error code" and nothing else.
+ */
+const SYSTEMD_NOISE = new RegExp([
+  'Job for .* failed',
+  'Failed to start [A-Z]',          // systemd's own "Failed to start Xray Service."
+  'Deactivated successfully',
+  'control process exited',
+  'Failed with result',
+  'Unit .* entered failed state',
+  'Scheduled restart job',
+  'Stopped ', 'Stopping ', 'Started ', 'Starting ',
+  'See "?systemctl status', 'journalctl -xe',
+  'Main process exited',
+  'Dependency failed'
+].join('|'), 'i');
+
+/** The line that actually says why xray refused to start. */
 async function lastServiceError() {
-  const log = await run('journalctl', ['-u', XRAY_SERVICE, '-n', '25', '--no-pager'], 8000);
+  const log = await run('journalctl', ['-u', XRAY_SERVICE, '-n', '40', '--no-pager'], 8000);
   if (!log.ok) return '';
-  const lines = log.stdout.split('\n').filter((l) => /failed|error|address already in use|panic/i.test(l));
-  const line = lines[lines.length - 1] || '';
-  // strip the syslog prefix, keep the part a human needs
-  return line.replace(/^.*?(?:xray\[\d+\]|systemd\[\d+\]):\s*/, '').trim().slice(0, 200);
+
+  const clean = (line) => line
+    .replace(/^.*?(?:xray\[\d+\]|systemd\[\d+\]):\s*/, '')
+    .trim();
+
+  const lines = log.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+
+  /*
+   * Xray's own words first. It writes through the unit as xray[pid], and what
+   * it says - the config file it could not load, the port already in use, the
+   * key it could not read - is the whole answer. Only when it said nothing at
+   * all does anything systemd wrote become worth printing.
+   */
+  const mine = lines.filter((l) => /xray\[\d+\]:/.test(l) && !SYSTEMD_NOISE.test(l));
+  const failed = mine.filter((l) => /fail|error|invalid|unable|cannot|denied|refus|in use|panic|no such/i.test(l));
+  const pick = failed[failed.length - 1] || mine[mine.length - 1] || '';
+  if (pick) return clean(pick).slice(0, 300);
+
+  const other = lines.filter((l) => !SYSTEMD_NOISE.test(l)
+    && /fail|error|invalid|unable|cannot|denied|refus|in use|panic/i.test(l));
+  return clean(other[other.length - 1] || '').slice(0, 300);
+}
+
+/**
+ * Why Xray will not start, in the plainest terms available.
+ *
+ * Asked in the order that gives the most useful answer rather than the
+ * quickest. The config test is first because it reproduces the failure
+ * without the service and answers with Xray's own message; the journal is
+ * next, for anything that only goes wrong at run time; systemd's own sentence
+ * is last, because it never says anything. A port already in use gets the
+ * name of whatever is holding it, which is the one question that message
+ * always raises and never answers.
+ */
+async function whyDown(fallback) {
+  const test = await testConfig();
+  let reason = '';
+  if (!test.ok && (test.message || test.stderr)) {
+    reason = String(test.message || test.stderr).trim().slice(0, 300);
+  }
+  if (!reason) reason = await lastServiceError();
+  if (!reason) reason = String(fallback || '').trim().slice(0, 300);
+  if (!reason) return '';
+
+  const port = /address already in use|bind:.*:(\d+)|:(\d+).*address already in use/i.exec(reason);
+  if (/address already in use/i.test(reason)) {
+    const want = Number((port && (port[1] || port[2])) || 0)
+      || Number((/:(\d{2,5})\b/.exec(reason) || [])[1] || 0);
+    if (want) {
+      try {
+        const who = await require('./firewall').whoHas(want);
+        if (who && who.name) reason += ` — port ${want} is held by ${who.name} (pid ${who.pid})`;
+      } catch (_) { /* the message is still better than it was */ }
+    }
+  }
+  return reason;
 }
 
 let versionCache = null;
@@ -1633,6 +1712,7 @@ async function generateReality() {
 
 module.exports = {
   deadlineOf, repairClocks, isForeign, FOREIGN_PROTOCOLS,
+  whyDown, lastServiceError,
   xrayVersion,
   XRAY_BIN, XRAY_CONFIG, XRAY_SERVICE, API_PORT, BOT_PROXY_PORT, botVia, handOverConfig,
   buildConfig, writeConfig, testConfig, apply, serviceStatus, repairCerts, messageOf, isOverIpLimit,

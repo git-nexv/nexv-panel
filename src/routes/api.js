@@ -3466,13 +3466,30 @@ router.post('/xray/:action', async (req, res) => {
   const action = req.params.action;
   if (action === 'restart') {
     const result = await xray.apply();
-    logEvent('xray', `restart: ${result.ok ? 'ok' : result.error}`);
-    return result.ok ? res.json({ ok: true }) : bad(res, result.error);
+    if (result.ok) {
+      logEvent('xray', 'restart: ok');
+      return res.json({ ok: true });
+    }
+    const why = await xray.whyDown(result.error);
+    logEvent('xray', `restart: ${why || result.error}`);
+    return bad(res, why || result.error);
   }
   if (action === 'start' || action === 'stop') {
     const result = await xray[action]();
-    logEvent('xray', `${action}: ${result.ok ? 'ok' : result.stderr}`);
-    return result.ok ? res.json({ ok: true }) : bad(res, result.stderr || `${action} failed`);
+    if (result.ok) {
+      logEvent('xray', `${action}: ok`);
+      return res.json({ ok: true });
+    }
+    /*
+     * systemctl's own stderr is the same sentence for every failure - the job
+     * failed, see systemctl status - and it was all the panel ever showed. The
+     * reason is Xray's to give, so it is asked for it.
+     */
+    const why = action === 'start'
+      ? await xray.whyDown(result.stderr)
+      : (result.stderr || '').trim();
+    logEvent('xray', `${action}: ${why || 'failed'}`);
+    return bad(res, why || `${action} failed`);
   }
   return bad(res, 'unknown action');
 });
