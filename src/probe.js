@@ -20,12 +20,44 @@ const { spawn } = require('child_process');
 
 const XRAY_BIN = process.env.NEXV_XRAY_BIN || '/usr/local/bin/xray';
 
-/* small, always up, and answers with no body - the usual captive-portal check */
-const TARGET_HOST = process.env.NEXV_PROBE_HOST || 'cp.cloudflare.com';
-const TARGET_PATH = process.env.NEXV_PROBE_PATH || '/generate_204';
-const TARGET_PORT = Number(process.env.NEXV_PROBE_PORT || 80);
-const BOOT_TIMEOUT = 6000;
-const TEST_TIMEOUT = 12000;
+/*
+ * Where the probe sends its one request, and why there is more than one.
+ *
+ * These are the captive-portal endpoints: tiny, always up, and answering with
+ * no body at all. The test used to use a single one, and a working outbound
+ * whose exit could not reach that one host came back as "the request timed
+ * out" - which reads as "this outbound is broken" when the outbound is fine
+ * and one site is not reachable from where it comes out. Several are tried in
+ * turn and the first that answers is the answer; only when none of them does
+ * is there really something wrong, and then the error says so in those words.
+ *
+ * A single host can still be forced with NEXV_PROBE_HOST for a network where
+ * one of these is the only thing reachable.
+ */
+const TARGETS = process.env.NEXV_PROBE_HOST
+  ? [{
+    host: process.env.NEXV_PROBE_HOST,
+    path: process.env.NEXV_PROBE_PATH || '/generate_204',
+    port: Number(process.env.NEXV_PROBE_PORT || 80)
+  }]
+  : [
+    { host: 'cp.cloudflare.com', path: '/generate_204', port: 80 },
+    { host: 'connectivitycheck.gstatic.com', path: '/generate_204', port: 80 },
+    { host: 'www.msftconnecttest.com', path: '/connecttest.txt', port: 80 },
+    { host: 'detectportal.firefox.com', path: '/success.txt', port: 80 }
+  ];
+
+/*
+ * A slow link through two hops needs longer than a local one, but a button
+ * that can sit for a minute is a button people press twice. The first site
+ * gets the patient timeout - it is the one that normally answers, and on a
+ * congested link it may really need twelve seconds - and the fallbacks get a
+ * short one each, because by then the question is only whether some site
+ * answers at all. Worst case is about half a minute rather than a full one.
+ */
+const BOOT_TIMEOUT = 10000;
+const TEST_TIMEOUT = 8000;
+const RETRY_TIMEOUT = 5000;
 
 /*
  * The line of xray's output that says what went wrong, if there is one. The
@@ -74,14 +106,19 @@ function waitForPort(port, deadline) {
  * Written out by hand rather than pulled in: it is forty lines and the panel
  * has no runtime dependencies worth adding one to.
  */
-function throughSocks(port, host, targetPort, request) {
+function throughSocks(port, host, targetPort, request, timeout) {
   return new Promise((resolve, reject) => {
     const socket = net.connect({ host: '127.0.0.1', port });
     let stage = 'greeting';
     let buffer = Buffer.alloc(0);
 
-    const fail = (message) => { socket.destroy(); reject(new Error(message)); };
-    socket.setTimeout(TEST_TIMEOUT, () => fail('the request timed out'));
+    const fail = (message, tunnel) => {
+      socket.destroy();
+      const err = new Error(message);
+      if (tunnel) err.tunnel = true;
+      reject(err);
+    };
+    socket.setTimeout(Number(timeout) || TEST_TIMEOUT, () => fail('the request timed out'));
     socket.on('error', (err) => reject(err));
 
     socket.on('connect', () => socket.write(Buffer.from([0x05, 0x01, 0x00])));
@@ -106,8 +143,10 @@ function throughSocks(port, host, targetPort, request) {
       if (stage === 'connect') {
         if (buffer.length < 10) return;
         if (buffer[1] !== 0x00) {
-          // xray answers with a SOCKS failure when the outbound cannot connect
-          return fail('the outbound could not reach the server');
+          /* xray answers with a SOCKS failure when the outbound cannot
+             connect: that is the tunnel's own verdict and not this site's, so
+             it is marked, and the caller stops rather than trying the rest */
+          return fail('the outbound could not reach the server', true);
         }
         buffer = Buffer.alloc(0);
         stage = 'http';
@@ -201,19 +240,52 @@ async function testOutbound(outbound, peer) {
       return { ok: false, error: complaint(stderr) || 'xray would not start with this outbound' };
     }
 
-    const host = TARGET_PORT === 80 ? TARGET_HOST : `${TARGET_HOST}:${TARGET_PORT}`;
-    const request = Buffer.from(
-      `GET ${TARGET_PATH} HTTP/1.1\r\nHost: ${host}\r\nUser-Agent: nexv-probe\r\nConnection: close\r\n\r\n`,
-      'utf8'
-    );
+    /*
+     * Each target in turn. A refusal from the tunnel itself stops the whole
+     * thing - trying three more sites through an outbound that cannot connect
+     * only wastes the admin's time - but a site that does not answer is just
+     * that one site, and the next is tried.
+     */
+    const tried = [];
+    let first = true;
+    for (const target of TARGETS) {
+      const hostHeader = target.port === 80 ? target.host : `${target.host}:${target.port}`;
+      const request = Buffer.from(
+        `GET ${target.path} HTTP/1.1\r\nHost: ${hostHeader}\r\n`
+        + 'User-Agent: nexv-probe\r\nConnection: close\r\n\r\n',
+        'utf8'
+      );
 
-    const started = Date.now();
-    const status = await throughSocks(port, TARGET_HOST, TARGET_PORT, request);
-    const ms = Date.now() - started;
+      const started = Date.now();
+      let status;
+      try {
+        status = await throughSocks(port, target.host, target.port, request,
+          first ? TEST_TIMEOUT : RETRY_TIMEOUT);
+        first = false;
+      } catch (err) {
+        first = false;
+        if (err && err.tunnel) throw err;          // the outbound itself said no
+        tried.push(`${target.host}: ${err.message}`);
+        continue;
+      }
+      const ms = Date.now() - started;
+      const code = Number((status.split(' ')[1] || '0'));
+      if (!code) {
+        tried.push(`${target.host}: unexpected answer ${status.slice(0, 40)}`);
+        continue;
+      }
+      return { ok: true, ms, status: code, through: `${target.host}${target.path}`, tried };
+    }
 
-    const code = Number((status.split(' ')[1] || '0'));
-    if (!code) return { ok: false, error: `unexpected answer: ${status.slice(0, 80)}` };
-    return { ok: true, ms, status: code, through: `${TARGET_HOST}${TARGET_PATH}` };
+    /* the tunnel came up and carried nothing: that is a different fault from
+       one it would not open, and it is worth naming every site that was tried
+       so the next question is about the exit rather than about this panel */
+    return {
+      ok: false,
+      error: 'the outbound connected, but none of the test sites answered through it'
+        + ` (${tried.length} tried) - the far server is up but its own internet may be down`,
+      tried
+    };
   } catch (err) {
     /* xray writes why it gave up a moment after the socket drops, so the
        reason is worth waiting a breath for - "connection refused" or "invalid

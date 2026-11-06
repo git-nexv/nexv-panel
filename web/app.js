@@ -4397,7 +4397,12 @@ function testKeyFor(out) {
         if (answer.ok) {
           key.classList.add('ok-key');
           key.textContent = `${answer.ms}`;
-          key.title = `${answer.ms} ms to ${answer.through}`;
+          /* which site answered, and which did not: a reading taken through
+             the second site because the first was unreachable from the exit
+             is still a good reading, and saying so stops the next question */
+          const skipped = (answer.tried || []).length;
+          key.title = `${answer.ms} ms to ${answer.through}`
+            + (skipped ? ` (${skipped} other test site${skipped > 1 ? 's' : ''} did not answer)` : '');
           toast(`${out.tag}: ${answer.ms} ms`);
         } else {
           key.classList.add('bad-key');
