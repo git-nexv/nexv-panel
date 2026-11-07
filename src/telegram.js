@@ -826,6 +826,56 @@ async function upload(method, field, contentType, chatId, filename, content, cap
   });
 }
 
+/*
+ * The same thing for a message that is a photo.
+ *
+ * An order arrives as the buyer's receipt - a picture with the details as its
+ * caption - and a photo has no text to edit. editMessageText on one is
+ * refused, which is why marking an order handled had to know which of the two
+ * it was looking at. It tries the caption first and the text second, so the
+ * caller does not have to care.
+ */
+async function editCaptionOrText(chatId, messageId, text, keyboard) {
+  const markup = keyboard ? { inline_keyboard: styled(keyboard) } : undefined;
+  try {
+    return await call('editMessageCaption', {
+      chat_id: chatId, message_id: messageId, caption: text, parse_mode: 'HTML', reply_markup: markup
+    });
+  } catch (_) { /* not a photo, then */ }
+  try {
+    return await call('editMessageText', {
+      chat_id: chatId, message_id: messageId, text, parse_mode: 'HTML',
+      disable_web_page_preview: true, reply_markup: markup
+    });
+  } catch (err) {
+    runtime.error = err.message;
+    return null;
+  }
+}
+
+/**
+ * An order has been dealt with: say so on the order itself.
+ *
+ * Three things at once, because an admin working through a morning's receipts
+ * needs all three. The alert on the button is instant feedback that the tap
+ * registered at all. The order message is rewritten with the verdict on top
+ * and its buttons taken away, so a list of receipts shows at a glance which
+ * are done and none can be approved twice by a stray tap. And the plain
+ * message in the chat stays, because that is the one that survives scrolling
+ * back.
+ */
+async function markHandled(ctx, verdict, line) {
+  if (ctx.answer) ctx.answer(verdict, true);
+  if (ctx.messageId) {
+    const body = String(ctx.sourceText || '').trim();
+    await editCaptionOrText(ctx.chatId, ctx.messageId,
+      `${verdict}
+${body ? `
+${body}` : ''}`.trim(), null);
+  }
+  return send(ctx.chatId, line || verdict);
+}
+
 function edit(chatId, messageId, text, keyboard) {
   return call('editMessageText', {
     chat_id: chatId,
@@ -3797,9 +3847,17 @@ async function topUp(client, plan) {
 /** The admin looked at the receipt and it was good. */
 async function approveOrder(ctx, orderId) {
   const b = bot();
-  const order = b.orders.find((o) => o.id === orderId);
-  if (!order) return send(ctx.chatId, 'این سفارش پیدا نشد.');
-  if (order.status === 'done') return send(ctx.chatId, 'این سفارش قبلاً تایید شده است.');
+  /* the same tolerant lookup the gateway buttons use: a button built by an
+     older build of this carries a shortened id, and a button that does
+     nothing is worse than one that works */
+  const order = orderByToken(orderId);
+  if (!order) {
+    return markHandled(ctx, '❓ این سفارش پیدا نشد',
+      'این سفارش پیدا نشد — شاید پاک شده باشد.');
+  }
+  if (order.status === 'done') {
+    return markHandled(ctx, '✅ قبلاً تایید شده بود', 'این سفارش قبلاً تایید شده است.');
+  }
 
   /* delivered on receipt: approving only lifts the hold and, if it had been
      rejected in between, puts the config back */
@@ -3818,7 +3876,11 @@ async function approveOrder(ctx, orderId) {
       } else {
         await send(order.userId, 'پرداخت شما تایید شد ✅ ممنون از خریدتان.');
       }
-      return send(ctx.chatId, `تایید شد. کلاینت ${escapeHtml(client.email)} فعال است.`);
+      return markHandled(ctx, '✅ تایید شد', [
+        `<b>✅ سفارش تایید شد</b> — ${escapeHtml(order.planName || '')}`,
+        `کانفیگ <code>${escapeHtml(client.email)}</code> فعال است.`,
+        'به خریدار اطلاع داده شد.'
+      ].join('\n'));
     }
   }
 
@@ -3828,6 +3890,9 @@ async function approveOrder(ctx, orderId) {
     order.status = 'failed';
     order.error = handed.error;
     db.saveNow();
+    /* the buttons stay: this is worth trying again once whatever stopped it
+       is sorted, and taking them away would leave nothing to press */
+    if (ctx.answer) ctx.answer(`ساخت کانفیگ ناموفق بود:\n${handed.error}`, true);
     return send(ctx.chatId, `ساخت کلاینت ناموفق بود: ${escapeHtml(handed.error)}`);
   }
 
@@ -3838,7 +3903,10 @@ async function approveOrder(ctx, orderId) {
   await sendConfig(order.chatId || order.userId, handed.client,
     '<b>اشتراک شما آماده شد ✅</b>',
     `${escapeHtml(handed.plan.name)} · ${handed.plan.gb ? `${handed.plan.gb} گیگ` : 'نامحدود'} · ${handed.plan.days} روز`);
-  return send(ctx.chatId, `تایید شد. کلاینت ${escapeHtml(handed.client.email)} ساخته و برای خریدار ارسال شد.`);
+  return markHandled(ctx, '✅ تایید شد — کانفیگ ساخته شد', [
+    `<b>✅ سفارش تایید شد</b> — ${escapeHtml(order.planName || '')}`,
+    `کانفیگ <code>${escapeHtml(handed.client.email)}</code> ساخته و برای خریدار ارسال شد.`
+  ].join('\n'));
 }
 
 /**
@@ -3852,9 +3920,13 @@ async function approveOrder(ctx, orderId) {
 const REJECTED_NOTICE = '\u26d4 پرداخت شما تایید نشد';
 
 async function rejectOrder(ctx, orderId) {
-  const order = bot().orders.find((o) => o.id === orderId);
-  if (!order || order.status === 'rejected') {
-    return send(ctx.chatId, 'چیزی برای رد کردن نیست.');
+  const order = orderByToken(orderId);
+  if (!order) {
+    return markHandled(ctx, '❓ این سفارش پیدا نشد',
+      'این سفارش پیدا نشد — شاید پاک شده باشد.');
+  }
+  if (order.status === 'rejected') {
+    return markHandled(ctx, '✖️ قبلاً رد شده بود', 'این سفارش قبلاً رد شده است.');
   }
   order.status = 'rejected';
 
@@ -3873,9 +3945,14 @@ async function rejectOrder(ctx, orderId) {
     cut ? 'کانفیگی که ساخته شده بود حذف شد.' : '',
     'اگر فکر می‌کنید اشتباهی رخ داده با پشتیبانی تماس بگیرید.'
   ].filter(Boolean).join('\n'));
-  return send(ctx.chatId, cut
-    ? 'رد شد. کانفیگ خریدار حذف شد.'
-    : 'رد شد و به خریدار اطلاع داده شد.');
+
+  return markHandled(ctx,
+    cut ? '✖️ رد شد — کانفیگ حذف شد' : '✖️ رد شد',
+    [
+      `<b>✖️ سفارش رد شد</b> — ${escapeHtml(order.planName || '')}`,
+      cut ? 'کانفیگ خریدار حذف شد.' : 'کانفیگی برای حذف نبود.',
+      'به خریدار اطلاع داده شد.'
+    ].join('\n'));
 }
 
 
@@ -4044,8 +4121,14 @@ async function act(ctx, action, value) {
     case 'paid': return confirmGateway(ctx, value);
     case 'cancel': return cancelOrder(ctx, value);
     // approval buttons live in the admin's own chat, never in the buyer's
-    case 'ok': return ctx.isAdmin ? approveOrder(ctx, value) : send(ctx.chatId, 'فقط ادمین می‌تواند این کار را انجام دهد.');
-    case 'no': return ctx.isAdmin ? rejectOrder(ctx, value) : send(ctx.chatId, 'فقط ادمین می‌تواند این کار را انجام دهد.');
+    case 'ok':
+    case 'no': {
+      if (!ctx.isAdmin) {
+        if (ctx.answer) ctx.answer('فقط ادمین می‌تواند این کار را انجام دهد.', true);
+        return send(ctx.chatId, 'فقط ادمین می‌تواند این کار را انجام دهد.');
+      }
+      return action === 'ok' ? approveOrder(ctx, value) : rejectOrder(ctx, value);
+    }
     case 'noop': return ctx.answer ? ctx.answer('این فقط یک پیام آزمایشی است.', true) : undefined;
     case 'text': return reply(ctx, fill(value, ctx), backRow());
     default: return showScreen(ctx, 'start');
@@ -4269,13 +4352,16 @@ async function handle(update) {
     };
     rememberUser(ctx);
     meetPerson(ctx.userId);
+    /* what the message being acted on says, so an action that rewrites it
+       with its verdict can keep the details underneath */
+    ctx.sourceText = query.message.caption || query.message.text || '';
     // held until the gate has spoken, so its message can be the alert
     ctx.answer = (text, alert) => answer(query.id, text, alert);
     const [, action, ...rest] = String(query.data || '').split(':');
     /* these answer the tap themselves, with something worth reading: the
        membership re-check and the reward check both have a verdict to give,
        and a callback may only be answered once */
-    const SPEAKS = ['joined', 'rewardget'];
+    const SPEAKS = ['joined', 'rewardget', 'ok', 'no'];
     if (!SPEAKS.includes(action) && await gate(ctx)) {
       if (ctx.answer) ctx.answer();
       return null;
