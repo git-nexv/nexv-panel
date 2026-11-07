@@ -14,13 +14,8 @@
  */
 
 /* a classic script shares one global scope with app.js, so everything in here
-   stays inside the closure and only NEXV_I18N comes out */
+   stays inside the closure; the dictionary leaves through NEXV_I18N.add() */
 (function () {
-
-const LANGS = [
-  { code: 'en', label: 'English', dir: 'ltr' },
-  { code: 'fa', label: 'فارسی', dir: 'rtl' }
-];
 
 const FA = {
   /* ---------------------------- navigation ---------------------------- */
@@ -35,8 +30,6 @@ const FA = {
   'Logs': 'رویدادها',
   'More': 'بیشتر',
   'Sign out': 'خروج',
-  'Light or dark': 'روشن یا تیره',
-  'Language': 'زبان',
 
   /* ----------------------------- dashboard ---------------------------- */
   'CPU': 'پردازنده',
@@ -231,27 +224,16 @@ const FA = {
   'the address clients connect to': 'آدرسی که کلاینت‌ها به آن وصل می‌شوند',
   'the subscription title': 'عنوان سابسکریپشن',
 
-  'Welcome back': 'خوش آمدید',
-  'Sign in to manage your server': 'برای مدیریت سرورتان وارد شوید',
-  'Xray-core management': 'مدیریت هسته Xray',
-  'Sign in': 'ورود',
-  'Signing in…': 'در حال ورود…',
-  'Wrong username or password.': 'نام کاربری یا گذرواژه اشتباه است.',
-  'that username is taken': 'این نام کاربری گرفته شده است',
-  'this panel already has an account - sign in instead': 'این پنل از قبل حساب دارد — وارد شوید',
-  'this address is not open': 'این آدرس باز نیست',
-  'username and password are required': 'نام کاربری و گذرواژه لازم است',
-  'invalid credentials': 'اطلاعات ورود نادرست است',
-  'Sign-in failed.': 'ورود ناموفق بود.',
-  'Could not reach the server.': 'نتوانست به سرور برسد.',
-  'The server did not respond. Try again.': 'سرور جواب نداد. دوباره تلاش کنید.',
-  'Opening panel…': 'در حال باز کردن پنل…',
-  'Signed in, but the panel page did not load. Check "nexv logs" on the server.':
-    'وارد شدید، ولی صفحه پنل بالا نیامد. روی سرور «nexv logs» را ببینید.',
-  'Set up your panel': 'پنل خود را بسازید',
-  'Choose a username and password. This happens once.':
-    'یک نام کاربری و گذرواژه انتخاب کنید. این کار فقط یک بار انجام می‌شود.',
-  'Create my account': 'ساخت حساب',
+
+  /* the bot's card on the dashboard */
+  'Telegram bot': 'ربات تلگرام',
+  'People who have used it': 'کسانی که از آن استفاده کرده‌اند',
+  'Start pressed': 'تعداد استارت',
+  'Buyers': 'خریداران',
+  'Open the bot page': 'رفتن به صفحه ربات',
+  'The bot cannot message you — send /start to it from the admin account once.':
+    'ربات نمی‌تواند به شما پیام بدهد — یک بار از حساب ادمین برایش /start بفرستید.',
+  'The bot cannot message you yet.': 'ربات هنوز نمی‌تواند به شما پیام بدهد.',
 
   /* the log's own categories, which the server writes as one word */
   'auth': 'ورود',
@@ -1273,8 +1255,6 @@ const FA = {
   'Name template': 'قالب نام',
   'Available pieces': 'اجزای در دسترس',
   'Click one to drop it in where the cursor is.': 'روی هرکدام بزنید تا همان‌جا که مکان‌نما هست اضافه شود.',
-  'Username': 'نام کاربری',
-  'Password': 'رمز عبور',
   'Current password': 'رمز فعلی',
   'New password': 'رمز جدید',
   'Leave empty to keep the current password': 'خالی بگذارید تا رمز فعلی نگه داشته شود',
@@ -1571,39 +1551,12 @@ const PATTERNS = [
     (m) => `حساب «${m[1]}» حذف شود؟ از پنل خارج می‌شود و هرکس بعداً آدرسش را باز کند نام کاربری و گذرواژه تازه انتخاب می‌کند. کلاینت‌ها و موجودی‌اش می‌ماند.`]
 ];
 
-let current = 'en';
-
-function lang() { return current; }
-
-function setLang(code) {
-  current = LANGS.some((l) => l.code === code) ? code : 'en';
-  const meta = LANGS.find((l) => l.code === current);
-  document.documentElement.lang = current;
-  document.documentElement.dir = meta.dir;
-  document.body.dir = meta.dir;
-  try { localStorage.setItem('nexv-lang', current); } catch (_) { /* private window */ }
-  return current;
-}
-
-function stored() {
-  try { return localStorage.getItem('nexv-lang') || ''; } catch (_) { return ''; }
-}
-
-/** English in, the current language out - unchanged when there is no entry. */
-function t(value) {
-  if (current === 'en' || typeof value !== 'string' || !value) return value;
-  const key = value.trim();
-  if (Object.prototype.hasOwnProperty.call(FA, key)) {
-    // keep whatever spacing the caller had around it
-    return value.replace(key, FA[key]);
-  }
-  for (const [re, build] of PATTERNS) {
-    const m = re.exec(key);
-    if (m) return build(m);
-  }
-  return value;
-}
-
-window.NEXV_I18N = { t, setLang, lang, stored, LANGS };
+/*
+ * The engine, and the sign-in page's own words, are in i18n-core.js - which
+ * the sign-in page loads on its own, without this file. Everything above is
+ * handed over here, and every string the panel renders after this point goes
+ * through the same t().
+ */
+window.NEXV_I18N.add(FA, PATTERNS);
 
 }());

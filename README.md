@@ -120,6 +120,9 @@ out right to left. The choice is kept in the browser and saved to the panel,
 so a new device starts in the language the panel is run in. A string with no
 translation falls back to English rather than to nothing, so an untranslated
 corner still reads - `web/i18n.js` is one table and a line fixes one.
+(The sign-in page's own words, and the engine behind `t()`, live in the much
+smaller `web/i18n-core.js`, so that page does not load the whole dictionary
+just to translate eight labels.)
 
 ## Panel sections
 

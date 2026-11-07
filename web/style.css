@@ -36,6 +36,16 @@
   font-style: normal;
   font-display: swap;
 }
+/*
+ * Vazirmatn is a hundred and twelve kilobytes - by a wide margin the heaviest
+ * thing the panel sends - and it holds Persian and nothing a Latin page needs.
+ * The unicode-range says so, so a browser showing an English panel never asks
+ * for it at all, and the sign-in page in English weighs a third of what it
+ * did. A Persian page still fetches it, and font-display keeps the words on
+ * screen while it comes. The range is Arabic and its supplements, the Arabic
+ * presentation forms, the Persian digits inside that first block, and the
+ * zero-width non-joiner, which Persian cannot be set without.
+ */
 @font-face {
   font-family: 'Vazirmatn';
   src: url('fonts/vazirmatn.woff2') format('woff2-variations'),
@@ -43,6 +53,9 @@
   font-weight: 100 900;
   font-style: normal;
   font-display: swap;
+  unicode-range: U+060C-060D, U+0600-06FF, U+0750-077F, U+08A0-08FF,
+                 U+FB50-FDFF, U+FE70-FEFF, U+200C-200F, U+2066-2069,
+                 U+066A-066C, U+061B, U+061F, U+00AB, U+00BB;
 }
 
 :root {

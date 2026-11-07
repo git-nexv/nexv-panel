@@ -7,18 +7,43 @@
 <!-- The app's own mark, at the sizes each platform actually asks for. The
      paths are relative so they resolve under the panel's secret base path and
      under a reseller's slug without either being written down here. -->
+<!-- One mark, and the small PNG for a browser that will not take SVG. The
+     apple-touch icon, the maskable mark and the manifest are the installed
+     app's, so index.html carries them: asking for them here is five more
+     round trips before the form can be read, on the one page where the
+     person is still waiting to get in. -->
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <link rel="icon" href="icons/icon-32.png" sizes="32x32" type="image/png">
-<link rel="icon" href="icons/icon-16.png" sizes="16x16" type="image/png">
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="mask-icon" href="icons/icon-mono.svg" color="#d7dae2">
-<link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#191a1f">
 <meta name="application-name" content="NexV Panel">
 <meta name="apple-mobile-web-app-title" content="NexV">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<!--
+  The browser only discovers a @font-face once the stylesheet has arrived and
+  been parsed, so on a slow link the face costs a second round trip after the
+  CSS - a visible beat where the words reflow. Asking for it here, before the
+  stylesheet, overlaps the two. Figtree is on every page; the Persian face is
+  only asked for when the page is going to be Persian, which is the one thing
+  a static <link> cannot know.
+-->
+<link rel="preload" href="fonts/figtree.woff2" as="font" type="font/woff2" crossorigin>
+<script>
+(function () {
+  var want = '';
+  try { want = localStorage.getItem('nexv-lang') || ''; } catch (_) { /* private window */ }
+  if (!want) want = document.documentElement.getAttribute('data-lang') || 'en';
+  if (want !== 'fa') return;
+  var link = document.createElement('link');
+  link.rel = 'preload';
+  link.as = 'font';
+  link.type = 'font/woff2';
+  link.crossOrigin = 'anonymous';
+  link.href = 'fonts/vazirmatn.woff2';
+  document.head.appendChild(link);
+}());
+</script>
 <link rel="stylesheet" href="style.css">
 <script>
 /* Before the first paint, not after: the look is a preference this browser
@@ -92,7 +117,7 @@
   </form>
 </div>
 
-<script src="i18n.js"></script>
+<script src="i18n-core.js"></script>
 <script>
 /* The panel may live under a secret base path, injected by the server. */
 const BASE = window.__NEXV_BASE__ || './';

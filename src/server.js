@@ -93,15 +93,41 @@ app.use(express.urlencoded({ extended: false }));
  * phone connection, where that difference is most of the load time.
  * Responses below a KB cost more in headers than they save.
  */
+/*
+ * Brotli where the browser takes it, gzip otherwise. Every browser made in the
+ * last eight years asks for brotli over TLS, and on this panel's own files it
+ * is a fifth smaller than gzip - twenty kilobytes off the first load, which on
+ * a filtered mobile link is a second of staring at nothing.
+ */
+function squeeze(req) {
+  const accepts = req.headers['accept-encoding'] || '';
+  if (/\bbr\b/.test(accepts)) return 'br';
+  if (/\bgzip\b/.test(accepts)) return 'gzip';
+  return '';
+}
+
+function pack(buf, how, hard) {
+  if (how === 'br') {
+    return zlib.brotliCompressSync(buf, {
+      params: {
+        [zlib.constants.BROTLI_PARAM_QUALITY]: hard ? 11 : 5,
+        [zlib.constants.BROTLI_PARAM_SIZE_HINT]: buf.length
+      }
+    });
+  }
+  return zlib.gzipSync(buf, { level: hard ? 9 : 6 });
+}
+
 app.use((req, res, next) => {
-  if (!/\bgzip\b/.test(req.headers['accept-encoding'] || '')) return next();
+  const how = squeeze(req);
+  if (!how) return next();
   const send = res.send.bind(res);
   res.send = (body) => {
     const buf = Buffer.isBuffer(body) ? body : (typeof body === 'string' ? Buffer.from(body) : null);
     if (!buf || buf.length < 1024 || res.getHeader('Content-Encoding')) return send(body);
-    res.setHeader('Content-Encoding', 'gzip');
+    res.setHeader('Content-Encoding', how);
     res.setHeader('Vary', 'Accept-Encoding');
-    return send(zlib.gzipSync(buf));
+    return send(pack(buf, how, false));
   };
   next();
 });
@@ -352,16 +378,44 @@ const WEB_DIR = path.join(__dirname, '..', 'web');
 const assetCache = new Map();
 const ASSET_TYPES = { '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 
+function buildAsset(file) {
+  const stat = fs.statSync(file);
+  const raw = fs.readFileSync(file);
+  const entry = { mtime: stat.mtimeMs, raw, gzip: pack(raw, 'gzip', true), br: pack(raw, 'br', true) };
+  assetCache.set(file, entry);
+  return entry;
+}
+
+/*
+ * Squeeze the three big files before anybody asks for them.
+ *
+ * Brotli at its best setting costs well over half a second on app.js, and the
+ * cache was filled by whoever happened to arrive first - so the first person
+ * to open the panel after a restart waited most of a second for a compressor
+ * to finish, with the event loop blocked the whole time and nothing on their
+ * screen. That is the slow first load people kept reporting. Doing it here
+ * spends that second while nobody is waiting, one file per tick so a restart
+ * still answers immediately, and every real visitor finds the work done.
+ */
+function warmAssets() {
+  const queue = ['app.js', 'i18n.js', 'i18n-core.js', 'style.css']
+    .map((name) => path.join(WEB_DIR, name))
+    .filter((file) => fs.existsSync(file));
+  const next = () => {
+    const file = queue.shift();
+    if (!file) return;
+    try { buildAsset(file); } catch (_) { /* a missing file is served cold */ }
+    setTimeout(next, 0).unref();
+  };
+  setTimeout(next, 0).unref();
+}
+
 app.get(/^\/[\w.-]+\.(js|css)$/, (req, res, next) => {
   const file = path.join(WEB_DIR, path.basename(req.path));
   let entry = assetCache.get(file);
   try {
     const stat = fs.statSync(file);
-    if (!entry || entry.mtime !== stat.mtimeMs) {
-      const raw = fs.readFileSync(file);
-      entry = { mtime: stat.mtimeMs, raw, gzip: zlib.gzipSync(raw, { level: 9 }) };
-      assetCache.set(file, entry);
-    }
+    if (!entry || entry.mtime !== stat.mtimeMs) entry = buildAsset(file);
   } catch (_) {
     return next();
   }
@@ -370,9 +424,10 @@ app.get(/^\/[\w.-]+\.(js|css)$/, (req, res, next) => {
   res.setHeader('Vary', 'Accept-Encoding');
   // versioned URLs, so a long cache never serves a stale build
   res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-  if (/\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
-    res.setHeader('Content-Encoding', 'gzip');
-    return res.end(entry.gzip);
+  const how = squeeze(req);
+  if (how) {
+    res.setHeader('Content-Encoding', how);
+    return res.end(how === 'br' ? entry.br : entry.gzip);
   }
   return res.end(entry.raw);
 });
@@ -414,7 +469,7 @@ function renderPage(file, base) {
   const html = fs.readFileSync(path.join(WEB_DIR, file), 'utf8')
     // static assets are cached for an hour, so an update has to change the URL
     // or browsers keep running the previous panel against the new server
-    .replace(/(href|src)="(app\.js|style\.css|i18n\.js)"/g, `$1="$2?v=${ASSET_VERSION}"`)
+    .replace(/(href|src)="(app\.js|style\.css|i18n\.js|i18n-core\.js)"/g, `$1="$2?v=${ASSET_VERSION}"`)
     .replace(
       '</head>',
       `<base href="${prefix}">\n<script>window.__NEXV_BASE__=${JSON.stringify(prefix)};</script>\n</head>`
@@ -739,6 +794,8 @@ if (require.main === module) {
         // printed every start: without the path the panel cannot be reached
         console.log(`[nexv] web path: ${base || '/'}`);
         if (!tls) console.log('[nexv] TLS is off - set a certificate in Settings, or run: nexv cert <domain>');
+        // compress the big files now, so the first visitor does not wait for it
+        warmAssets();
         startJobs();
       })
       .on('error', (err) => {
