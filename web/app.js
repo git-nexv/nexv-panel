@@ -2390,6 +2390,63 @@ function showProxyLink(inb, proxy) {
   });
 }
 
+/**
+ * Why a Telegram proxy is not working, in a sentence.
+ *
+ * The row could say "not running" and that was the end of the conversation:
+ * no log, no reason, and a switch that appeared to do nothing. This asks the
+ * server, which runs mtg's own check over the written configuration and reads
+ * back the last thing the daemon said, and offers to try again.
+ */
+async function showProxyHealth(inb) {
+  const dlg = modal({
+    title: inb.remark || 'Telegram proxy',
+    subtitle: 'Checking…',
+    body: el('div', { class: 'muted', text: 'Asking the proxy what is wrong. This takes a few seconds.' }),
+    width: 480
+  });
+  let why;
+  try {
+    why = await api.get(`/mtproto/${inb.id}/why`);
+  } catch (err) {
+    why = { running: false, reason: err.message || 'the panel could not check', detail: '' };
+  }
+  dlg.close();
+
+  const body = el('div', {}, [
+    el('div', { class: why.running && !why.reason ? 'chip ok' : 'chip danger',
+      text: why.running ? (why.reason ? 'Running, with a problem' : 'Running') : 'Not running' }),
+    why.reason ? el('p', { style: 'margin:12px 0 0', text: why.reason }) : null,
+    !why.reason && why.running
+      ? el('p', { style: 'margin:12px 0 0', text: 'The proxy is up and mtg is happy with its settings. '
+        + 'If clients still cannot connect, the port is most likely blocked between here and them — '
+        + 'try another port, or a different disguise domain.' })
+      : null,
+    why.detail ? el('div', { class: 'link-box', style: 'margin-top:12px;white-space:pre-wrap;text-align:left;direction:ltr',
+      text: why.detail }) : null
+  ]);
+
+  return modal({
+    title: inb.remark || 'Telegram proxy',
+    subtitle: `port ${inb.port}`,
+    body,
+    width: 480,
+    actions: [
+      { label: 'Edit settings', onClick: (close) => { close(); inboundForm(inb); } },
+      { label: 'Start it again', kind: 'primary', onClick: async (close) => {
+        try {
+          await api.post(`/mtproto/${inb.id}/restart`);
+          toast('Started', 'ok');
+        } catch (err) {
+          toast(err.message || 'It would not start', 'err');
+        }
+        close();
+        render();
+      } }
+    ]
+  });
+}
+
 async function renderInbounds(view) {
   view.append(el('div', { class: 'between', style: 'margin-bottom:16px' }, [
     el('div', { class: 'muted', text: 'Each inbound is one port and one protocol that clients connect to.' }),
@@ -2479,6 +2536,12 @@ async function renderInbounds(view) {
           class: 'btn icon ghost', title: 'Telegram link and QR', html: icon('qr'),
           onclick: () => showProxyLink(inb, proxy)
         }) : null,
+        /* only when it is not up: a healthy proxy does not need explaining,
+           and a row of buttons that are never pressed is a row nobody reads */
+        proxy && !proxy.running && inb.enable !== false ? el('button', {
+          class: 'btn icon ghost', title: 'Why is it not running?', html: icon('activity'),
+          onclick: () => showProxyHealth(inb)
+        }) : null,
         el('button', { class: 'btn icon ghost', title: 'Edit', html: icon('edit'), onclick: () => inboundForm(inb) }),
         el('button', {
           class: 'btn icon ghost', title: 'Enable / disable', html: icon('power'),
@@ -2489,6 +2552,7 @@ async function renderInbounds(view) {
         popupMenu(proxy ? [
           { label: 'Edit', onClick: () => inboundForm(inb) },
           { label: 'Telegram link', onClick: () => showProxyLink(inb, proxy) },
+          { label: 'Check it / why is it down', onClick: () => showProxyHealth(inb) },
           'sep',
           { label: 'Delete', danger: true, onClick: () => deleteInbound(inb) }
         ] : [
@@ -2808,6 +2872,75 @@ function inboundForm(existing) {
   const mtNote = el('div', { class: 'hint' });
   add('Protocol', 'Telegram link', mtNote, { full: true });
 
+  /*
+   * And the dials that decide whether it connects at all.
+   *
+   * There used to be two fields here, and a proxy that would not come up gave
+   * the admin nothing to try. Each of these is a real setting in mtg's own
+   * configuration, named for what it does rather than what the key is called,
+   * and the defaults are the ones that survive a filtered link. The three
+   * that matter when it is not working are the resolver, "connect to instead"
+   * and the address family; the rest are here because tuning them is the
+   * difference between a proxy that lasts and one that gets found.
+   */
+  const mtPreferIP = add('Protocol', 'Reach Telegram over', selectOf([
+    { value: 'prefer-ipv4', label: 'IPv4 first' },
+    { value: 'prefer-ipv6', label: 'IPv6 first' },
+    { value: 'only-ipv4', label: 'IPv4 only' },
+    { value: 'only-ipv6', label: 'IPv6 only' }
+  ], v.mtPreferIP || 'prefer-ipv4'), {
+    hint: 'A server whose IPv6 is configured but dead fails every connection while looking fine. '
+      + 'IPv4 first is the safe answer; pick only-IPv4 to rule it out completely.'
+  });
+  const mtDns = add('Protocol', 'DNS resolver', text(v.mtDns || 'system'), {
+    full: true,
+    placeholder: 'system',
+    hint: 'The proxy ignores the system resolver by default and asks Cloudflare over HTTPS, which '
+      + 'is blocked or answers with a lie in most places this is wanted — and it fails at startup, '
+      + 'so nothing connects. "system" hands DNS back to the server. Also takes https://… , tls://… '
+      + 'or a plain address.'
+  });
+  const mtFrontHost = add('Protocol', 'Connect to instead', text(v.mtFrontHost || ''), {
+    placeholder: 'leave empty',
+    hint: 'When the disguise domain cannot be resolved or reached from this server, put its IP here. '
+      + 'The name is still what clients announce; only the address dialled changes.'
+  });
+  const mtFrontPort = add('Protocol', 'Disguise port', text(v.mtFrontPort || 443, { type: 'number' }), {
+    hint: 'The port the disguise site is reached on. 443 unless it is behind something unusual.'
+  });
+  const mtSkew = add('Protocol', 'Clock tolerance', text(v.mtSkew || '5s'), {
+    hint: 'Every connection carries a timestamp and one outside this window is refused. A server '
+      + 'whose clock has drifted rejects everybody while looking perfectly healthy. Raise it if '
+      + 'nothing connects and nothing is logged.'
+  });
+  const mtFallbackDC = add('Protocol', 'Accept any datacentre', toggle(v.mtFallbackDC !== false), {
+    hint: 'Telegram sometimes asks for a datacentre the proxy has not heard of. Off, the connection '
+      + 'is refused; on, it is served by another one a little more slowly.'
+  });
+  const mtConcurrency = add('Protocol', 'Max connections', text(v.mtConcurrency || 8192, { type: 'number' }), {
+    hint: 'Connections at once before new ones are dropped.'
+  });
+  const mtAntiReplay = add('Protocol', 'Anti-probe cache', toggle(v.mtAntiReplay !== false), {
+    hint: 'Remembers how each connection opened, so a censor replaying one is not answered. '
+      + 'Worth leaving on.'
+  });
+  const mtBlocklist = add('Protocol', 'IP blocklist', toggle(!!v.mtBlocklist), {
+    hint: 'Downloads the FireHOL list and refuses the addresses on it. Off by default: the download '
+      + 'is unreachable from most servers this runs on, and the default list contains the private '
+      + 'ranges, so it rejects anyone testing from the same network.'
+  });
+  const mtUpstream = el('textarea', {
+    style: 'min-height:70px', placeholder: 'socks5://user:password@host:port'
+  }, [v.mtUpstream || '']);
+  add('Protocol', 'Through a SOCKS5 proxy', mtUpstream, {
+    full: true,
+    hint: 'For a server that cannot reach Telegram directly. One per line; with more than one the '
+      + 'proxy balances between them. Empty means connect directly.'
+  });
+  const mtDebug = add('Protocol', 'Verbose logging', toggle(!!v.mtDebug), {
+    hint: 'Turn on while working out why a proxy will not start, then off again.'
+  });
+
   const udp = add('Protocol', 'UDP relay', toggle(v.udp !== false));
   const allowTransparent = add('Protocol', 'Allow transparent', toggle(v.allowTransparent));
   const targetAddress = add('Protocol', 'Forward to address', text(v.targetAddress || '127.0.0.1'));
@@ -3070,7 +3203,10 @@ function inboundForm(existing) {
     const isMt = proto === 'mtproto';
     const hasStream = !isMt && proto !== 'wireguard' && proto !== 'dokodemo-door';
 
-    show([fieldOf(mtDomain), fieldOf(mtNewSecret), fieldOf(mtNote)], isMt);
+    show([fieldOf(mtDomain), fieldOf(mtNewSecret), fieldOf(mtNote),
+      fieldOf(mtPreferIP), fieldOf(mtDns), fieldOf(mtFrontHost), fieldOf(mtFrontPort),
+      fieldOf(mtSkew), fieldOf(mtFallbackDC), fieldOf(mtConcurrency), fieldOf(mtAntiReplay),
+      fieldOf(mtBlocklist), fieldOf(mtUpstream), fieldOf(mtDebug)], isMt);
     showTab('Stream', !isMt);
     showTab('Security', !isMt);
     showTab('Sniffing', !isMt);
@@ -3172,6 +3308,17 @@ function inboundForm(existing) {
              here - a secret that arrived from a form is one nobody checked */
           mtDomain: mtDomain.value.trim(),
           mtNewSecret: toggleValue(mtNewSecret),
+          mtPreferIP: mtPreferIP.value,
+          mtDns: mtDns.value.trim(),
+          mtFrontHost: mtFrontHost.value.trim(),
+          mtFrontPort: Number(mtFrontPort.value) || 443,
+          mtSkew: mtSkew.value.trim(),
+          mtFallbackDC: toggleValue(mtFallbackDC),
+          mtConcurrency: Number(mtConcurrency.value) || 8192,
+          mtAntiReplay: toggleValue(mtAntiReplay),
+          mtBlocklist: toggleValue(mtBlocklist),
+          mtUpstream: mtUpstream.value.trim(),
+          mtDebug: toggleValue(mtDebug),
           method: ssMethod.value,
           password: ssPassword.value,
           udp: toggleValue(udp),

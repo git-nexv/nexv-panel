@@ -166,19 +166,183 @@ async function isRunning(inb) {
   return out.ok;
 }
 
+/* ------------------------------- the dials ------------------------------- */
+
+/*
+ * What an MTProto inbound can be tuned with, and what it is when nobody has.
+ *
+ * mtg has a lot of knobs and the panel used to write three lines: a secret, a
+ * port and prefer-ipv4. That was fine on a server with clean DNS and one
+ * proxy on it, and wrong almost everywhere else - which is why the thing
+ * would not connect. Each of these is a real key in mtg's own config; the
+ * defaults here are the ones that work on a filtered link rather than the
+ * ones upstream ships, and every one of them is on the inbound's form.
+ */
+const TUNING = {
+  /* The port mtg reaches the fronting site on. Only moved behind a balancer. */
+  mtFrontPort: 443,
+  /*
+   * Where to actually connect for domain fronting, when the disguise domain
+   * cannot be resolved from this server. The name still goes in the TLS
+   * hello; only the address dialled changes. On a filtered link this is
+   * occasionally the whole difference between a proxy that works and one
+   * that does not, and there is no way to guess it, so it is a field.
+   */
+  mtFrontHost: '',
+  /*
+   * Which address family to reach Telegram over. mtg prefers IPv6 by default
+   * and a server whose IPv6 is configured but dead then fails every
+   * connection until it times out; preferring v4 is the safe default and the
+   * only-* modes are there for a server that really is one or the other.
+   */
+  mtPreferIP: 'prefer-ipv4',
+  /* How many connections at once before new ones are dropped. */
+  mtConcurrency: 8192,
+  /*
+   * FakeTLS carries a timestamp and mtg rejects anything outside this window.
+   * The default is three seconds, and a VPS whose clock has drifted further
+   * than that refuses every single client while looking perfectly healthy -
+   * no error, no log, just nothing connecting. Five is still tight enough to
+   * stop a replay and loose enough to survive a clock nobody is watching.
+   */
+  mtSkew: '5s',
+  /*
+   * Telegram occasionally asks for a datacentre the proxy has not heard of.
+   * Upstream rejects it; any DC can serve any request at the cost of a little
+   * latency, so accepting is the difference between a client that reconnects
+   * and one that sits there failing.
+   */
+  mtFallbackDC: true,
+  /*
+   * mtg ignores the system resolver and does DNS over HTTPS, to Cloudflare by
+   * default. Where 1.1.1.1 is blocked or answers with a lie - which is most
+   * of the places anybody wants this proxy - that fails, and it fails at
+   * startup while resolving the disguise domain. This is settable, and
+   * "system" hands DNS back to the operating system, which on a server with a
+   * working resolver is the one thing certain to answer.
+   */
+  mtDns: 'system',
+  /*
+   * Upstream SOCKS5 proxies for mtg's own traffic to Telegram, one per line.
+   * More than one and it balances between them. For a server that cannot
+   * reach Telegram directly at all.
+   */
+  mtUpstream: '',
+  /* The anti-probing cache. Worth keeping on; a dial because it costs memory. */
+  mtAntiReplay: true,
+  /*
+   * The FireHOL blocklist, which upstream has on. It is downloaded from
+   * iplists.firehol.org - unreachable from exactly the servers this panel
+   * tends to run on, so it silently never loads - and the default list
+   * contains the private ranges, so it rejects anybody testing from the same
+   * network. Off unless it is asked for.
+   */
+  mtBlocklist: false,
+  /* Verbose logging, for working out why a proxy will not come up. */
+  mtDebug: false
+};
+
+const PREFER_IP = ['prefer-ipv4', 'prefer-ipv6', 'only-ipv4', 'only-ipv6'];
+
+/** One inbound's dials, with anything unset or nonsensical filled in. */
+function tuning(inb) {
+  const out = Object.assign({}, TUNING);
+  for (const key of Object.keys(TUNING)) {
+    const got = inb[key];
+    if (got === undefined || got === null || got === '') continue;
+    out[key] = typeof TUNING[key] === 'boolean' ? !!got : got;
+  }
+  out.mtFrontPort = Math.min(65535, Math.max(1, Number(out.mtFrontPort) || 443));
+  out.mtConcurrency = Math.min(1000000, Math.max(16, Number(out.mtConcurrency) || 8192));
+  if (!PREFER_IP.includes(out.mtPreferIP)) out.mtPreferIP = TUNING.mtPreferIP;
+  if (!/^\d+(\.\d+)?(ms|s|m|h)$/.test(String(out.mtSkew))) out.mtSkew = TUNING.mtSkew;
+  return out;
+}
+
+/** TOML string literal: mtg's parser, so the usual two characters. */
+function q(value) {
+  return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+/*
+ * mtg will not take a hostname in bind-to: it wants a literal address or it
+ * refuses to start, and the refusal reads like a parse error rather than
+ * "that is a domain". An inbound whose listen was filled in with the server's
+ * own domain - which is a reasonable thing for somebody to type - therefore
+ * produced a proxy that was never running and never said why.
+ */
+function bindHost(inb) {
+  const want = String(inb.listen || '').trim();
+  if (!want || want === '*' || want === '0.0.0.0') return '0.0.0.0';
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(want)) return want;
+  if (want.includes(':')) return `[${want.replace(/^\[|\]$/g, '')}]`;
+  throw new Error(`"${want}" is a name, and the Telegram proxy can only listen on an IP address `
+    + '- leave the listen field empty to take every address');
+}
+
+/** The addresses to tell mtg are ours, so it never asks the internet. */
+function publicIPs() {
+  const out = { v4: '', v6: '' };
+  const seen = String(db.settings.serverIP || '').trim();
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(seen)) out.v4 = seen;
+  else if (seen.includes(':')) out.v6 = seen;
+  return out;
+}
+
 function writeConfig(inb) {
   fs.mkdirSync(DIR, { recursive: true, mode: 0o700 });
-  /* two required keys and nothing else. prefer-ip keeps it on IPv4, which is
-     what a server with no working IPv6 needs and costs nothing where it has */
-  const toml = [
-    '# written by the NexV panel - edit the inbound there, not this file',
-    `secret = "${inb.mtSecret}"`,
-    `bind-to = "${inb.listen && inb.listen !== '0.0.0.0' ? inb.listen : '0.0.0.0'}:${Number(inb.port)}"`,
-    'prefer-ip = "prefer-ipv4"',
-    ''
-  ].join('\n');
+  const t = tuning(inb);
+  const ips = publicIPs();
+  const lines = [
+    '# Written by the NexV panel. Edit the inbound in the panel, not this file:',
+    '# it is rewritten from scratch every time the inbound is saved.',
+    '',
+    `secret = ${q(inb.mtSecret)}`,
+    `bind-to = ${q(`${bindHost(inb)}:${Number(inb.port)}`)}`,
+    `prefer-ip = ${q(t.mtPreferIP)}`,
+    `concurrency = ${t.mtConcurrency}`,
+    `tolerate-time-skewness = ${q(t.mtSkew)}`,
+    `allow-fallback-on-unknown-dc = ${t.mtFallbackDC ? 'true' : 'false'}`,
+    `debug = ${t.mtDebug ? 'true' : 'false'}`
+  ];
+
+  /*
+   * Without these mtg asks ifconfig.co what its own address is, every start.
+   * From a server behind the kind of filtering this proxy exists to get
+   * through, that request hangs until it times out, and the proxy is down for
+   * as long as it takes. The panel already knows the address.
+   */
+  if (ips.v4) lines.push(`public-ipv4 = ${q(ips.v4)}`);
+  if (ips.v6) lines.push(`public-ipv6 = ${q(ips.v6)}`);
+
+  lines.push('', '[domain-fronting]', `port = ${t.mtFrontPort}`);
+  if (t.mtFrontHost) lines.push(`host = ${q(t.mtFrontHost)}`);
+
+  lines.push('', '[network]');
+  /*
+   * An empty dns leaves mtg on the operating system's resolver. Anything else
+   * is handed over as written - mtg takes https:// for DoH, tls:// for DoT
+   * and a bare address for plain UDP.
+   */
+  const dns = String(t.mtDns || '').trim();
+  lines.push(`dns = ${q(dns && dns !== 'system' ? dns : '')}`);
+  const ups = String(t.mtUpstream || '').split(/[\n,]+/).map((x) => x.trim()).filter(Boolean);
+  lines.push(`proxies = [${ups.map(q).join(', ')}]`);
+
+  lines.push('', '[defense.anti-replay]', `enabled = ${t.mtAntiReplay ? 'true' : 'false'}`);
+  lines.push('', '[defense.blocklist]', `enabled = ${t.mtBlocklist ? 'true' : 'false'}`);
+
+  /*
+   * Upstream turns Prometheus on and binds it to 127.0.0.1:3129 - a fixed
+   * port, in a panel where two Telegram proxies are two processes. The second
+   * one lost the race for that port and died on startup, every time, and the
+   * inbound simply showed as not running. Nothing here reads those metrics,
+   * so it is off.
+   */
+  lines.push('', '[stats.prometheus]', 'enabled = false', '');
+
   const file = configOf(inb);
-  fs.writeFileSync(file, toml, { mode: 0o600 });
+  fs.writeFileSync(file, lines.join('\n'), { mode: 0o600 });
   return file;
 }
 
@@ -246,7 +410,15 @@ async function stopOne(inb, remove) {
 /* what the running daemons would have to match; see sync() */
 function fingerprint() {
   return inbounds()
-    .map((i) => [i.id, i.port, i.listen || '', i.mtSecret || '', i.enable !== false].join(':'))
+    .map((i) => {
+      const t = tuning(i);
+      /* every dial, not just the port and the key: a change to the resolver
+         or the fronting address rewrites the config file, and leaving them
+         out here meant the daemon kept running with the old one and the
+         admin's change silently did nothing */
+      const dials = Object.keys(TUNING).sort().map((k) => `${k}=${t[k]}`).join(',');
+      return [i.id, i.port, i.listen || '', i.mtSecret || '', i.enable !== false, dials].join(':');
+    })
     .sort()
     .join('|');
 }
@@ -301,6 +473,93 @@ async function sync(force) {
   /* remembered only when nothing failed: a daemon that would not start has to
      be tried again on the next pass, not written off as done */
   lastSynced = out.failed.length ? null : now;
+  return out;
+}
+
+/* ------------------------------ why it is down --------------------------- */
+
+/* systemd ends every failure with the same two or three lines, and a search
+   for "failed" finds those rather than the thing that actually broke */
+const UNIT_NOISE = /^(Stopped|Started|Deactivated successfully|Scheduled restart|Consumed |Main process exited|Failed with result|Service hold-off|Unit .* entered failed state)/i;
+
+/** The last line mtg itself wrote, skipping systemd's own epitaph. */
+async function lastLog(inb) {
+  if (!hasSystemd()) return '';
+  const out = await run('journalctl', ['-u', serviceOf(inb), '-n', '60', '--no-pager', '-o', 'cat'], 10000);
+  const lines = (out.stdout || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!UNIT_NOISE.test(lines[i])) return lines[i].slice(0, 300);
+  }
+  return '';
+}
+
+/*
+ * Turn mtg's own words into something a person can act on.
+ *
+ * These are the failures that actually happen, in the order they happen, and
+ * every one of them used to surface as an inbound that was simply not running
+ * with no explanation anywhere in the panel.
+ */
+const KNOWN = [
+  [/address already in use/i, (p) => `port ${p.port} is already taken by something else on this server`],
+  [/permission denied/i, (p) => `the proxy is not allowed to open port ${p.port}`],
+  [/bind|parse.*bind-to|invalid.*address/i, () => 'the listen address is not one mtg will take - leave it empty for every address'],
+  [/secret/i, () => 'the key is malformed - make a new one on the inbound'],
+  [/no such host|lookup .* no such|dns|resolve/i, (p) => `this server cannot resolve ${p.domain || 'the disguise domain'}. `
+    + 'Set the DNS resolver on the inbound, or fill in "connect to instead" with its IP address'],
+  [/i\/o timeout|connection refused|unreachable|context deadline/i, (p) => `this server cannot reach ${p.domain || 'the disguise domain'} on port ${p.frontPort}. `
+    + 'Try another disguise domain, or point "connect to instead" at an address that answers'],
+  [/unknown field|cannot unmarshal|toml/i, () => 'mtg would not read its configuration - this is a panel bug, please report the log line below'],
+  [/blacklist|blocklist/i, () => 'the client\'s address is on the blocklist - turn the blocklist off on the inbound']
+];
+
+/**
+ * Say why one proxy is not working, in a sentence rather than a log dump.
+ *
+ * It asks mtg to check its own configuration first, because `mtg doctor`
+ * catches a bad secret or an unreachable disguise domain without anything
+ * having to be running, and falls back to the last thing the daemon said.
+ */
+async function diagnose(inb) {
+  const out = { running: await isRunning(inb), reason: '', detail: '', checked: false };
+  const t = tuning(inb);
+  const p = { port: Number(inb.port), domain: domainOf(inb.mtSecret) || inb.mtDomain || '', frontPort: t.mtFrontPort };
+
+  if (!(await installed()).ok) {
+    out.reason = 'mtg is not installed yet - the panel installs it the first time a Telegram proxy is switched on';
+    return out;
+  }
+  if (!hasSystemd()) {
+    out.reason = 'this server has no systemd, so the proxy cannot be kept running';
+    return out;
+  }
+
+  /* the written config is the one that is actually running, so check that */
+  let file = '';
+  try { file = configOf(inb); if (!fs.existsSync(file)) file = writeConfig(inb); } catch (err) { 
+    out.reason = err.message;
+    return out;
+  }
+  const doctor = await run(BIN, ['doctor', file], 25000);
+  out.checked = true;
+  const said = `${doctor.stdout || ''}\n${doctor.stderr || ''}`.trim();
+  const log = await lastLog(inb);
+  out.detail = (said && !doctor.ok ? said : log).slice(0, 600);
+
+  const haystack = `${doctor.ok ? '' : said}\n${out.running ? '' : log}`;
+  for (const [re, say] of KNOWN) {
+    if (re.test(haystack)) { out.reason = say(p); return out; }
+  }
+
+  if (out.running && doctor.ok) {
+    out.reason = '';
+    return out;
+  }
+  if (out.running) {
+    out.reason = 'the proxy is running, but mtg is unhappy with its settings - see below';
+    return out;
+  }
+  out.reason = log ? 'the proxy stopped; mtg said:' : 'the proxy is not running and said nothing about why';
   return out;
 }
 
@@ -450,7 +709,8 @@ async function install() {
 module.exports = {
   /* the inbound list is the configuration; there is nothing else to set */
   inbounds, byId, status, statusOf, sync, fingerprint, resume, migrate,
-  install, installed, startOne, stopOne, isRunning,
+  install, installed, startOne, stopOne, isRunning, diagnose, lastLog,
+  tuning, TUNING, PREFER_IP, bindHost,
   makeSecret, domainOf, cleanDomain, linksFor, writeConfig, writeUnit,
   serviceOf, configOf, unitPathOf, tagOf, archKey,
   VERSION, SUMS, BIN, DIR, DEFAULT_DOMAIN, DEFAULT_PORT

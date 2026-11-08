@@ -225,6 +225,50 @@ const FA = {
   'the subscription title': 'عنوان سابسکریپشن',
 
 
+  /* the Telegram proxy's own settings */
+  'Pretend to be': 'خود را جای این سایت جا بزن',
+  'Make a new key': 'ساخت کلید تازه',
+  'Telegram link': 'لینک تلگرام',
+  'Reach Telegram over': 'اتصال به تلگرام از طریق',
+  'IPv4 first': 'اول IPv4',
+  'IPv6 first': 'اول IPv6',
+  'IPv4 only': 'فقط IPv4',
+  'IPv6 only': 'فقط IPv6',
+  'DNS resolver': 'سرور DNS',
+  'Connect to instead': 'به‌جایش به این آدرس وصل شو',
+  'Disguise port': 'پورت سایت پوششی',
+  'Clock tolerance': 'اختلاف مجاز ساعت',
+  'Accept any datacentre': 'پذیرش هر دیتاسنتر',
+  'Max connections': 'بیشترین اتصال هم‌زمان',
+  'Anti-probe cache': 'محافظت در برابر کاوش',
+  'IP blocklist': 'فهرست آی‌پی‌های مسدود',
+  'Through a SOCKS5 proxy': 'از طریق پروکسی SOCKS5',
+  'Verbose logging': 'گزارش کامل',
+  'Why is it not running?': 'چرا کار نمی‌کند؟',
+  'Check it / why is it down': 'بررسی کن / چرا خاموش است',
+  'Start it again': 'دوباره راه بینداز',
+  'Edit settings': 'ویرایش تنظیمات',
+  'Running': 'در حال کار',
+  'Not running': 'کار نمی‌کند',
+  'Running, with a problem': 'کار می‌کند، ولی مشکلی دارد',
+  'Checking…': 'در حال بررسی…',
+  'Started': 'راه افتاد',
+  'It would not start': 'راه نیفتاد',
+  'Asking the proxy what is wrong. This takes a few seconds.':
+    'دارم از پروکسی می‌پرسم مشکل چیست. چند ثانیه طول می‌کشد.',
+  'The proxy is up and mtg is happy with its settings. If clients still cannot connect, the port is most likely blocked between here and them — try another port, or a different disguise domain.':
+    'پروکسی بالا است و تنظیماتش هم درست است. اگر باز هم کسی وصل نمی‌شود، به احتمال زیاد پورت در مسیر بین سرور و کاربر بسته شده — یک پورت دیگر، یا یک دامنه‌ی پوششی دیگر امتحان کنید.',
+  'A server whose IPv6 is configured but dead fails every connection while looking fine. IPv4 first is the safe answer; pick only-IPv4 to rule it out completely.':
+    'سروری که IPv6 رویش تنظیم شده ولی کار نمی‌کند، هر اتصالی را خراب می‌کند بدون اینکه ایرادی پیدا باشد. «اول IPv4» جواب امن است؛ برای اینکه کلاً کنار گذاشته شود «فقط IPv4» را بزنید.',
+  'When the disguise domain cannot be resolved or reached from this server, put its IP here. The name is still what clients announce; only the address dialled changes.':
+    'اگر این سرور نتواند دامنه‌ی پوششی را پیدا کند یا به آن برسد، آی‌پی‌اش را اینجا بگذارید. چیزی که کاربر اعلام می‌کند همان نام می‌ماند؛ فقط آدرسی که گرفته می‌شود عوض می‌شود.',
+  'The port the disguise site is reached on. 443 unless it is behind something unusual.':
+    'پورتی که سایت پوششی روی آن جواب می‌دهد. مگر در حالت خاص، همان ۴۴۳.',
+  'Connections at once before new ones are dropped.':
+    'تعداد اتصال هم‌زمان، پیش از آنکه اتصال تازه رد شود.',
+  'Turn on while working out why a proxy will not start, then off again.':
+    'موقع پیدا کردن علت بالا نیامدن پروکسی روشنش کنید و بعد خاموش.',
+
   /* the bot's card on the dashboard */
   'Telegram bot': 'ربات تلگرام',
   'People who have used it': 'کسانی که از آن استفاده کرده‌اند',

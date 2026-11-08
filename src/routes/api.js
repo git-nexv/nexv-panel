@@ -1476,6 +1476,43 @@ router.get('/mtproto', leaderOnly, async (req, res) => {
 });
 
 /**
+ * Why one Telegram proxy is not working.
+ *
+ * The inbound row could say "not running" and nothing more, which left the
+ * admin with a switch that did nothing and no way to find out why. This runs
+ * mtg's own check over the written configuration and reads back what the
+ * daemon last said, and answers in a sentence.
+ */
+router.get('/mtproto/:id/why', leaderOnly, async (req, res) => {
+  const inb = mtproto.byId(req.params.id);
+  if (!inb) return bad(res, 'no such Telegram proxy', 404);
+  try {
+    return res.json(await mtproto.diagnose(inb));
+  } catch (err) {
+    return bad(res, err.message);
+  }
+});
+
+/**
+ * Put one back up, after its settings have been fixed.
+ *
+ * sync() skips when nothing in the inbound list has moved, which is right for
+ * the hundred times a day a client is saved and wrong when the admin has just
+ * changed something outside the panel and wants to try again.
+ */
+router.post('/mtproto/:id/restart', leaderOnly, async (req, res) => {
+  const inb = mtproto.byId(req.params.id);
+  if (!inb) return bad(res, 'no such Telegram proxy', 404);
+  try {
+    await mtproto.startOne(inb);
+    logEvent('inbound', `restarted the Telegram proxy "${inb.remark || inb.port}"`);
+    return res.json(await mtproto.diagnose(inb));
+  } catch (err) {
+    return bad(res, err.message);
+  }
+});
+
+/**
  * Fetch the proxy binary.
  *
  * Switching an MTProto inbound on does this by itself; this is for doing it
@@ -1759,6 +1796,10 @@ function settleMtproto(inb, body) {
   if (!domain) return 'that is not a domain name for the Telegram proxy to imitate';
   inb.mtDomain = domain;
 
+  /* mtg takes a literal address in bind-to and nothing else. Caught here so
+     it is a message on the form rather than a proxy that quietly never runs. */
+  try { mtproto.bindHost(inb); } catch (err) { return err.message; }
+
   const carried = mtproto.domainOf(inb.mtSecret);
   /* a new key when asked for, when there is none, or when the disguise moved -
      the domain is inside the key, so those are the same event */
@@ -1822,6 +1863,22 @@ function normalizeInbound(body, existing) {
        already handed out. */
     mtDomain: body.mtDomain ?? existing?.mtDomain ?? '',
     mtSecret: existing?.mtSecret ?? '',
+    /* ---- MTProto: the dials that decide whether it connects at all ----
+       Every one of these is a real key in mtg's own configuration; what they
+       mean and why the defaults are what they are is in src/mtproto.js. They
+       are carried through as written and sanitised there, in one place, so
+       the config file is never built from a number nobody checked. */
+    mtPreferIP: body.mtPreferIP ?? existing?.mtPreferIP ?? '',
+    mtConcurrency: body.mtConcurrency ?? existing?.mtConcurrency ?? '',
+    mtSkew: body.mtSkew ?? existing?.mtSkew ?? '',
+    mtFallbackDC: body.mtFallbackDC ?? existing?.mtFallbackDC ?? true,
+    mtFrontPort: body.mtFrontPort ?? existing?.mtFrontPort ?? '',
+    mtFrontHost: body.mtFrontHost ?? existing?.mtFrontHost ?? '',
+    mtDns: body.mtDns ?? existing?.mtDns ?? '',
+    mtUpstream: body.mtUpstream ?? existing?.mtUpstream ?? '',
+    mtAntiReplay: body.mtAntiReplay ?? existing?.mtAntiReplay ?? true,
+    mtBlocklist: body.mtBlocklist ?? existing?.mtBlocklist ?? false,
+    mtDebug: body.mtDebug ?? existing?.mtDebug ?? false,
 
     /* ---- the inbound's own cap and expiry, like 3x-ui's ---- */
     totalGB: Number(body.totalGB ?? existing?.totalGB ?? 0),
