@@ -938,8 +938,33 @@ router.get('/bot/broadcast', (req, res) => {
 router.post('/bot/broadcast', async (req, res) => {
   const body = req.body || {};
   try {
-    const out = await telegram.startBroadcast(body.text, body.audience, { button: body.button });
+    const out = await telegram.startBroadcast(body.text, body.audience, {
+      buttons: body.buttons, button: body.button
+    });
     logEvent('bot', `broadcast started to ${out.audience} (${out.total} people)`);
+    res.json(out);
+  } catch (err) {
+    bad(res, err.message);
+  }
+});
+
+/**
+ * Post the same kind of message in the channel instead.
+ *
+ * Deliberately not a flavour of the broadcast above. A broadcast is one
+ * message per person, rate-limited, taking a minute, with an audience to
+ * pick; this is a single message to a single chat that either works or does
+ * not, so it answers with the result rather than with something to watch.
+ *
+ * And no audience reaches it. Who sees a channel post is decided by who is in
+ * the channel - "everyone / buyers / not bought yet" is a question about the
+ * bot's own users and has no meaning here, so it is not asked and not applied.
+ */
+router.post('/bot/channel-post', async (req, res) => {
+  const body = req.body || {};
+  try {
+    const out = await telegram.postToChannel(body.text, { buttons: body.buttons });
+    logEvent('bot', `posted a message in ${out.channel}`);
     res.json(out);
   } catch (err) {
     bad(res, err.message);

@@ -2266,3 +2266,15 @@ td .row-actions { display: inline-flex; width: auto; }
  * reward list and the term rows want the same thing.
  */
 .stack-list { display: flex; flex-direction: column; gap: 14px; }
+
+/*
+ * The two ways a written message can go out, side by side.
+ *
+ * They are two different actions - one message per person to a group you
+ * pick, or one post in the channel - and setting them next to each other is
+ * what says so. Below phone width they stack, because two columns of prose
+ * at 180px each is neither.
+ */
+.send-ways { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+@media (max-width: 760px) { .send-ways { grid-template-columns: 1fr; } }
+.card.soft { background: var(--glass-2); }

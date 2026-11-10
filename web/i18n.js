@@ -225,6 +225,40 @@ const FA = {
   'the subscription title': 'عنوان سابسکریپشن',
 
 
+  /* the Message tab: one to the bot's users, one to the channel */
+  'Button link': 'لینک دکمه',
+  'Who gets it': 'به چه کسانی',
+  'Write the message…': 'پیام را بنویسید…',
+  'Plain text, or simple HTML: <b>bold</b>, <i>italic</i>, <a href="…">link</a>.':
+    'متن ساده، یا HTML ساده: <b>bold</b>، <i>italic</i>، <a href="…">link</a>.',
+  'Buy a subscription': 'خرید اشتراک',
+  'Buttons under it': 'دکمه‌های زیر پیام',
+  'Add a button': 'افزودن دکمه',
+  'Send it': 'ارسال',
+  '🤖 In the bot': '🤖 در ربات',
+  '📢 In the channel': '📢 در کانال',
+  '📣 Write a message': '📣 نوشتن پیام',
+  'Send in the bot': 'ارسال در ربات',
+  'Send to the channel': 'ارسال به کانال',
+  'Colour': 'رنگ',
+  'Beside the one above': 'کنار دکمه‌ی بالایی',
+  'Six buttons is the most': 'بیشتر از شش دکمه نمی‌شود',
+  'Posts once in': 'یک بار ارسال می‌شود در',
+  'This posts once in': 'این یک بار ارسال می‌شود در',
+  'Everybody in the channel sees it.': 'همه‌ی اعضای کانال آن را می‌بینند.',
+  'Set the channel on the Channel tab first': 'اول کانال را در تب Channel تعیین کنید',
+  'Posted in': 'ارسال شد در',
+  'Posted': 'ارسال شد',
+  'Open it': 'بازش کن',
+  'An https:// or tg:// link. Both boxes, or the button is left out.':
+    'یک لینک https:// یا tg://. هر دو باکس پر شود، وگرنه دکمه ساخته نمی‌شود.',
+  'They go under the message, in the bot and in the channel alike. Telegram paints an inline button green, blue or red, and only a link button works in a channel — where most readers have never opened your bot, so a link to it is what brings them in.':
+    'زیر پیام می‌آیند، چه در ربات و چه در کانال. تلگرام دکمه‌ی شیشه‌ای را فقط سبز، آبی یا قرمز می‌کند، و در کانال فقط دکمه‌ی لینک‌دار کار می‌کند — چون بیشتر خواننده‌های کانال هیچ‌وقت ربات را باز نکرده‌اند و همان لینک است که آن‌ها را می‌آورد.',
+  'One message each, to the group below. About twenty-five a second, which is the most Telegram allows — a thousand people take roughly a minute, and you can close this page while it goes.':
+    'به هر نفر یک پیام، برای گروهی که پایین انتخاب می‌کنید. حدود بیست‌وپنج تا در ثانیه، که بیشترین حدی است که تلگرام اجازه می‌دهد — هزار نفر تقریباً یک دقیقه طول می‌کشد و می‌توانید این صفحه را ببندید.',
+  'One post, which everybody in the channel sees — including people who have never opened the bot. Who reads it is who is in the channel, so the groups on the other side do not apply to it and are not asked for here.':
+    'یک پست، که همه‌ی اعضای کانال می‌بینند — حتی کسانی که هیچ‌وقت ربات را باز نکرده‌اند. خواننده‌اش هرکسی است که در کانال باشد، پس آن گزینه‌های طرف دیگر اینجا اعمال نمی‌شوند و اصلاً پرسیده نمی‌شوند.',
+
   /* a plan's own discount and colour */
   'Discount (%)': 'تخفیف (٪)',
   'This plan’s button colour': 'رنگ دکمه‌ی این پلن',
@@ -1372,6 +1406,12 @@ const HOW_DATED = {
 };
 
 const PATTERNS = [
+  /* the Message tab's audience picker and its button headings */
+  [/^Everyone \((\d[\d,]*)\)$/, (m) => `همه (${m[1]})`],
+  [/^Buyers \((\d[\d,]*)\)$/, (m) => `خریداران (${m[1]})`],
+  [/^Not bought yet \((\d[\d,]*)\)$/, (m) => `هنوز نخریده‌اند (${m[1]})`],
+  [/^Button (\d+)$/, (m) => `دکمه ${m[1]}`],
+
   [/^could not put back (.+): (.+)$/, (m) => `${m[1]} برگردانده نشد: ${m[2]}`],
 
   [/^the bot cannot open a chat with (\d+)\. Open the bot as that account and press Start - Telegram does not let a bot message somebody who never has\.$/,

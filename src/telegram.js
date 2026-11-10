@@ -2180,6 +2180,105 @@ const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
  * Send it. Returns as soon as the sending has started; the page watches
  * `broadcastStatus()` for the rest.
  */
+/*
+ * The keys an admin draws under a broadcast or a channel post.
+ *
+ * There used to be one, text and a link, and no say in how it looked. A post
+ * to a channel usually wants two or three - buy, guide, support - and wants
+ * the one that matters painted, so this takes a list and each entry carries
+ * its own colour. `row` puts a key beside the one before it rather than under
+ * it, which is the difference between a tidy pair and a column.
+ *
+ * Only link keys: a key in a channel is pressed by people who have never
+ * opened the bot, and a callback key would answer them with nothing. A link
+ * to the bot is what carries them in.
+ */
+const KEY_STYLES = ['success', 'primary', 'danger'];
+const MAX_KEYS = 6;
+
+function messageKeys(list) {
+  const want = Array.isArray(list) ? list : [];
+  const rows = [];
+  for (const raw of want.slice(0, MAX_KEYS)) {
+    const text = String((raw && raw.text) || '').trim().slice(0, 40);
+    const url = String((raw && raw.url) || '').trim().slice(0, 500);
+    /* both or neither: Telegram refuses a key with no text, and a key with no
+       link does nothing at all when it is pressed */
+    if (!text || !url) continue;
+    if (!/^(https?:\/\/|tg:\/\/)/i.test(url)) continue;
+    const key = { text, url };
+    const style = String((raw && raw.style) || '');
+    if (KEY_STYLES.includes(style)) key.style = style;
+    if (raw && raw.row && rows.length) rows[rows.length - 1].push(key);
+    else rows.push([key]);
+  }
+  return rows.length ? rows : null;
+}
+
+/** Whatever the caller gave: a list of keys, or the single old one. */
+function keysFrom(opts) {
+  const o = opts || {};
+  if (Array.isArray(o.buttons) && o.buttons.length) return messageKeys(o.buttons);
+  if (o.button && o.button.text && o.button.url) return messageKeys([o.button]);
+  return null;
+}
+
+/**
+ * Post one message in the channel, as the bot.
+ *
+ * Nothing about an audience reaches here, and that is the point: a channel
+ * post is read by whoever is in the channel, including people who have never
+ * opened the bot, so "everyone / buyers / not bought yet" is a question about
+ * a broadcast and means nothing about this. It is one message to one chat.
+ *
+ * The channel's own switch is the join gate - whether people must join before
+ * they may use the bot - which is a different decision from whether the admin
+ * may post there. So this asks only that a channel is set.
+ */
+async function postToChannel(text, opts) {
+  const body = String(text || '').trim();
+  if (!body) throw new Error('write the message first');
+  if (!bot().token) throw new Error('the bot has no token');
+  const id = String(channel().id || '').trim();
+  if (!id) throw new Error('no channel is set - put its @name or id on the Channel tab first');
+
+  const keyboard = keysFrom(opts);
+  try {
+    const sent = await call('sendMessage', {
+      chat_id: id,
+      text: body,
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+      reply_markup: keyboard ? { inline_keyboard: keyboard } : undefined
+    });
+    runtime.sent += 1;
+    const link = messageLink(id, sent && sent.message_id);
+    db.data.logs.unshift({ at: Date.now(), type: 'bot', message: `posted in ${id}` });
+    if (db.data.logs.length > 500) db.data.logs.length = 500;
+    db.saveNow();
+    return { ok: true, channel: id, messageId: (sent && sent.message_id) || 0, link };
+  } catch (err) {
+    const said = String(err.message || '');
+    /* the two that actually happen, said in words rather than Telegram's */
+    if (/chat not found/i.test(said)) {
+      throw new Error(`Telegram cannot find ${id}. Check the @name, and that the bot is a member.`);
+    }
+    if (/not enough rights|CHAT_WRITE_FORBIDDEN|bot is not a member|need administrator/i.test(said)) {
+      throw new Error(`The bot may not post in ${id}. Make it an administrator of the channel with "Post messages" on.`);
+    }
+    throw err;
+  }
+}
+
+/** A t.me link to what was just posted, when the channel has a public name. */
+function messageLink(id, messageId) {
+  if (!messageId) return '';
+  const name = String(id || '').trim();
+  if (name.startsWith('@')) return `https://t.me/${name.slice(1)}/${messageId}`;
+  const m = /^-100(\d+)$/.exec(name);
+  return m ? `https://t.me/c/${m[1]}/${messageId}` : '';
+}
+
 async function startBroadcast(text, which, opts) {
   const body = String(text || '').trim();
   if (!body) throw new Error('write the message first');
@@ -2203,9 +2302,7 @@ async function startBroadcast(text, which, opts) {
     lastError: ''
   });
 
-  const keyboard = (opts && opts.button && opts.button.text && opts.button.url)
-    ? [[{ text: String(opts.button.text).slice(0, 40), url: String(opts.button.url) }]]
-    : null;
+  const keyboard = keysFrom(opts);
 
   /* deliberately not awaited: the caller is an HTTP request and this takes as
      long as it takes */
@@ -2230,7 +2327,20 @@ async function startBroadcast(text, which, opts) {
              same person again rather than writing them off */
           await sleep((Number(retry[1]) + 1) * 1000);
           try {
-            await call('sendMessage', { chat_id: id, text: body, parse_mode: 'HTML', disable_web_page_preview: true });
+            /*
+             * The same message, keys and all.
+             *
+             * This retry used to send the text on its own, so everybody the
+             * broadcast was going too fast for got the message without the
+             * button under it - which on a sale post is the whole message.
+             */
+            await call('sendMessage', {
+              chat_id: id,
+              text: body,
+              parse_mode: 'HTML',
+              disable_web_page_preview: true,
+              reply_markup: keyboard ? { inline_keyboard: keyboard } : undefined
+            });
             broadcast.sent += 1;
             continue;
           } catch (second) { err.message = second.message; }
@@ -5088,6 +5198,7 @@ module.exports = {
   offerSettings, offerFor, offerOn, planCost, chargeFor, offerBanner, planButton, planLine,
   planDiscount, planStyle, planKey, PLAN_STYLES, migratePlanDiscounts,
   startBroadcast, stopBroadcast, broadcastStatus, audienceCounts, audienceIds,
+  postToChannel, messageKeys, messageLink, KEY_STYLES, MAX_KEYS,
   botStats,
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
   sendBackup, backupStatus, backupSettings, backupTimes, watchBackups, minutesOf, nextBackupAt, backupTick,

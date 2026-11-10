@@ -7161,10 +7161,74 @@ async function renderBot(view) {
   }
 
   const msgText = el('textarea', { rows: 7, placeholder: 'Write the message…' });
-  const msgBtnText = el('input', { placeholder: 'Button text (optional)' });
-  const msgBtnUrl = el('input', { placeholder: 'https://… (optional)' });
+
+  /*
+   * The keys that go under the message.
+   *
+   * There was one, with a text and a link and no say in how it looked. A post
+   * worth writing usually wants two or three - buy, guide, support - so this
+   * is a list, each with its own colour, and each able to sit beside the one
+   * above it rather than under it. Telegram paints an inline key green, blue
+   * or red and nothing else, which is why those are the choices.
+   */
+  const msgKeys = [];
+  const keysBox = el('div', { class: 'stack-list' });
+  const drawKeys = () => {
+    keysBox.innerHTML = '';
+    msgKeys.forEach((key, index) => {
+      const grid = el('div', { class: 'form-grid' });
+      const text = el('input', { value: key.text || '', placeholder: 'Buy a subscription' });
+      text.addEventListener('input', () => { key.text = text.value; });
+      const url = el('input', { value: key.url || '', placeholder: 'https://t.me/yourbot' });
+      url.addEventListener('input', () => { key.url = url.value; });
+      const colour = selectOf([
+        { value: '', label: 'Default' },
+        { value: 'success', label: '\ud83d\udfe2 Green' },
+        { value: 'primary', label: '\ud83d\udd35 Blue' },
+        { value: 'danger', label: '\ud83d\udd34 Red' }
+      ], key.style || '');
+      colour.addEventListener('change', () => { key.style = colour.value; });
+      formField(grid, 'Button text', text);
+      formField(grid, 'Button link', url, { hint: 'An https:// or tg:// link. Both boxes, or the button is left out.' });
+      formField(grid, 'Colour', colour);
+      /* the first key has nothing to sit beside, so it is not offered */
+      if (index > 0) {
+        const side = switchFor(key, 'row', 'Beside the one above', false);
+        grid.append(el('div', { class: 'field' }, [side]));
+      }
+      keysBox.append(el('div', { class: 'card' }, [
+        el('div', { class: 'between', style: 'margin-bottom:12px' }, [
+          el('strong', { class: 'user-text', text: key.text || `Button ${index + 1}` }),
+          el('button', {
+            class: 'btn icon danger', title: 'Remove', html: icon('trash'),
+            onclick: () => { msgKeys.splice(index, 1); drawKeys(); }
+          })
+        ]),
+        grid
+      ]));
+    });
+    keysBox.append(el('div', { class: 'row' }, [
+      el('button', {
+        class: 'btn', html: `${icon('plus')} Add a button`,
+        onclick: () => {
+          if (msgKeys.length >= 6) return toast(t('Six buttons is the most'), 'err');
+          msgKeys.push({ text: '', url: '', style: '', row: false });
+          drawKeys();
+        }
+      })
+    ]));
+    hydrateIcons(keysBox);
+  };
+  drawKeys();
+
+  /** The keys as the server wants them, with the half-filled ones dropped. */
+  const keysPayload = () => msgKeys
+    .map((k) => ({ text: String(k.text || '').trim(), url: String(k.url || '').trim(), style: k.style || '', row: !!k.row }))
+    .filter((k) => k.text && k.url);
+
   const msgState = el('div', { class: 'hint', style: 'margin-top:10px' });
-  const sendBtn = el('button', { class: 'btn primary', text: 'Send' });
+  const sendBtn = el('button', { class: 'btn primary', text: 'Send in the bot' });
+  const channelBtn = el('button', { class: 'btn', text: 'Send to the channel' });
   const stopBtn = el('button', { class: 'btn danger hidden', text: 'Stop' });
 
   const paintBroadcast = (out) => {
@@ -7215,10 +7279,7 @@ async function renderBot(view) {
       `This goes to ${count} people on Telegram, one message each, and cannot be taken back.`,
       async () => {
         try {
-          const payload = { text, audience: picked };
-          if (msgBtnText.value.trim() && msgBtnUrl.value.trim()) {
-            payload.button = { text: msgBtnText.value.trim(), url: msgBtnUrl.value.trim() };
-          }
+          const payload = { text, audience: picked, buttons: keysPayload() };
           paintBroadcast(await api.post('/bot/broadcast', payload));
           watch();
         } catch (err) { toast(err.message, 'err'); }
@@ -7229,27 +7290,101 @@ async function renderBot(view) {
     try { paintBroadcast(await api.del('/bot/broadcast')); } catch (err) { toast(err.message, 'err'); }
   };
 
+  /*
+   * And the same message in the channel instead.
+   *
+   * No audience is sent and none is applied: who reads a channel post is
+   * whoever is in the channel, which includes people who have never opened
+   * the bot. "Everyone / buyers / not bought yet" is a question about the
+   * bot's own users, so it is asked beside the bot's own button and nowhere
+   * near this one.
+   *
+   * It is also not a broadcast - one message to one chat, over in a moment -
+   * so there is nothing to watch and nothing to stop; it says what happened
+   * and links to it.
+   */
+  const channelId = String(((data.channel || {}).id) || '').trim();
+  channelBtn.disabled = !channelId;
+  channelBtn.title = channelId
+    ? `${t('Posts once in')} ${channelId}`
+    : t('Set the channel on the Channel tab first');
+  channelBtn.onclick = () => {
+    const text = msgText.value.trim();
+    if (!text) return toast(t('Write the message first'), 'err');
+    return confirmDialog(
+      `${t('This posts once in')} ${channelId}. ${t('Everybody in the channel sees it.')}`,
+      async () => {
+        channelBtn.disabled = true;
+        try {
+          const out = await api.post('/bot/channel-post', { text, buttons: keysPayload() });
+          msgState.className = 'notice ok';
+          msgState.textContent = `${t('Posted in')} ${out.channel} `;
+          if (out.link) {
+            msgState.append(el('a', { href: out.link, target: '_blank', rel: 'noopener', text: t('Open it') }));
+          }
+          toast(t('Posted'), 'ok');
+        } catch (err) {
+          msgState.className = 'notice warn';
+          msgState.textContent = err.message;
+          toast(err.message, 'err');
+        }
+        channelBtn.disabled = false;
+      }
+    );
+  };
+
   const msgGrid = el('div', { class: 'form-grid' });
-  formField(msgGrid, 'Who gets it', who, { full: true });
   formField(msgGrid, 'Message', msgText, {
     full: true,
     hint: 'Plain text, or simple HTML: <b>bold</b>, <i>italic</i>, <a href="…">link</a>.'
   });
-  formField(msgGrid, 'Button text', msgBtnText);
-  formField(msgGrid, 'Button link', msgBtnUrl, { hint: 'Both together, or neither.' });
+
+  const whoBox = el('div');
+  formField(whoBox, 'Who gets it', who, { full: true });
 
   panels.Message.append(el('div', { class: 'card' }, [
     el('div', { class: 'between', style: 'margin-bottom:12px' }, [
-      el('strong', { text: '📣 Message everybody' }),
+      el('strong', { text: '📣 Write a message' }),
       el('span', { class: 'muted', text: t(`${audience.all} people have used this bot`) })
     ]),
     msgGrid,
-    el('div', { class: 'row', style: 'margin-top:12px;gap:10px' }, [sendBtn, stopBtn]),
-    msgState,
-    el('div', { class: 'hint', style: 'margin-top:10px' }, [
-      'It goes out at about twenty-five a second, which is the most Telegram allows; '
-      + 'a thousand people take roughly a minute. You can close this page \u2014 it keeps going.'
-    ])
+    el('div', { class: 'section-title', style: 'margin-top:18px', text: 'Buttons under it' }),
+    el('div', { class: 'hint', style: 'margin-bottom:10px', text:
+      'They go under the message, in the bot and in the channel alike. Telegram paints an inline '
+      + 'button green, blue or red, and only a link button works in a channel \u2014 where most '
+      + 'readers have never opened your bot, so a link to it is what brings them in.' }),
+    keysBox,
+
+    /*
+     * Two sends, because they are two different things.
+     *
+     * One is a message per person, rate-limited, taking a minute, to a group
+     * the admin picks. The other is one message in the channel, over in a
+     * moment, read by whoever is in the channel. One button for both made the
+     * audience picker look as though it governed the channel too, which it
+     * never could.
+     */
+    el('div', { class: 'section-title', style: 'margin-top:18px', text: 'Send it' }),
+    el('div', { class: 'send-ways' }, [
+      el('div', { class: 'card soft' }, [
+        el('strong', { text: '🤖 In the bot' }),
+        el('div', { class: 'hint', style: 'margin:6px 0 10px', text:
+          'One message each, to the group below. About twenty-five a second, which is the most '
+          + 'Telegram allows \u2014 a thousand people take roughly a minute, and you can close '
+          + 'this page while it goes.' }),
+        whoBox,
+        el('div', { class: 'row', style: 'margin-top:12px;gap:10px' }, [sendBtn, stopBtn])
+      ]),
+      el('div', { class: 'card soft' }, [
+        el('strong', { text: '📢 In the channel' }),
+        el('div', { class: 'hint', style: 'margin:6px 0 10px', text:
+          'One post, which everybody in the channel sees \u2014 including people who have never '
+          + 'opened the bot. Who reads it is who is in the channel, so the groups on the other '
+          + 'side do not apply to it and are not asked for here.' }),
+        el('div', { class: 'row', style: 'margin-top:12px' }, [channelBtn])
+      ])
+    ]),
+    msgState
   ]));
   hydrateIcons(panels.Message);
   api.get('/bot/broadcast').then((out) => { paintBroadcast(out); if (out.running) watch(); }).catch(() => {});
