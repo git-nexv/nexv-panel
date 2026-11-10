@@ -6468,6 +6468,20 @@ async function renderResellerBot(view) {
   ]));
 }
 
+/*
+ * A price somebody reads: 90,000 rather than 89,999.99.
+ *
+ * The same rounding the bot does when it works a discount out, so the figure
+ * the panel promises under a plan is the figure the buyer is charged. Kept
+ * here rather than in two places for exactly that reason.
+ */
+function tidyMoney(n) {
+  const v = Math.max(0, Math.round(Number(n) || 0));
+  if (v >= 10000) return Math.round(v / 1000) * 1000;
+  if (v >= 1000) return Math.round(v / 100) * 100;
+  return v;
+}
+
 async function renderBot(view) {
   if (isReseller()) return renderResellerBot(view);
   const data = await api.get('/bot');
@@ -6723,7 +6737,10 @@ async function renderBot(view) {
   ]));
 
   /* ---- Plans ---- */
-  const plansBox = el('div');
+  /* a column with a gap: the cards used to be appended straight onto a bare
+     div and sat flush against each other, so four plans read as one long
+     form and it took a moment to see where one ended */
+  const plansBox = el('div', { class: 'stack-list' });
   const drawPlans = () => {
     plansBox.innerHTML = '';
     draft.plans.forEach((plan, index) => {
@@ -6736,6 +6753,62 @@ async function renderBot(view) {
       formField(grid, 'Price', bind('price', el('input', { value: plan.price || '' })));
       formField(grid, 'Quota (GB)', bind('gb', el('input', { type: 'number', min: '0', value: plan.gb || 0 }), Number), { hint: '0 means unlimited' });
       formField(grid, 'Days', bind('days', el('input', { type: 'number', min: '1', value: plan.days || 30 }), Number));
+
+      /*
+       * The discount, under the price it comes off.
+       *
+       * It used to be a row in a table on the Offer tab, keyed by plan id -
+       * the number on one tab and the plan it applied to on another, which
+       * is a thing to keep in your head rather than a thing to read. Here it
+       * is the next box along from the price, and what the buyer ends up
+       * paying is worked out under it as the admin types, so nobody has to
+       * do the arithmetic to find out what they just did.
+       */
+      const paid = el('div', { class: 'hint' });
+      const discount = el('input', {
+        type: 'number', min: '0', max: '95', value: plan.discount || '', placeholder: '0'
+      });
+      const sayPaid = () => {
+        const was = Number(String(plan.price || '').replace(/[^\d.]/g, '')) || 0;
+        const pc = Math.min(95, Math.max(0, Math.round(Number(plan.discount) || 0)));
+        if (!was) { paid.textContent = t('Set a price first'); return; }
+        if (!pc) { paid.textContent = `${t('They pay')} ${was.toLocaleString('en-US')}`; return; }
+        const now = tidyMoney(was * (1 - pc / 100));
+        paid.textContent = `${t('They pay')} ${now.toLocaleString('en-US')} `
+          + `(${t('was')} ${was.toLocaleString('en-US')}, −${pc}%)`;
+      };
+      discount.addEventListener('input', () => {
+        const n = Math.round(Number(discount.value) || 0);
+        plan.discount = n > 0 ? Math.min(95, n) : 0;
+        sayPaid();
+      });
+      grid.querySelectorAll('input')[1].addEventListener('input', sayPaid);
+      formField(grid, 'Discount (%)', discount, {
+        hint: 'Comes straight off this plan, on its own — no switch to turn on. '
+          + 'The price above stays as you typed it, so clearing this box puts the plan back to full price.'
+      });
+      sayPaid();
+      grid.append(el('div', { class: 'field full' }, [paid]));
+
+      /*
+       * And the colour of this plan's key in the bot.
+       *
+       * Telegram paints an inline key one of three colours and nothing else,
+       * so these are the three it takes. It is for singling one plan out -
+       * painting all of them is the same as painting none.
+       */
+      formField(grid, 'This plan\u2019s button colour', selectOf([
+        { value: '', label: 'Default' },
+        { value: 'success', label: '🟢 Green' },
+        { value: 'primary', label: '🔵 Blue' },
+        { value: 'danger', label: '🔴 Red' }
+      ], plan.style || ''), {
+        hint: 'The colour of this plan\u2019s button in the bot. Colour one, not all of them — '
+          + 'when every key is green none of them stands out.'
+      });
+      const colour = grid.querySelectorAll('select');
+      colour[colour.length - 1].addEventListener('change', (ev) => { plan.style = ev.target.value; });
+
       /* no inbound picker: a sale goes out on every inbound that is switched
          on, so there is nothing here to choose and nothing to keep in step
          when an inbound is replaced */
@@ -6754,7 +6827,7 @@ async function renderBot(view) {
       el('button', {
         class: 'btn', html: `${icon('plus')} Add a plan`,
         onclick: () => {
-          draft.plans.push({ name: 'New plan', gb: 30, days: 30, price: '0', enable: true });
+          draft.plans.push({ name: 'New plan', gb: 30, days: 30, price: '0', discount: 0, style: '', enable: true });
           drawPlans();
         }
       }),
@@ -6959,15 +7032,14 @@ async function renderBot(view) {
 
   const offerRows = el('div');
   const priceOf = (p) => Number(String(p.price || '').replace(/[^\d.]/g, '')) || 0;
-  const tidy = (n) => {
-    const v = Math.max(0, Math.round(n));
-    if (v >= 10000) return Math.round(v / 1000) * 1000;
-    if (v >= 1000) return Math.round(v / 100) * 100;
-    return v;
-  };
+  const tidy = tidyMoney;
+  /* the plan's own figure wins, and it is the plan's own field now - the
+     table here and the box under the plan on the Plans tab are two views of
+     the same number, so they cannot disagree */
   const cut = (p) => {
-    const own = Number(offer.plans[p.id]) || 0;
-    return own > 0 ? own : (Number(offer.percent) || 0);
+    const own = Math.min(95, Math.max(0, Math.round(Number(p.discount) || 0)));
+    if (own > 0) return own;
+    return offer.enable ? (Number(offer.percent) || 0) : 0;
   };
 
   const drawOffer = () => {
@@ -6985,11 +7057,11 @@ async function renderBot(view) {
       const nowCell = el('td', { class: 'num' });
       const box = el('input', {
         type: 'number', min: '0', max: '95', style: 'max-width:90px',
-        value: offer.plans[plan.id] || '',
+        value: plan.discount || '',
         placeholder: String(offer.percent || 0)
       });
       const paint = () => {
-        const percent = offer.enable ? cut(plan) : 0;
+        const percent = cut(plan);
         const now = percent ? tidy(was * (1 - percent / 100)) : was;
         nowCell.innerHTML = '';
         if (percent && now < was) {
@@ -7004,8 +7076,7 @@ async function renderBot(view) {
       };
       box.addEventListener('input', () => {
         const n = Math.round(Number(box.value) || 0);
-        if (n > 0) offer.plans[plan.id] = Math.min(95, n);
-        else delete offer.plans[plan.id];
+        plan.discount = n > 0 ? Math.min(95, n) : 0;
         paint();
       });
       paint();
@@ -7027,7 +7098,8 @@ async function renderBot(view) {
     el('input', { type: 'number', min: '0', max: '95', value: offer.percent || 0 }), Number);
   allPercent.addEventListener('input', () => drawOffer());
   formField(offerGrid, 'Off everything (%)', allPercent, {
-    hint: 'Applied to every plan that has no figure of its own below. 0 means only the per-plan ones count.'
+    hint: 'A sale across the shop, applied to every plan with no figure of its own. '
+      + 'This one needs the switch above; a plan\u2019s own discount does not — that is part of the plan.'
   });
   formField(offerGrid, 'Banner', bindTo(offer, 'label',
     el('input', { value: offer.label || '', maxLength: 80, placeholder: 'تخفیف ویژه پاییز' })), {
@@ -7194,6 +7266,43 @@ async function renderBot(view) {
   formField(customGrid, 'Maximum (GB)', bindTo(custom, 'maxGB', el('input', { type: 'number', min: '0', value: custom.maxGB ?? 0 }), Number), {
     hint: '0 means no ceiling'
   });
+
+  /*
+   * A discount of its own, for buying by the gigabyte.
+   *
+   * There was only a switch for this - take the shop-wide sale or do not -
+   * which is no use to somebody who wants a quarter off custom volumes and
+   * nothing off the fixed plans. It is a box now, and it sits here beside
+   * the volume settings rather than on the Offer tab, because this is where
+   * anybody pricing this is already looking. Empty means fall back to the
+   * switch below it.
+   */
+  const customOffer = draft.offer = draft.offer
+    || { enable: false, percent: 0, plans: {}, custom: true, customPercent: 0, label: '' };
+  const customPaid = el('div', { class: 'hint' });
+  const customCut = el('input', {
+    type: 'number', min: '0', max: '95', value: customOffer.customPercent || '', placeholder: '0'
+  });
+  const sayCustomPaid = () => {
+    const per = Number(draft.pricePerGB) || 0;
+    const pc = Math.min(95, Math.max(0, Math.round(Number(customOffer.customPercent) || 0)));
+    if (!per) { customPaid.textContent = t('Set the price per GB on the Setup tab first'); return; }
+    const full = 10 * per;
+    if (!pc) { customPaid.textContent = `${t('10 GB would cost')} ${full.toLocaleString('en-US')}`; return; }
+    customPaid.textContent = `${t('10 GB would cost')} ${tidyMoney(full * (1 - pc / 100)).toLocaleString('en-US')} `
+      + `(${t('was')} ${full.toLocaleString('en-US')}, −${pc}%)`;
+  };
+  customCut.addEventListener('input', () => {
+    const n = Math.round(Number(customCut.value) || 0);
+    customOffer.customPercent = n > 0 ? Math.min(95, n) : 0;
+    sayCustomPaid();
+  });
+  sayCustomPaid();
+  formField(customGrid, 'Discount (%)', customCut, {
+    hint: 'Comes off every per-gigabyte purchase, on its own. Leave it empty to use the '
+      + 'shop-wide sale from the Offer tab instead, if one is running.'
+  });
+  customGrid.append(el('div', { class: 'field full' }, [customPaid]));
 
   /*
    * How long they may buy it for.

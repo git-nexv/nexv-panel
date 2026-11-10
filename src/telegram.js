@@ -90,6 +90,34 @@ function migrateStarter() {
 }
 
 /*
+ * A per-plan discount used to live in a map in the offer settings, keyed by
+ * plan id, which meant the number was on one tab and the plan it applied to
+ * on another. It lives on the plan now, beside the price it comes off. This
+ * carries anything already set across, once, and empties the old map so the
+ * same figure is not read from two places.
+ */
+function migratePlanDiscounts() {
+  const b = bot();
+  const map = (b.offer && b.offer.plans) || null;
+  if (!map || typeof map !== 'object' || !Object.keys(map).length) return false;
+  let touched = false;
+  for (const plan of b.plans || []) {
+    const was = Math.round(Number(map[plan.id]) || 0);
+    /* a figure already on the plan is the admin's newer answer; never overwrite */
+    if (was > 0 && !(Number(plan.discount) > 0)) {
+      plan.discount = Math.min(95, was);
+      touched = true;
+    }
+  }
+  if (touched || Object.keys(map).length) {
+    b.offer.plans = {};
+    touched = true;
+  }
+  if (touched) db.saveNow();
+  return touched;
+}
+
+/*
  * "My usage" was a screen of its own that repeated what the config list could
  * have said in the same breath, so the usage figures moved into the config
  * list and the button became the free trial. Any bot still carrying the old
@@ -305,7 +333,7 @@ function defaults() {
 
     /* a sale, across the shop or one plan at a time. The plans keep their own
        prices; this is applied on top wherever money is shown or taken */
-    offer: { enable: false, percent: 0, plans: {}, custom: true, label: '' },
+    offer: { enable: false, percent: 0, plans: {}, custom: true, customPercent: 0, label: '' },
 
     /* bring people to the bot, get a subscription. Off until the admin picks
        which plan it hands over - there is no sensible default for that */
@@ -991,24 +1019,68 @@ function offerSettings() {
     /* buying by the gigabyte is a sale like any other, so the shop-wide
        figure reaches it too unless the admin says otherwise */
     custom: o.custom !== false,
+    /* and it can have a figure of its own, set on the Manual plan tab beside
+       the price per gigabyte rather than away in the Offer list - which is
+       where somebody pricing it is already looking */
+    customPercent: Math.min(95, Math.max(0, Math.round(Number(o.customPercent) || 0))),
     label: String(o.label || '').slice(0, 80)
   };
+}
+
+/** A plan's own discount, which lives on the plan beside its price. */
+function planDiscount(plan) {
+  if (!plan) return 0;
+  const n = Math.round(Number(plan.discount) || 0);
+  return n > 0 ? Math.min(95, n) : 0;
 }
 
 /** How much off this plan, as a whole number of per cent. */
 function offerFor(plan) {
   if (!plan) return 0;
   const o = offerSettings();
+
+  /*
+   * A plan's own discount is a property of the plan, like its price, so it
+   * applies on its own. The admin types 20 into the box under that plan and
+   * the price under it drops; there is no second switch to remember, which
+   * was the whole complaint about where this used to live.
+   *
+   * The shop-wide percentage is the other kind of thing - a sale, with a
+   * beginning and an end - and that is what "Offer it" governs, along with
+   * the banner. It fills in only for plans carrying no figure of their own.
+   */
+  const own = planDiscount(plan);
+
+  if (plan.custom) {
+    /*
+     * Buying by the gigabyte. Its own figure, set on the Manual plan tab,
+     * stands on its own exactly as a plan's does - somebody who types 50
+     * into that box means half off, not half off once a second switch is
+     * found and turned on. Only the fall-back to the shop-wide percentage
+     * is a sale, and that is what "Offer it" governs.
+     */
+    if (own) return own;
+    if (o.customPercent > 0) return o.customPercent;
+    if (!o.enable) return 0;
+    return o.custom ? o.percent : 0;
+  }
+
+  if (own) return own;
+  /* the old home for a per-plan figure, kept so settings written before this
+     keep working; the panel writes plan.discount now */
+  const legacy = o.plans[plan.id];
   if (!o.enable) return 0;
-  const mine = o.plans[plan.id];
-  if (mine > 0) return mine;
-  if (plan.custom && !o.custom) return 0;
+  if (legacy > 0) return legacy;
   return o.percent;
 }
 
 /** Is anything at all on offer right now? */
 function offerOn() {
   const o = offerSettings();
+  /* a plan priced down on its own still wants the banner over the list, even
+     with no shop-wide sale running */
+  if (bot().plans.some((p) => !p.custom && p.enable !== false && planDiscount(p) > 0)) return true;
+  if (o.customPercent > 0) return true;
   if (!o.enable) return false;
   return o.percent > 0 || Object.keys(o.plans).length > 0;
 }
@@ -1052,6 +1124,36 @@ function planLine(plan) {
   if (!p.was) return `<b>${escapeHtml(plan.name)}</b> — ${money(p.now)} ${escapeHtml(cur)}`.trim();
   return `<b>${escapeHtml(plan.name)}</b> — <s>${money(p.was)}</s> <b>${money(p.now)}</b> ${escapeHtml(cur)}`
     + ` 🔥 ${p.percent}٪`;
+}
+
+/*
+ * The three colours Telegram will paint a key, and nothing else.
+ *
+ * InlineKeyboardButton.style takes "danger", "success" or "primary" and
+ * refuses anything else, so what the admin picks is checked here rather than
+ * discovered as a rejected message. Empty means the app's own colour, which
+ * is what every key that is not singled out gets.
+ */
+const PLAN_STYLES = ['success', 'primary', 'danger'];
+
+function planStyle(plan) {
+  const want = String((plan && plan.style) || '');
+  return PLAN_STYLES.includes(want) ? want : '';
+}
+
+/**
+ * One plan's key, painted if the admin painted it.
+ *
+ * The style is set here rather than left to styled(): that paints by what a
+ * key does, and this is a choice about one particular plan - the admin
+ * marking the one they want bought. A key that already carries a style is
+ * left alone by styled(), so this wins without having to be special-cased
+ * there as well.
+ */
+function planKey(plan, data) {
+  const key = { text: planButton(plan), callback_data: data };
+  const style = planStyle(plan);
+  return style ? Object.assign(key, { style }) : key;
 }
 
 /** The same thing for a button, where Telegram parses no markup at all. */
@@ -1265,7 +1367,7 @@ async function showPlans(ctx, renewId) {
   const b = bot();
   const plans = b.plans.filter((p) => p.enable !== false && !p.custom);
   const tail = renewId ? `:${renewId}` : '';
-  const rows = plans.map((p) => ([{ text: planButton(p), callback_data: `b:buy:${p.id}${tail}` }]));
+  const rows = plans.map((p) => ([planKey(p, `b:buy:${p.id}${tail}`)]));
   if (customOn()) rows.push([{ text: `🎚 ${customLabel()}`, callback_data: `b:custom:${renewId || ''}` }]);
   if (!rows.length) {
     return reply(ctx, 'فعلاً اشتراکی برای فروش تعریف نشده است.', renewId ? [[{ text: '⬅️ بازگشت', callback_data: `b:cfg:${renewId}` }]] : backRow());
@@ -1332,20 +1434,35 @@ async function takeCustomGB(ctx, raw, waiting) {
   const cur = escapeHtml(bot().currency || '');
   /* two to a row: four lengths stacked made a column of buttons taller than
      the message that asked the question */
+  /*
+   * What each length comes to, after any discount.
+   *
+   * These keys used to show the list price while the order that followed was
+   * written for the discounted one. Nobody complained - being charged less
+   * than the button said is not the kind of bug people report - but it meant
+   * a sale on per-gigabyte buying was invisible at the only moment it would
+   * have persuaded anybody. planCost is asked the same question the receipt
+   * asks, so the two cannot drift apart again.
+   */
   const keys = terms.map((t) => {
     const total = gb * per + extraFor(t);
-    return { text: `${monthWord(t.months)} — ${total.toLocaleString('en-US')} ${bot().currency || ''}`.trim(),
+    const cost = planCost({ price: String(total), custom: true });
+    /* currency before the discount tag, the same way a plan's key reads */
+    const sum = `${cost.now.toLocaleString('en-US')} ${bot().currency || ''}`.trim();
+    return { text: `${monthWord(t.months)} — ${sum}${cost.was ? ` (🔥${cost.percent}٪)` : ''}`,
       callback_data: `b:term:${t.months}` };
   });
   const rows = [];
   for (let i = 0; i < keys.length; i += 2) rows.push(keys.slice(i, i + 2));
   rows.push(backRow()[0]);
+  const off = offerFor({ custom: true });
   return reply(ctx, [
     `<b>${gb} گیگابایت</b>`,
     `هر گیگابایت ${per.toLocaleString('en-US')} ${cur}`,
+    off ? `🔥 <b>${off}٪ تخفیف روی همین خرید</b>` : '',
     '',
     '🗓 برای چه مدتی می‌خواهید؟'
-  ].join('\n'), rows);
+  ].filter(Boolean).join('\n'), rows);
 }
 
 /** "۳ ماهه", in words a buyer reads rather than a number of days. */
@@ -4417,6 +4534,7 @@ async function start() {
      should get it back by pressing Start, which is the obvious thing to try */
   migrateUsageButton();
   migrateHelp();
+  migratePlanDiscounts();
   runtime.me = await whoAmI(b.token);
   runtime.stopping = false;
   runtime.running = true;
@@ -4695,6 +4813,7 @@ function resume() {
   migrateStarter();
   migrateUsageButton();
   migrateHelp();
+  migratePlanDiscounts();
   if (b.enabled && b.token) start().catch((err) => { runtime.error = err.message; });
 }
 
@@ -4967,6 +5086,7 @@ module.exports = {
   knownPeople, meetPerson, hasMetBefore,
   rewardStats, keyboardFor, pairStartRows,
   offerSettings, offerFor, offerOn, planCost, chargeFor, offerBanner, planButton, planLine,
+  planDiscount, planStyle, planKey, PLAN_STYLES, migratePlanDiscounts,
   startBroadcast, stopBroadcast, broadcastStatus, audienceCounts, audienceIds,
   botStats,
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,

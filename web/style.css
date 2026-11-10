@@ -2254,3 +2254,15 @@ td .row-actions { display: inline-flex; width: auto; }
  * with a number reads back to front without it.
  */
 .user-text { unicode-bidi: plaintext; }
+
+/*
+ * A column of cards with air between them.
+ *
+ * The plan editor appended one .card per plan straight onto a bare div, and
+ * cards carry no margin of their own, so four plans sat flush against each
+ * other and read as a single long form - the boundary between one plan's
+ * Days box and the next plan's Name was nothing at all. The gap is the whole
+ * fix, and it is a class rather than a style on that one div because the
+ * reward list and the term rows want the same thing.
+ */
+.stack-list { display: flex; flex-direction: column; gap: 14px; }

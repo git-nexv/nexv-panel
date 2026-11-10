@@ -346,6 +346,10 @@ function summariseProfile(p) {
 }
 
 function botView() {
+  /* the per-plan discount moved onto the plan; carry any old one across
+     before the page is drawn, so the box under the plan is not empty while
+     the discount is still being applied from the old map */
+  try { telegram.migratePlanDiscounts(); } catch (_) { /* nothing to carry */ }
   const b = telegram.bot();
   return {
     enabled: !!b.enabled,
@@ -365,7 +369,7 @@ function botView() {
     pricePerGB: Number(b.pricePerGB) || 0,
     trial: b.trial || telegram.defaults().trial,
     trialsTaken: telegram.trialsTaken(),
-    offer: Object.assign({ enable: false, percent: 0, plans: {}, custom: true, label: '' }, b.offer || {}),
+    offer: Object.assign({ enable: false, percent: 0, plans: {}, custom: true, customPercent: 0, label: '' }, b.offer || {}),
     reward: Object.assign({}, telegram.defaults().reward, b.reward || {}, {
       /* the ledgers live in the same object and are not settings - the page
          gets the figures it needs through `rewardStats` instead */
@@ -460,6 +464,13 @@ router.put('/bot', async (req, res) => {
       gb: num(p.gb),
       days: num(p.days, 30) || 30,
       price: String(p.price || '0').slice(0, 20),
+      /* The plan's own discount, beside its own price. Nothing rewrites the
+         price: this is applied wherever money is shown or taken, so clearing
+         the box puts the plan back to full price with nothing to undo. */
+      discount: Math.min(95, Math.max(0, Math.round(num(p.discount)))),
+      /* and the colour of its key in the bot. Telegram takes exactly these
+         three and refuses the rest, so anything else means the app's own. */
+      style: ['success', 'primary', 'danger'].includes(String(p.style)) ? String(p.style) : '',
       /* no inboundId: a sale goes out on every inbound that is switched on */
       enable: p.enable !== false
     })).concat(oneOffs);
@@ -515,6 +526,8 @@ router.put('/bot', async (req, res) => {
       percent: Math.min(95, Math.max(0, Math.round(num(body.offer.percent)))),
       plans: perPlan,
       custom: body.offer.custom !== false,
+      /* the per-gigabyte figure, set on the Manual plan tab */
+      customPercent: Math.min(95, Math.max(0, Math.round(num(body.offer.customPercent)))),
       label: String(body.offer.label || '').slice(0, 80)
     };
   }

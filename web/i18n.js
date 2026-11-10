@@ -225,6 +225,26 @@ const FA = {
   'the subscription title': 'عنوان سابسکریپشن',
 
 
+  /* a plan's own discount and colour */
+  'Discount (%)': 'تخفیف (٪)',
+  'This plan’s button colour': 'رنگ دکمه‌ی این پلن',
+  'Default': 'پیش‌فرض',
+  '🟢 Green': '🟢 سبز',
+  '🔵 Blue': '🔵 آبی',
+  '🔴 Red': '🔴 قرمز',
+  'They pay': 'پرداختی:',
+  'was': 'قبلاً',
+  'Set a price first': 'اول یک قیمت بگذارید',
+  'Set the price per GB on the Setup tab first': 'اول قیمت هر گیگ را در تب Setup تعیین کنید',
+  'Comes straight off this plan, on its own — no switch to turn on. The price above stays as you typed it, so clearing this box puts the plan back to full price.':
+    'مستقیم از همین پلن کم می‌شود و به هیچ کلیدی نیاز ندارد. قیمت بالا همان‌طور که نوشته‌اید می‌ماند، پس خالی کردن این باکس پلن را به قیمت کامل برمی‌گرداند.',
+  'The colour of this plan’s button in the bot. Colour one, not all of them — when every key is green none of them stands out.':
+    'رنگ دکمه‌ی این پلن در ربات. فقط یکی را رنگی کنید، نه همه را — وقتی همه سبز باشند هیچ‌کدام به چشم نمی‌آید.',
+  'Comes off every per-gigabyte purchase, on its own. Leave it empty to use the shop-wide sale from the Offer tab instead, if one is running.':
+    'از هر خرید گیگابایتی کم می‌شود و مستقل است. خالی بگذارید تا در عوض از تخفیف کلی تب Offer استفاده شود، اگر فعال باشد.',
+  'A sale across the shop, applied to every plan with no figure of its own. This one needs the switch above; a plan’s own discount does not — that is part of the plan.':
+    'یک حراج روی کل فروشگاه، که روی هر پلنی که عدد مخصوص خودش را ندارد اعمال می‌شود. این یکی به کلید بالا نیاز دارد؛ تخفیف خود پلن نه — آن جزئی از خود پلن است.',
+
   /* the Telegram proxy's own settings */
   'Pretend to be': 'خود را جای این سایت جا بزن',
   'Make a new key': 'ساخت کلید تازه',
@@ -248,7 +268,6 @@ const FA = {
   'Check it / why is it down': 'بررسی کن / چرا خاموش است',
   'Start it again': 'دوباره راه بینداز',
   'Edit settings': 'ویرایش تنظیمات',
-  'Running': 'در حال کار',
   'Not running': 'کار نمی‌کند',
   'Running, with a problem': 'کار می‌کند، ولی مشکلی دارد',
   'Checking…': 'در حال بررسی…',
@@ -526,7 +545,6 @@ const FA = {
     'اینباندها، کلاینت‌ها و تنظیمات شما دست‌نخورده می‌مانند.',
   'Nothing to install — this is the newest version.':
     'چیزی برای نصب نیست — همین تازه‌ترین نسخه است.',
-  'Checking…': 'در حال بررسی…',
   'Copy command': 'کپی دستور',
   'Update from the server’s terminal.': 'از ترمینال سرور به‌روزرسانی کنید.',
   'The server could not reach the repository.': 'سرور نتوانست به مخزن برسد.',
@@ -633,7 +651,6 @@ const FA = {
   'TCP fast open': 'باز شدن سریع TCP',
   'Multipath TCP': 'TCP چندمسیره',
   'Penetrate': 'نفوذ',
-  'IPv6 only': 'فقط IPv6',
   'Sockopt domain strategy': 'راهبرد دامنه سوکت',
   'TCP congestion': 'ازدحام TCP',
   'TProxy': 'TProxy',
@@ -1184,7 +1201,10 @@ const FA = {
   'Look changed': 'ظاهر عوض شد',
 
   /* the bot: a free trial, and selling by the gigabyte */
-  'Price': 'قیمت هر گیگ',
+  /* 'Price' is the plan's own price box. It used to say "قیمت هر گیگ" here,
+     which belongs to the per-gigabyte field on Setup and has its own key -
+     so every plan's price was labelled as a price per gigabyte. */
+  'Price': 'قیمت',
   'What one gigabyte costs. Custom-volume buying uses this, and stays off until it is set.':
     'قیمت هر گیگابایت. خرید حجم دلخواه از همین استفاده می‌کند و تا وقتی صفر باشد نمایش داده نمی‌شود.',
   '🎁 Test config': '🎁 کانفیگ تست',
