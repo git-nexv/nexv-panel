@@ -225,6 +225,28 @@ const FA = {
   'the subscription title': 'عنوان سابسکریپشن',
 
 
+  /* the IP limit: who is connected, and which devices are refused */
+  'Devices allowed at once': 'تعداد دستگاه هم‌زمان',
+  'Connected now': 'الان متصل',
+  'has a seat': 'جا دارد',
+  'blocked': 'مسدود',
+  'allowlisted': 'در فهرست مجاز',
+  'Remove this address': 'حذف این آی‌پی',
+  'Removed': 'حذف شد',
+  'Allowed at once': 'مجاز هم‌زمان',
+  'Seen in the last five minutes': 'دیده‌شده در پنج دقیقه‌ی گذشته',
+  'No IP limit is set on this client.': 'برای این کلاینت محدودیت آی‌پی تعیین نشده است.',
+  'The ones marked blocked are being refused; the rest keep working.':
+    'آن‌هایی که «مسدود» خورده‌اند رد می‌شوند؛ بقیه بدون مشکل کار می‌کنند.',
+  'Nothing has connected in the last five minutes.': 'در پنج دقیقه‌ی گذشته چیزی وصل نشده است.',
+  'Could not read the addresses.': 'نتوانست آی‌پی‌ها را بخواند.',
+  'On the IP limit allowlist, so it never counts': 'در فهرست مجاز است، پس هیچ‌وقت حساب نمی‌شود',
+  'Over the limit, so this device is refused': 'بیش از حد مجاز است، پس این دستگاه رد می‌شود',
+  'How many addresses may use this config at the same time. The ones that connect first keep working; a device opened after the limit is reached gets nothing, and the account itself is never cut off. 0 means no limit.':
+    'چند آی‌پی هم‌زمان می‌توانند از این کانفیگ استفاده کنند. آن‌هایی که زودتر وصل شده‌اند کار می‌کنند؛ دستگاهی که بعد از پر شدن ظرفیت باز شود هیچ چیزی نمی‌گیرد، و خود اکانت هیچ‌وقت قطع نمی‌شود. صفر یعنی بدون محدودیت.',
+  'Seats go to the addresses seen earliest, so the device that was connected first keeps working and the one opened afterwards is refused. Addresses are read from Xray’s access log and forgotten after five minutes of silence, so a seat frees itself when a device really stops — or at once if you remove it here.':
+    'جاها به آی‌پی‌هایی می‌رسد که زودتر دیده شده‌اند، پس دستگاهی که اول وصل شده کار می‌کند و آنکه بعد باز شده رد می‌شود. آی‌پی‌ها از لاگ Xray خوانده می‌شوند و بعد از پنج دقیقه سکوت فراموش می‌شوند، پس وقتی دستگاهی واقعاً قطع شود جایش خودبه‌خود آزاد می‌شود — یا همین‌جا دستی حذفش کنید.',
+
   /* the Message tab: one to the bot's users, one to the channel */
   'Last time you used': 'دفعه‌ی قبل این‌ها را گذاشته بودید',
   'Use them again': 'دوباره همین‌ها',

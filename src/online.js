@@ -325,6 +325,20 @@ function forTag(tag) {
   };
 }
 
+/*
+ * Forget one address, which is how the admin frees a seat by hand.
+ *
+ * The IP limit gives its seats to the addresses seen earliest, so an address
+ * that is squatting one keeps it until the device really stops. Dropping it
+ * here lets the next device in at once rather than after the window runs
+ * out - which is the whole point of a remove button.
+ */
+function forgetIp(tag, ip) {
+  const entry = seen.get(tag);
+  if (!entry) return false;
+  return entry.ips.delete(String(ip));
+}
+
 /** Forget the addresses recorded for one client, so the list starts over. */
 function forget(tag) {
   const entry = seen.get(tag);
@@ -411,5 +425,5 @@ function start() {
 }
 
 module.exports = {
-  start, read, save, load, forTag, forget, sitesFor, forgetSites, status, LOG_FILE, SITE_FILE
+  start, read, save, load, forTag, forget, forgetIp, sitesFor, forgetSites, status, LOG_FILE, SITE_FILE
 };

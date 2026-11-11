@@ -347,7 +347,10 @@ function streamSettings(inb) {
 
 function inboundSettings(inb, clients) {
   const active = clients.filter((c) => c.enable !== false
-    && !isExpired(c) && !isOverQuota(c) && !isOverIpLimit(c));
+    /* not isOverIpLimit: an account in too many places keeps serving the
+       devices that were there first, and the extra ones are refused by a
+       routing rule instead - see ipSeats() */
+    && !isExpired(c) && !isOverQuota(c));
   switch (inb.protocol) {
     case 'vless':
       return {
@@ -787,18 +790,104 @@ function inboundDead(inb) {
  * page shows behind the green dot, so what disables an account is exactly what
  * the admin can see. Zero means no limit, and that is the default.
  */
+/*
+ * Which of this client's addresses hold a seat, and which are the extras.
+ *
+ * The limit is meant to stop one subscription being shared around, and the
+ * way it did that was to disable the whole client - so the person who was
+ * already connected lost their service because somebody else had pasted
+ * their link somewhere. That punishes the customer for the copy. What it
+ * should do, and now does, is let the devices that were there first carry
+ * on and give the extra one nothing.
+ *
+ * Seats go to the addresses seen earliest, so a phone that is already
+ * connected keeps working and the app opened afterwards is the one that is
+ * refused. Nothing is written down: the seats are read from the same
+ * five-minute window the Clients page shows, which means what the admin sees
+ * is exactly what is enforced, a seat frees itself when a device really stops
+ * using it, and the admin can free one by hand by removing the address.
+ */
+function ipSeats(c) {
+  const limit = Number(c.limitIp || 0);
+  const out = { limit, allowed: [], blocked: [], exempt: [] };
+  const seen = online.forTag(clientTag(c)).ips;
+  if (!seen.length) return out;
+
+  const netfilter = require('./netfilter');
+  const counted = [];
+  for (const entry of seen) {
+    /* addresses on the allowlist never count and are never blocked: one
+       shared office address is one address to the server and thirty people
+       to whoever is paying, and without this a limit of two is unusable
+       behind any NAT.
+
+       The list holds a record per address, not a bare string; passing the
+       whole record stringified it to "[object Object]", which matches no
+       rule anybody could write, so the allowlist never once exempted
+       anything. */
+    if (netfilter.ipLimitExempt(entry.ip)) out.exempt.push(entry.ip);
+    else counted.push(entry);
+  }
+  if (!limit || limit <= 0) {
+    out.allowed = counted.map((e) => e.ip);
+    return out;
+  }
+
+  /* oldest first: whoever was here before the limit was reached keeps the
+     seat. forTag sorts by most recent, which is the opposite of what the
+     question needs. */
+  counted.sort((a, b) => (a.first || a.at || 0) - (b.first || b.at || 0));
+  out.allowed = counted.slice(0, limit).map((e) => e.ip);
+  out.blocked = counted.slice(limit).map((e) => e.ip);
+  return out;
+}
+
+/**
+ * Is this client in more places than it is allowed?
+ *
+ * Still asked, and still shown on the Clients page - but it no longer
+ * disables anybody. It means "there is an address being refused", which is
+ * worth seeing; it is not a reason to take the service away from the device
+ * that was there first.
+ */
 function isOverIpLimit(c) {
   const limit = Number(c.limitIp || 0);
   if (!limit || limit <= 0) return false;
-  /* addresses on the allowlist do not count towards the limit: one shared
-     office address is one address to the server and thirty people to whoever
-     is paying, and without this a limit of two is unusable behind any NAT */
-  const netfilter = require('./netfilter');
-  /* the list holds a record per address, not a bare string; passing the whole
-     record to the allowlist stringified it to "[object Object]", which matches
-     no rule anybody could write, so the allowlist never once exempted anything */
-  const seen = online.forTag(clientTag(c)).ips.filter((entry) => !netfilter.ipLimitExempt(entry.ip));
-  return seen.length > limit;
+  return ipSeats(c).blocked.length > 0;
+}
+
+/*
+ * The rules that actually refuse the extra devices.
+ *
+ * One rule per client that has an address over its limit, matching that
+ * client's own name and that address together - Xray ANDs the conditions in
+ * a rule - so the traffic from that one device, on that one account, goes to
+ * the blackhole. Everybody else on the same address, and every other device
+ * on the same account, is untouched.
+ *
+ * This is the whole of the enforcement. There is no "cut the client off"
+ * any more.
+ */
+function ipBlockRules(d) {
+  const rules = [];
+  for (const c of (d.clients || [])) {
+    if (c.enable === false || c.autoDisabled) continue;
+    if (!(Number(c.limitIp) > 0)) continue;
+    const seats = ipSeats(c);
+    if (!seats.blocked.length) continue;
+    rules.push({
+      type: 'field',
+      user: [clientTag(c)],
+      source: seats.blocked,
+      outboundTag: 'blocked'
+    });
+  }
+  return rules;
+}
+
+/** What the blocking rules come to, so a change can be noticed cheaply. */
+function ipBlockPrint(d) {
+  return ipBlockRules(d).map((r) => `${r.user[0]}:${r.source.join(',')}`).sort().join('|');
 }
 
 /** RFC1918 + loopback + link-local; keeps clients from reaching the server's own LAN. */
@@ -936,6 +1025,9 @@ function buildConfig() {
   // explicit CIDRs rather than geoip:private, so the config never depends
   // on geoip.dat being present next to the binary
   rules.push({ type: 'field', outboundTag: 'blocked', ip: PRIVATE_RANGES });
+  /* above the admin's own rules: a device over its account's limit is refused
+     whatever else the routing says, so no hand-written rule can let it past */
+  for (const rule of ipBlockRules(d)) rules.push(rule);
   for (const rule of (d.routing || [])) {
     if (rule.enable === false) continue;
     const rendered = routingRule(rule);
@@ -1489,19 +1581,16 @@ const toldAbout = new Map();
 const TELL_AGAIN = 60 * 60 * 1000;
 
 /*
- * How long a client stays cut off once the IP limit has caught it.
+ * There was a cool-off period here, and a map of who was serving it.
  *
- * Addresses fall out of the five-minute window one at a time, so a shared
- * account crosses the limit, drops under it, and crosses it again - and every
- * one of those flips used to rewrite the config and RESTART XRAY, which drops
- * every other connection on the server. With enforcement running every thirty
- * seconds that is a service that spends its life restarting. Once cut off, a
- * client now stays cut off until it has been genuinely quiet for a while,
- * which is also the behaviour the rule is supposed to have: being in six
- * places at once should cost you something more than thirty seconds.
+ * It existed because crossing the limit disabled the client, addresses fall
+ * out of the five-minute window one at a time, and so an account would be
+ * disabled and re-enabled every thirty seconds - each flip rewriting the
+ * config and restarting Xray, which drops every other connection on the
+ * server. Nothing is disabled for this any more; a device that loses its
+ * seat is simply refused, and one that gains a seat is simply served, so
+ * there is no flip to damp and nothing to wait out.
  */
-const IP_COOLOFF_MS = Number(process.env.NEXV_IP_COOLOFF_MS || 5 * 60 * 1000);
-const cutOffAt = new Map();
 
 function noteOverIpLimit(c) {
   const last = toldAbout.get(c.id) || 0;
@@ -1512,7 +1601,8 @@ function noteOverIpLimit(c) {
   d.logs.unshift({
     at: Date.now(),
     type: 'client',
-    message: `${c.email} was cut off: ${seen} addresses at once, ${c.limitIp} allowed`
+    message: `${c.email}: ${seen} addresses at once, ${c.limitIp} allowed `
+      + '- the extra ones are being refused'
   });
   if (d.logs.length > 500) d.logs.length = 500;
 }
@@ -1609,6 +1699,18 @@ function startClockOnImport(subId) {
   return started;
 }
 
+/*
+ * What the blocking rules looked like last time the config was written.
+ *
+ * A device appearing or going quiet changes the routing but not the stored
+ * data, so there is nothing for `dirty` to notice - and without this the new
+ * rule would sit in the panel until something else happened to trigger a
+ * write. Compared rather than recomputed into the config every thirty
+ * seconds, because rewriting an identical config and reloading Xray for it
+ * is a cost paid for nothing.
+ */
+let lastIpBlocks = null;
+
 async function enforceLimits() {
   const d = db.data;
   let dirty = false;
@@ -1616,26 +1718,33 @@ async function enforceLimits() {
   for (const c of d.clients) {
     // before anything is judged: a config that has been used has a deadline
     if (startClockIfUsed(c, now, d)) dirty = true;
-    const overIps = isOverIpLimit(c);
-    if (overIps) cutOffAt.set(c.id, now);
-    /* still inside the cooling period counts as still over the limit, so the
-       flip back does not happen thirty seconds later */
-    const cooling = !overIps && now - (cutOffAt.get(c.id) || 0) < IP_COOLOFF_MS;
-    const shouldDisable = isExpired(c) || isOverQuota(c) || overIps || cooling;
+    /*
+     * Being in too many places is no longer one of these.
+     *
+     * It used to disable the whole client, which took the service away from
+     * the device that was there first because somebody else had pasted the
+     * link somewhere - the customer punished for the copy. The extra devices
+     * are refused by a routing rule now (see ipSeats), and the account keeps
+     * working for the ones that hold a seat.
+     */
+    const shouldDisable = isExpired(c) || isOverQuota(c);
     if (shouldDisable && c.enable !== false && !c.autoDisabled) {
       c.autoDisabled = true;
-      if (overIps) noteOverIpLimit(c);
       dirty = true;
     } else if (!shouldDisable && c.autoDisabled) {
-      /* it comes back on its own once the extra addresses go quiet - the point
-         is to stop an account being in six places, not to end it */
       c.autoDisabled = false;
-      cutOffAt.delete(c.id);
       dirty = true;
     }
+    if (isOverIpLimit(c)) noteOverIpLimit(c);
   }
-  if (dirty) {
-    db.save();
+
+  /* and the rules themselves, which move without anything being saved */
+  const blocks = ipBlockPrint(d);
+  const blocksMoved = lastIpBlocks !== null && blocks !== lastIpBlocks;
+  lastIpBlocks = blocks;
+
+  if (dirty || blocksMoved) {
+    if (dirty) db.save();
     await apply();
     /*
      * apply() rewrites the config and reloads it, which is enough for a client
@@ -1644,9 +1753,9 @@ async function enforceLimits() {
      * the only thing that drops it. Off by default, because a restart is a
      * blip for everybody else on the server to end one person's session early.
      */
-    if (db.settings.restartXrayOnAutoDisable) await restart();
+    if (dirty && db.settings.restartXrayOnAutoDisable) await restart();
   }
-  return dirty;
+  return dirty || blocksMoved;
 }
 
 /**
@@ -1716,6 +1825,7 @@ module.exports = {
   xrayVersion,
   XRAY_BIN, XRAY_CONFIG, XRAY_SERVICE, API_PORT, BOT_PROXY_PORT, botVia, handOverConfig,
   buildConfig, writeConfig, testConfig, apply, serviceStatus, repairCerts, messageOf, isOverIpLimit,
+  ipSeats, ipBlockRules, ipBlockPrint,
   outboundConfig, outboundStream,
   INBOUND_PROTOCOLS, OUTBOUND_PROTOCOLS, CLIENT_PROTOCOLS, LINK_PROTOCOLS,
   restart, start, stop, ensureRunning, collectTraffic, enforceLimits, ensureAccessLog, accessLogUsable, ACCESS_LOG, rateFor,

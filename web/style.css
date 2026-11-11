@@ -2278,3 +2278,7 @@ td .row-actions { display: inline-flex; width: auto; }
 .send-ways { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
 @media (max-width: 760px) { .send-ways { grid-template-columns: 1fr; } }
 .card.soft { background: var(--glass-2); }
+
+/* an address being refused, in the lists that show seats */
+.ip-row.is-blocked { opacity: .72; }
+.seat-row { padding: 8px 10px; border-radius: 10px; background: var(--glass-2); }

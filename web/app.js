@@ -3983,9 +3983,48 @@ function showClientActivity(client, startOn) {
     paint();
     tickers.push(paint);
 
-    list.append(el('div', { class: 'attach-row ip-row' }, [
+    /*
+     * Whether this address is being served or refused.
+     *
+     * The limit no longer disables the account - the devices that were here
+     * first keep their seats and the extra ones are sent to the blackhole -
+     * so "blocked" is a fact about this one address, and the admin needs to
+     * see which one it is rather than a count that says somebody somewhere
+     * is over.
+     */
+    const state = entry.exempt
+      ? el('span', { class: 'chip', title: t('On the IP limit allowlist, so it never counts'), text: t('allowlisted') })
+      : entry.blocked
+        ? el('span', { class: 'chip danger', title: t('Over the limit, so this device is refused'), text: t('blocked') })
+        : limit
+          ? el('span', { class: 'chip ok', text: t('has a seat') })
+          : null;
+
+    list.append(el('div', { class: `attach-row ip-row ${entry.blocked ? 'is-blocked' : ''}` }, [
       el('div', { class: 'ip-main' }, [
-        el('strong', { class: 'mono', text: entry.ip }),
+        el('div', { class: 'row', style: 'gap:8px;align-items:center;flex-wrap:wrap' }, [
+          el('strong', { class: 'mono', text: entry.ip }),
+          state,
+          /*
+           * And the way to free a seat by hand.
+           *
+           * An address holds its seat until that device really stops, which
+           * is right for a customer who closed the app and wrong for one who
+           * changed phone and is now locked out of their own subscription.
+           * Removing it opens the seat immediately.
+           */
+          el('button', {
+            class: 'btn icon ghost', title: t('Remove this address'), html: icon('trash'),
+            onclick: async (event) => {
+              try {
+                await api.del(`/clients/${client.id}/ips/${encodeURIComponent(entry.ip)}`);
+                toast(`${t('Removed')} ${entry.ip}`, 'ok');
+                event.target.closest('.modal-backdrop').remove();
+                render();
+              } catch (err) { toast(err.message, 'err'); }
+            }
+          })
+        ]),
         /* where this address actually went. The newest name first, because
            that is what it is doing right now rather than what it did most */
         hosts.length
@@ -4012,11 +4051,18 @@ function showClientActivity(client, startOn) {
 
   panels.Addresses.append(
     el('div', { class: 'muted', style: 'margin-bottom:10px', text: limit
-      ? `Allowed at once: ${limit}. Seen in the last five minutes: ${(client.ips || []).length}.${
-        client.overIps ? ' Over the limit, so this client is cut off until the extra addresses go quiet.' : ''}`
-      : `Seen in the last five minutes: ${(client.ips || []).length}. No IP limit is set on this client.` }),
+      ? `${t('Allowed at once')}: ${limit}. ${t('Seen in the last five minutes')}: ${(client.ips || []).length}.`
+        + (client.overIps
+          ? ` ${t('The ones marked blocked are being refused; the rest keep working.')}`
+          : '')
+      : `${t('Seen in the last five minutes')}: ${(client.ips || []).length}. ${t('No IP limit is set on this client.')}` }),
     list,
-    el('div', { class: 'hint', style: 'margin-top:10px', text: 'Addresses are read from Xray’s access log and forgotten after five minutes of silence.' }),
+    el('div', { class: 'hint', style: 'margin-top:10px', text: limit
+      ? 'Seats go to the addresses seen earliest, so the device that was connected first keeps working '
+        + 'and the one opened afterwards is refused. Addresses are read from Xray’s access log and '
+        + 'forgotten after five minutes of silence, so a seat frees itself when a device really stops — '
+        + 'or at once if you remove it here.'
+      : 'Addresses are read from Xray’s access log and forgotten after five minutes of silence.' }),
     el('div', { class: 'row', style: 'margin-top:12px' }, [
       el('button', {
         class: 'btn', text: 'Forget these addresses',
@@ -4409,9 +4455,63 @@ function clientForm(existing) {
     startedNote
   ]), { full: true });
 
-  const limitIp = formField(form, 'Concurrent IP limit', el('input', { type: 'number', min: '0', value: v.limitIp || 0 }), {
-    hint: 'Addresses seen at once in a five-minute window. Over it, the client is cut off until the extras go quiet. 0 means no limit.'
+  const limitIp = formField(form, 'Devices allowed at once', el('input', { type: 'number', min: '0', value: v.limitIp || 0 }), {
+    hint: 'How many addresses may use this config at the same time. The ones that connect first keep '
+      + 'working; a device opened after the limit is reached gets nothing, and the account itself is '
+      + 'never cut off. 0 means no limit.'
   });
+
+  /*
+   * And who is on it right now, under the box that limits them.
+   *
+   * The limit was a number the admin typed with nothing to judge it by: no
+   * way to see who was connected, and no way to let a customer back in after
+   * they changed phone. The list is here, in the place the question is asked,
+   * and each address can be removed to free its seat at once.
+   *
+   * Only for a client that already exists - a form for a config nobody has
+   * yet has nothing to show - and fetched rather than taken from the row, so
+   * it is what is true now rather than what was true when the page loaded.
+   */
+  if (v && v.id) {
+    const seatBox = el('div', { class: 'hint' });
+    formField(form, 'Connected now', seatBox, { full: true });
+    const drawSeats = async () => {
+      seatBox.innerHTML = '';
+      let out;
+      try { out = await api.get(`/clients/${v.id}/ips`); } catch (_) { out = null; }
+      if (!out) { seatBox.textContent = t('Could not read the addresses.'); return; }
+      if (!out.ips.length) {
+        seatBox.textContent = t('Nothing has connected in the last five minutes.');
+        return;
+      }
+      const rows = el('div', { class: 'stack-list' });
+      for (const entry of out.ips) {
+        const blocked = out.blocked.includes(entry.ip);
+        const exempt = out.exempt.includes(entry.ip);
+        rows.append(el('div', { class: 'row seat-row', style: 'gap:8px;align-items:center;flex-wrap:wrap' }, [
+          el('strong', { class: 'mono', text: entry.ip }),
+          exempt ? el('span', { class: 'chip', text: t('allowlisted') })
+            : blocked ? el('span', { class: 'chip danger', text: t('blocked') })
+              : out.limit ? el('span', { class: 'chip ok', text: t('has a seat') }) : null,
+          el('span', { class: 'faint', text: ago(entry.at || 0) }),
+          el('button', {
+            class: 'btn icon ghost', type: 'button', title: t('Remove this address'), html: icon('trash'),
+            onclick: async () => {
+              try {
+                await api.del(`/clients/${v.id}/ips/${encodeURIComponent(entry.ip)}`);
+                toast(`${t('Removed')} ${entry.ip}`, 'ok');
+                await drawSeats();
+              } catch (err) { toast(err.message, 'err'); }
+            }
+          })
+        ]));
+      }
+      seatBox.append(rows);
+      hydrateIcons(seatBox);
+    };
+    drawSeats();
+  }
   const flowSel = selectOf([{ value: '', label: 'No flow' }, { value: 'xtls-rprx-vision', label: 'xtls-rprx-vision' }], v.flow || '');
   const wgPublicKey = el('input', { value: v.wgPublicKey || '' });
   const wgAllowedIPs = el('input', { value: (v.wgAllowedIPs || []).join(','), placeholder: '10.0.0.2/32' });

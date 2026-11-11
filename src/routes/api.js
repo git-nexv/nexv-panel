@@ -189,6 +189,10 @@ const RESELLER_ALLOWS = [
   [/^\/clients$/, ['GET', 'POST']],
   [/^\/clients\/[^/]+$/, ['PUT', 'DELETE']],
   [/^\/clients\/[^/]+\/(toggle|reset-traffic|forget-ips)$/, ['POST']],
+  /* their own client's addresses: seeing who is connected and freeing a seat
+     is part of running the account, and owns() still gates the client itself */
+  [/^\/clients\/[^/]+\/ips$/, ['GET']],
+  [/^\/clients\/[^/]+\/ips\/[^/]+$/, ['DELETE']],
   [/^\/clients\/[^/]+\/(qrcode|sub)$/, ['GET']],
   [/^\/wallet\/redeem$/, ['POST']],
   [/^\/reseller\/bot$/, ['GET', 'PUT']]
@@ -2589,6 +2593,7 @@ router.get('/clients', (req, res) => {
     const mine = membership.inboundsOf(c, d.inbounds);
     const inb = mine[0];
     const live = online.forTag(xray.clientTag(c));
+    const seats = xray.ipSeats(c);
     const rate = xray.rateFor(c.id);
     return Object.assign({}, c, {
       inboundIds: membership.inboundIdsOf(c),
@@ -2606,7 +2611,7 @@ router.get('/clients', (req, res) => {
       protocol: inb ? inb.protocol : '',
       expired: xray.isExpired(c),
       depleted: xray.isOverQuota(c),
-      overIps: xray.isOverIpLimit(c),
+      overIps: seats.blocked.length > 0,
       link: inb ? links.buildLink(inb, c) : '',
       /* what the copy key hands over: a subscription link keeps working when
          the config behind it is changed, where a pasted vless:// does not */
@@ -2618,8 +2623,15 @@ router.get('/clients', (req, res) => {
          has never seen one - a config that was made and never used */
       lastSeen: live.lastSeen || 0,
       speed: { up: Math.round(rate.up), down: Math.round(rate.down) },
-      ips: live.ips,
-      ipCount: live.ips.length
+      /* each address marked with whether it holds a seat, so the panel can
+         show what is being served and what is being refused rather than
+         leaving the admin to work it out from a count */
+      ips: live.ips.map((entry) => Object.assign({}, entry, {
+        blocked: seats.blocked.includes(entry.ip),
+        exempt: seats.exempt.includes(entry.ip)
+      })),
+      ipCount: live.ips.length,
+      ipBlocked: seats.blocked.length
     });
   }));
 });
@@ -2931,6 +2943,45 @@ router.post('/clients/:id/forget-ips', (req, res) => {
   const cleared = online.forget(xray.clientTag(client));
   logEvent('client', `cleared ${cleared} recorded address(es) for ${client.email}`);
   res.json({ ok: true, cleared });
+});
+
+/*
+ * Free one seat, by forgetting one address.
+ *
+ * The IP limit hands its seats to the addresses seen earliest, so an address
+ * that is squatting one keeps it until that device really stops. This is the
+ * admin saying "that one is finished with" - the seat opens immediately and
+ * whichever device was being refused is served on the next pass.
+ *
+ * The config is rewritten straight away rather than at the next sweep,
+ * because the admin pressed a button and expects it to have happened.
+ */
+router.delete('/clients/:id/ips/:ip', async (req, res) => {
+  const client = db.data.clients.find((c) => c.id === req.params.id);
+  if (!client || !owns(req, client)) return bad(res, 'client not found', 404);
+  const ip = String(req.params.ip || '').trim();
+  if (!ip) return bad(res, 'which address?');
+  const gone = online.forgetIp(xray.clientTag(client), ip);
+  if (!gone) return bad(res, 'that address is not on this client any more', 404);
+  logEvent('client', `removed ${ip} from ${client.email}`);
+  try { await xray.apply(); } catch (err) { /* the seat is free either way */ }
+  const seats = xray.ipSeats(client);
+  res.json({ ok: true, ip, allowed: seats.allowed, blocked: seats.blocked });
+});
+
+/** The addresses on one client right now, and which of them hold a seat. */
+router.get('/clients/:id/ips', (req, res) => {
+  const client = db.data.clients.find((c) => c.id === req.params.id);
+  if (!client || !owns(req, client)) return bad(res, 'client not found', 404);
+  const live = online.forTag(xray.clientTag(client));
+  const seats = xray.ipSeats(client);
+  res.json({
+    limit: Number(client.limitIp || 0),
+    allowed: seats.allowed,
+    blocked: seats.blocked,
+    exempt: seats.exempt,
+    ips: live.ips
+  });
 });
 
 /** Is the address tracking actually working? The Clients page says so. */
