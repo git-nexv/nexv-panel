@@ -2215,6 +2215,60 @@ function messageKeys(list) {
   return rows.length ? rows : null;
 }
 
+/*
+ * The same list, kept flat.
+ *
+ * messageKeys() folds the keys into rows, which is what Telegram wants and
+ * the wrong shape to hand back to the form that drew them - there, each key
+ * is a card with a "beside the one above" switch. This keeps that shape, and
+ * drops exactly what messageKeys drops, so what is remembered is what was
+ * actually sent rather than what was typed.
+ */
+function flatKeys(list) {
+  const want = Array.isArray(list) ? list : [];
+  const out = [];
+  for (const raw of want.slice(0, MAX_KEYS)) {
+    const text = String((raw && raw.text) || '').trim().slice(0, 40);
+    const url = String((raw && raw.url) || '').trim().slice(0, 500);
+    if (!text || !url) continue;
+    if (!/^(https?:\/\/|tg:\/\/)/i.test(url)) continue;
+    const style = String((raw && raw.style) || '');
+    out.push({
+      text,
+      url,
+      style: KEY_STYLES.includes(style) ? style : '',
+      /* the first key has nothing to sit beside, whatever was ticked */
+      row: !!(raw && raw.row) && out.length > 0
+    });
+  }
+  return out;
+}
+
+/**
+ * The keys from the last message that went out, to offer back.
+ *
+ * A shop sends the same three keys under nearly every post - buy, guide,
+ * support - and typing them again each time is the kind of work a panel
+ * should not ask for. They are kept on the bot's own settings rather than in
+ * the browser, so they are there from any device and after any restart.
+ */
+function lastKeys() {
+  const kept = bot().lastKeys;
+  return Array.isArray(kept) ? flatKeys(kept) : [];
+}
+
+/** Keep them, but only when something really went out with them. */
+function rememberKeys(list) {
+  const keys = flatKeys(list);
+  if (!keys.length) return;
+  const b = bot();
+  /* no save when nothing moved: this runs on every send, and a write per
+     broadcast of settings that have not changed is a write for nothing */
+  if (JSON.stringify(b.lastKeys || []) === JSON.stringify(keys)) return;
+  b.lastKeys = keys;
+  db.saveNow();
+}
+
 /** Whatever the caller gave: a list of keys, or the single old one. */
 function keysFrom(opts) {
   const o = opts || {};
@@ -2253,6 +2307,9 @@ async function postToChannel(text, opts) {
     });
     runtime.sent += 1;
     const link = messageLink(id, sent && sent.message_id);
+    /* only once it has really gone: a post Telegram refused is not a set of
+       keys worth offering back next time */
+    rememberKeys((opts || {}).buttons);
     db.data.logs.unshift({ at: Date.now(), type: 'bot', message: `posted in ${id}` });
     if (db.data.logs.length > 500) db.data.logs.length = 500;
     db.saveNow();
@@ -2303,6 +2360,7 @@ async function startBroadcast(text, which, opts) {
   });
 
   const keyboard = keysFrom(opts);
+  if (keyboard) rememberKeys((opts || {}).buttons || [(opts || {}).button]);
 
   /* deliberately not awaited: the caller is an HTTP request and this takes as
      long as it takes */
@@ -5199,6 +5257,7 @@ module.exports = {
   planDiscount, planStyle, planKey, PLAN_STYLES, migratePlanDiscounts,
   startBroadcast, stopBroadcast, broadcastStatus, audienceCounts, audienceIds,
   postToChannel, messageKeys, messageLink, KEY_STYLES, MAX_KEYS,
+  lastKeys, rememberKeys, flatKeys,
   botStats,
   send, escapeHtml, payWays, call, channel, gateOn, joinLink, adminChat, buyerLines,
   sendBackup, backupStatus, backupSettings, backupTimes, watchBackups, minutesOf, nextBackupAt, backupTick,

@@ -394,6 +394,9 @@ function botView() {
     pay: payView(b),
     payWays: telegram.payWays(),
     channel: telegram.channel(),
+    /* the keys the last message went out with, so the Message tab can offer
+       them back rather than make the admin type the same three again */
+    lastKeys: telegram.lastKeys(),
     ai: {
       hasKey: !!(b.ai && b.ai.apiKey),
       provider: (b.ai && b.ai.provider) || 'anthropic',

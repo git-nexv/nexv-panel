@@ -226,6 +226,8 @@ const FA = {
 
 
   /* the Message tab: one to the bot's users, one to the channel */
+  'Last time you used': 'دفعه‌ی قبل این‌ها را گذاشته بودید',
+  'Use them again': 'دوباره همین‌ها',
   'Button link': 'لینک دکمه',
   'Who gets it': 'به چه کسانی',
   'Write the message…': 'پیام را بنویسید…',

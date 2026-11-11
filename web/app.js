@@ -7172,8 +7172,45 @@ async function renderBot(view) {
    * or red and nothing else, which is why those are the choices.
    */
   const msgKeys = [];
+
+  /*
+   * The keys the last message went out with, offered back.
+   *
+   * A shop puts the same three under nearly every post - buy, guide,
+   * support - and retyping them, links and colours and all, is the kind of
+   * work a panel should not ask for. They are remembered on the server when
+   * a message really goes out, so they are here from any device and after a
+   * restart, and this is a suggestion rather than a default: it only appears
+   * while nothing has been drawn yet, and pressing it is what fills them in.
+   */
+  const lastKeys = Array.isArray(data.lastKeys) ? data.lastKeys : [];
+  const againBox = el('div');
+  const drawAgain = () => {
+    againBox.innerHTML = '';
+    if (!lastKeys.length || msgKeys.length) return;
+    againBox.append(el('div', { class: 'notice', style: 'margin-bottom:12px' }, [
+      el('div', { class: 'row', style: 'flex-wrap:wrap;gap:8px;align-items:center' }, [
+        el('span', { class: 'muted', text: `${t('Last time you used')}:` }),
+        ...lastKeys.map((k) => el('span', {
+          class: `chip${k.style === 'success' ? ' ok' : k.style === 'danger' ? ' danger' : ''}`,
+          text: k.text
+        })),
+        el('button', {
+          class: 'btn', style: 'margin-inline-start:auto', text: t('Use them again'),
+          onclick: () => {
+            /* a copy: editing the restored keys must not rewrite what is
+               remembered, which is still whatever was last sent */
+            for (const k of lastKeys) msgKeys.push(Object.assign({}, k));
+            drawKeys();
+          }
+        })
+      ])
+    ]));
+  };
+
   const keysBox = el('div', { class: 'stack-list' });
   const drawKeys = () => {
+    drawAgain();
     keysBox.innerHTML = '';
     msgKeys.forEach((key, index) => {
       const grid = el('div', { class: 'form-grid' });
@@ -7279,8 +7316,11 @@ async function renderBot(view) {
       `This goes to ${count} people on Telegram, one message each, and cannot be taken back.`,
       async () => {
         try {
-          const payload = { text, audience: picked, buttons: keysPayload() };
-          paintBroadcast(await api.post('/bot/broadcast', payload));
+          const keys = keysPayload();
+          paintBroadcast(await api.post('/bot/broadcast', { text, audience: picked, buttons: keys }));
+          /* the server has just written these down; keep the suggestion in
+             step so it offers these rather than the set before them */
+          if (keys.length) lastKeys.splice(0, lastKeys.length, ...keys);
           watch();
         } catch (err) { toast(err.message, 'err'); }
       }
@@ -7316,7 +7356,9 @@ async function renderBot(view) {
       async () => {
         channelBtn.disabled = true;
         try {
-          const out = await api.post('/bot/channel-post', { text, buttons: keysPayload() });
+          const keys = keysPayload();
+          const out = await api.post('/bot/channel-post', { text, buttons: keys });
+          if (keys.length) lastKeys.splice(0, lastKeys.length, ...keys);
           msgState.className = 'notice ok';
           msgState.textContent = `${t('Posted in')} ${out.channel} `;
           if (out.link) {
@@ -7353,6 +7395,7 @@ async function renderBot(view) {
       'They go under the message, in the bot and in the channel alike. Telegram paints an inline '
       + 'button green, blue or red, and only a link button works in a channel \u2014 where most '
       + 'readers have never opened your bot, so a link to it is what brings them in.' }),
+    againBox,
     keysBox,
 
     /*
