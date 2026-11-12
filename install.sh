@@ -51,9 +51,20 @@ fail()  { echo "$(stamp)${RED}[x]${RESET} $*" >&2; exit 1; }
 # afterwards. The command's own exit status is what comes back, so every
 # caller's error handling keeps working unchanged.
 # ---------------------------------------------------------------------------
-# Swallow a command's own chatter without swallowing the ticker with it: a
-# redirect written on the `step` line would silence step's own output too.
-quietly() { "$@" >/dev/null 2>&1; }
+# Keep a command's own chatter off the screen without throwing it away.
+#
+# This used to be `>/dev/null 2>&1`, and that is how an install could die
+# without saying one word about why. A step runs in the background, so the
+# `fail` inside it exits that subshell and not the script; `set -e` then ends
+# the run on the non-zero status, having printed nothing - because the message
+# `fail` wrote went to /dev/null with everything else. On a server whose
+# package mirrors are unreachable that is the entire experience: a spinner,
+# then the prompt back, with no reason given anywhere.
+#
+# Now it goes to the step's own log, and `step` prints the end of that log
+# when the step fails.
+STEP_LOG=""
+quietly() { "$@" >>"${STEP_LOG:-/dev/null}" 2>&1; }
 
 step() {
   local label="$1"; shift
@@ -68,6 +79,7 @@ step() {
     echo "$(stamp)${BLUE}[*]${RESET} $label..."
   fi
 
+  STEP_LOG="$(mktemp -t nexv-step.XXXXXX)"
   "$@" &
   local pid=$!
   local n=0
@@ -85,7 +97,29 @@ step() {
   local rc=0
   wait "$pid" || rc=$?
   [[ $tty == 1 ]] && printf '\r\033[K'
+
+  # a step that failed says so, and says what the command said. Without this
+  # the only evidence of a failed install is the shell prompt coming back.
+  if [[ $rc -ne 0 ]]; then
+    echo "$(stamp)${RED}[x]${RESET} $label - failed (exit $rc)" >&2
+    if [[ -s $STEP_LOG ]]; then
+      echo "${DIM}    ---- the last of what it said ----${RESET}" >&2
+      tail -n 20 "$STEP_LOG" | sed 's/^/    /' >&2
+      echo "${DIM}    ----------------------------------${RESET}" >&2
+    fi
+  fi
+  rm -f "$STEP_LOG"
+  STEP_LOG=""
   return $rc
+}
+
+# The same, for a step the install can go on without.
+step_optional() {
+  local label="$1"; shift
+  step "$label" "$@" || {
+    warn "$label did not work - carrying on without it"
+    return 0
+  }
 }
 
 banner() {
@@ -142,7 +176,20 @@ detect_os() {
 # and they hold the dpkg lock for a minute or two. Waiting is the whole fix:
 # failing here used to leave a half-installed machine and an apt error nobody
 # outside Debian recognises.
-APT_OPTS=(-o DPkg::Lock::Timeout=300 -o Dpkg::Use-Pty=0)
+# A dead mirror must not become a dead installer.
+#
+# apt's own default is to wait a long time and then retry three times, which
+# on a network that accepts the connection and goes quiet is several minutes
+# of nothing per package - long enough that people kill the install and
+# conclude the panel is broken. Twenty seconds and one retry is plenty for a
+# mirror that is actually there.
+APT_OPTS=(
+  -o DPkg::Lock::Timeout=300
+  -o Dpkg::Use-Pty=0
+  -o Acquire::http::Timeout=20
+  -o Acquire::https::Timeout=20
+  -o Acquire::Retries=1
+)
 
 apt_busy() {
   # no extra packages: the lock holder is whoever has the file open
@@ -180,11 +227,23 @@ apt_do() {
   wait_for_apt
   until apt-get "${APT_OPTS[@]}" "$@"; do
     tries=$((tries + 1))
+    # Only a lock is worth waiting out.
+    #
+    # The retry loop was written for the one apt failure that passes on its
+    # own - another process holding the lock. A mirror that cannot be reached
+    # is not that: retrying it four times with fifteen seconds between is a
+    # minute of silence that ends in the same failure, and the installer looks
+    # hung for the whole of it.
+    if ! apt_busy; then
+      echo "apt could not run: apt-get $*" >&2
+      return 1
+    fi
     if [[ $tries -ge 4 ]]; then
-      fail "apt could not run: $*
+      echo "apt could not run: $*
     Something else is holding the package manager. Check it with:
       ps aux | grep -E 'apt|dpkg|unattended' | grep -v grep
-    then run the installer again."
+    then run the installer again." >&2
+      return 1
     fi
     warn "apt did not go through, retrying in 15s (${tries}/4)..."
     sleep 15
@@ -197,7 +256,7 @@ apt_do() {
 # is the surest way not to trip over its lock.
 missing_tools() {
   local want=() c
-  for c in curl git tar openssl unzip; do
+  for c in curl git tar openssl; do
     command -v "$c" >/dev/null 2>&1 || want+=("$c")
   done
   # the CA bundle answers to no command of its own
@@ -205,21 +264,79 @@ missing_tools() {
   printf '%s\n' ${want[@]+"${want[@]}"}
 }
 
-install_packages() {
-  local missing=()
-  while IFS= read -r line; do [[ -n $line ]] && missing+=("$line"); done < <(missing_tools)
+# unzip is not one of them. unpack_zip falls back to Node, which is installed
+# by this point and does the job perfectly well, so a server that cannot reach
+# its package mirrors should not have its install ended over a convenience.
+missing_optional() {
+  local want=()
+  command -v unzip >/dev/null 2>&1 || want+=(unzip)
+  printf '%s\n' ${want[@]+"${want[@]}"}
+}
 
-  if [[ ${#missing[@]} -eq 0 ]]; then
+# When apt cannot work, the useful question is almost always "can this server
+# reach the mirror at all" - and on a filtered or sanctioned network it
+# cannot. Saying which host it is and what to do beats a wall of apt output.
+apt_mirror_note() {
+  # every archive apt knows about, from both the old and the deb822 format
+  local all host
+  all="$( { awk '/^[[:space:]]*deb /{ for (i=1;i<=NF;i++) if ($i ~ /^https?:\/\//) { print $i; break } }' \
+      /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null
+    awk '/^[[:space:]]*URIs:/{ for (i=2;i<=NF;i++) print $i }' \
+      /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list 2>/dev/null; } | sort -u)"
+  # the distribution's own archive, not whatever third-party repo happens to
+  # sort first - telling somebody their Docker repo is unreachable when it is
+  # Ubuntu's that broke the install sends them the wrong way entirely
+  host="$(printf '%s\n' "$all" | grep -iE 'ubuntu|debian' | head -n1)"
+  [[ -z $host ]] && host="$(printf '%s\n' "$all" | head -n1)"
+  [[ -z $host ]] && return 0
+  local name="${host#*://}"; name="${name%%/*}"
+  warn "The package mirror is ${name}."
+  if curl -fsS --max-time 12 -o /dev/null "$host" 2>/dev/null; then
+    warn "  This server can reach it, so the trouble is apt's own - try: apt-get update"
+  else
+    warn "  This server cannot reach it. That is usually a filtered or sanctioned"
+    warn "  network. Point apt at a mirror that answers from here, for example:"
+    warn "    sed -i 's|${name}|mirror.arvancloud.ir|g' /etc/apt/sources.list \\"
+    warn "      /etc/apt/sources.list.d/*.sources 2>/dev/null; apt-get update"
+    warn "  then run the installer again."
+  fi
+}
+
+install_packages() {
+  local missing=() extra=()
+  while IFS= read -r line; do [[ -n $line ]] && missing+=("$line"); done < <(missing_tools)
+  while IFS= read -r line; do [[ -n $line ]] && extra+=("$line"); done < <(missing_optional)
+
+  if [[ ${#missing[@]} -eq 0 && ${#extra[@]} -eq 0 ]]; then
     ok "Prerequisites are already present - nothing to install"
     return 0
   fi
 
   if [[ $PKG == apt ]]; then
     export DEBIAN_FRONTEND=noninteractive
-    step "Refreshing the package lists" apt_do update -qq
-    step "Installing prerequisites: ${missing[*]}" quietly apt_do install -y -qq "${missing[@]}"
+    # not fatal on its own: stale lists still install a package that is cached,
+    # and the install step below is where it really matters
+    step_optional "Refreshing the package lists" quietly apt_do update -qq
+    if [[ ${#missing[@]} -gt 0 ]]; then
+      if ! step "Installing prerequisites: ${missing[*]}" quietly apt_do install -y -qq "${missing[@]}"; then
+        apt_mirror_note
+        fail "Could not install: ${missing[*]}
+    The panel needs these and cannot go on without them."
+      fi
+    fi
+    if [[ ${#extra[@]} -gt 0 ]]; then
+      step_optional "Installing ${extra[*]}" quietly apt_do install -y -qq "${extra[@]}"
+    fi
   else
-    step "Installing prerequisites: ${missing[*]}" quietly $PKG install -y -q "${missing[@]}"
+    if [[ ${#missing[@]} -gt 0 ]]; then
+      if ! step "Installing prerequisites: ${missing[*]}" quietly $PKG install -y -q "${missing[@]}"; then
+        fail "Could not install: ${missing[*]}
+    The panel needs these and cannot go on without them."
+      fi
+    fi
+    if [[ ${#extra[@]} -gt 0 ]]; then
+      step_optional "Installing ${extra[*]}" quietly $PKG install -y -q "${extra[@]}"
+    fi
   fi
   ok "Prerequisites installed"
 }
@@ -748,10 +865,24 @@ setup_ssl() {
   [[ -n ${DOMAIN:-} && ${WANT_SSL:-N} =~ ^[Yy]$ ]] || return 0
 
   # cron only matters here, for the renewal job, so it is not everyone's problem
-  if [[ $PKG == apt ]]; then
-    step "Installing certbot" quietly apt_do install -y -qq certbot cron
-  else
-    step "Installing certbot" quietly $PKG install -y -q certbot cronie
+  #
+  # And not fatal. A certificate is optional - the panel serves plain HTTP
+  # without one and says so - but this step used to end the whole install
+  # when the package manager could not reach its mirrors, which on a filtered
+  # network is most of the time. Better a working panel on HTTP than no panel.
+  if ! command -v certbot >/dev/null 2>&1; then
+    if [[ $PKG == apt ]]; then
+      step_optional "Installing certbot" quietly apt_do install -y -qq certbot cron
+    else
+      step_optional "Installing certbot" quietly $PKG install -y -q certbot cronie
+    fi
+  fi
+  if ! command -v certbot >/dev/null 2>&1; then
+    CERT_ERROR="certbot could not be installed, so no certificate was requested"
+    warn "certbot is not available, so there is no certificate to request."
+    warn "  The panel will be served over plain HTTP. Once the package manager"
+    warn "  works on this server, run: nexv cert $DOMAIN"
+    return 0
   fi
 
   local resolved
