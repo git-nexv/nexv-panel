@@ -225,6 +225,58 @@ const FA = {
   'the subscription title': 'عنوان سابسکریپشن',
 
 
+  /* the flood guard */
+  'DDoS': 'ضد DDoS',
+  '🛡 Flood protection': '🛡 محافظ DDoS',
+  'On': 'روشن',
+  'Off': 'خاموش',
+  'on': 'روشن',
+  'off': 'خاموش',
+  'Flood protection is on': 'محافظ DDoS روشن شد',
+  'Flood protection is off': 'محافظ DDoS خاموش شد',
+  'Running. New connections are being checked; clients already connected are never touched.':
+    'در حال کار. اتصال‌های تازه بررسی می‌شوند؛ کاربرانی که از قبل وصل‌اند هیچ‌وقت قطع نمی‌شوند.',
+  'Switched on, but the rules are not loaded. It retries every minute.':
+    'روشن است ولی قوانین بارگذاری نشده‌اند. هر دقیقه دوباره تلاش می‌کند.',
+  'Off. Switch it on when the server is being flooded, or leave it on all the time.':
+    'خاموش. هر وقت به سرور حمله شد روشنش کنید، یا همیشه روشن بگذارید.',
+  'Relaxed - many users behind one address': 'آسان — کاربران زیاد پشت یک آی‌پی',
+  'Normal - the right choice for most servers': 'معمولی — مناسب بیشتر سرورها',
+  'Strict - during a heavy attack': 'سخت‌گیر — هنگام حمله‌ی سنگین',
+  'Custom numbers': 'عددهای دلخواه',
+  'Level': 'سطح',
+  'Per address': 'برای هر آی‌پی',
+  'new connections': 'اتصال تازه',
+  'burst': 'جهش',
+  'at once': 'هم‌زمان',
+  'Banned for': 'مدت بن',
+  'minutes': 'دقیقه',
+  'New connections per second': 'اتصال تازه در ثانیه',
+  'Above this, after the burst, the address is banned.': 'بیشتر از این (بعد از جهش اولیه)، آی‌پی بن می‌شود.',
+  'Burst': 'جهش',
+  'How many may arrive at once before the rate counts.': 'چند اتصال می‌تواند یک‌جا برسد پیش از اینکه سرعت حساب شود.',
+  'Connections at once': 'اتصال هم‌زمان',
+  'Above this new ones are refused, but the address is not banned.': 'بیشتر از این، اتصال تازه رد می‌شود ولی آی‌پی بن نمی‌شود.',
+  'New UDP flows per second': 'جریان UDP تازه در ثانیه',
+  'Ban for (minutes)': 'مدت بن (دقیقه)',
+  'Never block these addresses': 'این آی‌پی‌ها هیچ‌وقت مسدود نشوند',
+  'One per line, addresses or ranges. Your own address is added when you switch it on, so the guard can never lock you out of the panel.':
+    'هر کدام در یک خط، آی‌پی یا رنج. آی‌پی خود شما هنگام روشن کردن اضافه می‌شود تا محافظ هیچ‌وقت شما را از پنل بیرون نکند.',
+  'What it has done': 'چه کرده است',
+  'Banned now': 'الان بن‌شده',
+  'Floods caught': 'حمله‌های گرفته‌شده',
+  'Packets dropped from banned': 'بسته‌های دورریخته از بن‌شده‌ها',
+  'Too many at once': 'هم‌زمان بیش از حد',
+  'UDP dropped': 'UDP دورریخته',
+  'min left': 'دقیقه مانده',
+  'Unban': 'رفع بن',
+  'Unban everyone': 'رفع بن همه',
+  'Nobody is banned right now.': 'الان هیچ‌کس بن نیست.',
+  'nftables is not installed on this server. Install it with: apt-get install -y nftables':
+    'nftables روی این سرور نصب نیست. با این دستور نصبش کنید: apt-get install -y nftables',
+  'How it works: only new connections are checked. An address opening connections faster than the limit is banned for a while, and keeps being banned for as long as it keeps trying. An address holding too many connections at once has new ones refused but is not banned, because in Iran one mobile address can be hundreds of real people. SYN cookies are switched on with it. A flood that fills your server’s whole network link is beyond what any server can filter — that needs your provider or a CDN in front.':
+    'چطور کار می‌کند: فقط اتصال‌های تازه بررسی می‌شوند. آی‌پی‌ای که سریع‌تر از حد مجاز اتصال باز کند مدتی بن می‌شود، و تا وقتی ادامه دهد بن می‌ماند. آی‌پی‌ای که هم‌زمان اتصال زیادی دارد، اتصال تازه‌اش رد می‌شود ولی بن نمی‌شود، چون در ایران یک آی‌پی موبایل می‌تواند صدها کاربر واقعی باشد. SYN cookies هم همراهش روشن می‌شود. حمله‌ای که کل پهنای باند سرور را پر کند از توان هر سروری خارج است — برای آن باید دیتاسنتر یا یک CDN جلوی سرور باشد.',
+
   /* the IP limit: who is connected, and which devices are refused */
   'Devices allowed at once': 'تعداد دستگاه هم‌زمان',
   'Connected now': 'الان متصل',

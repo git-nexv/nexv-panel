@@ -5206,7 +5206,148 @@ async function routingForm(existing, tags, inbounds) {
  * now, the way the Bot page is laid out, so nothing has to be scrolled past to
  * reach something else.
  */
-const SETTINGS_TABS = ['General', 'Access', 'Limits', 'Config names', 'TLS', 'Firewall', 'Theme', 'Backup', 'Account', 'Logs'];
+const SETTINGS_TABS = ['General', 'Access', 'Limits', 'Config names', 'TLS', 'Firewall', 'DDoS', 'Theme', 'Backup', 'Account', 'Logs'];
+
+/*
+ * The flood guard: one switch, three levels, and who it has banned.
+ *
+ * Built for the moment somebody is flooding the server and every config has
+ * gone dead - so the switch is the first thing on the tab, the levels have
+ * names rather than numbers, and the banned list says how long each address
+ * has left and can let one go.
+ */
+async function renderGuard(panel) {
+  panel.innerHTML = '';
+  let st;
+  try { st = await api.get('/guard'); } catch (err) {
+    panel.append(el('div', { class: 'notice warn', text: err.message }));
+    return;
+  }
+
+  const head = el('div', { class: 'between', style: 'margin-bottom:12px' });
+  const onBox = el('input', { type: 'checkbox' });
+  onBox.checked = !!st.enable;
+  const sw = el('label', { class: 'switch' }, [onBox, el('span', { class: 'track' }),
+    el('span', { class: 'muted', text: st.enable ? t('On') : t('Off') })]);
+  onBox.addEventListener('change', async () => {
+    onBox.disabled = true;
+    try {
+      await api.post(onBox.checked ? '/guard/enable' : '/guard/disable', {});
+      toast(onBox.checked ? t('Flood protection is on') : t('Flood protection is off'), 'ok');
+    } catch (err) {
+      toast(err.message, 'err');
+    }
+    renderGuard(panel);
+  });
+  head.append(el('strong', { text: '\ud83d\udee1 Flood protection' }), sw);
+
+  const state = st.enable
+    ? (st.running
+      ? el('div', { class: 'notice ok', text: t('Running. New connections are being checked; clients already connected are never touched.') })
+      : el('div', { class: 'notice warn', text: t('Switched on, but the rules are not loaded. It retries every minute.') }))
+    : el('div', { class: 'hint', text: t('Off. Switch it on when the server is being flooded, or leave it on all the time.') });
+
+  /* the levels, with what each one actually means */
+  const level = selectOf([
+    { value: 'relaxed', label: t('Relaxed - many users behind one address') },
+    { value: 'normal', label: t('Normal - the right choice for most servers') },
+    { value: 'strict', label: t('Strict - during a heavy attack') },
+    { value: 'custom', label: t('Custom numbers') }
+  ], st.level || 'normal');
+  const L = st.limits || {};
+  const numbers = el('div', { class: 'hint', text:
+    `${t('Per address')}: ${L.rate}/s ${t('new connections')} (${t('burst')} ${L.burst}), `
+    + `${L.maxConn} ${t('at once')}, ${L.udpRate}/s UDP. `
+    + `${t('Banned for')} ${L.banMinutes} ${t('minutes')}.` });
+
+  const custom = Object.assign({}, (st.levels || {}).normal || {}, st.custom || {});
+  const customGrid = el('div', { class: 'form-grid' });
+  const num = (key, label, hint) => {
+    const box = el('input', { type: 'number', min: '1', value: custom[key] ?? '' });
+    box.addEventListener('input', () => { custom[key] = Number(box.value); });
+    formField(customGrid, label, box, hint ? { hint } : {});
+  };
+  num('rate', 'New connections per second', 'Above this, after the burst, the address is banned.');
+  num('burst', 'Burst', 'How many may arrive at once before the rate counts.');
+  num('maxConn', 'Connections at once', 'Above this new ones are refused, but the address is not banned.');
+  num('udpRate', 'New UDP flows per second');
+  num('banMinutes', 'Ban for (minutes)');
+  const showCustom = () => customGrid.classList.toggle('hidden', level.value !== 'custom');
+  level.addEventListener('change', showCustom);
+  showCustom();
+
+  const allow = el('textarea', { rows: 3, placeholder: '1.2.3.4\n10.0.0.0/8' }, [st.allow || '']);
+
+  const save = el('button', { class: 'btn primary', text: t('Save') });
+  save.onclick = async () => {
+    save.disabled = true;
+    try {
+      await api.put('/guard', { level: level.value, custom, allow: allow.value });
+      toast(t('Saved'), 'ok');
+      renderGuard(panel);
+    } catch (err) { toast(err.message, 'err'); save.disabled = false; }
+  };
+
+  const grid = el('div', { class: 'form-grid' });
+  formField(grid, 'Level', level, { full: true });
+  grid.append(el('div', { class: 'field full' }, [numbers]));
+  formField(grid, 'Never block these addresses', allow, {
+    full: true,
+    hint: 'One per line, addresses or ranges. Your own address is added when you switch it on, '
+      + 'so the guard can never lock you out of the panel.'
+  });
+
+  /* what it has done */
+  const c = st.counters || {};
+  const stats = el('div', { class: 'row', style: 'flex-wrap:wrap;gap:8px;margin-top:6px' }, [
+    el('span', { class: 'chip danger', text: `${t('Banned now')}: ${(st.banned || []).length}` }),
+    el('span', { class: 'chip', text: `${t('Floods caught')}: ${(c.flood_ban || 0).toLocaleString()}` }),
+    el('span', { class: 'chip', text: `${t('Packets dropped from banned')}: ${(c.banned_drop || 0).toLocaleString()}` }),
+    el('span', { class: 'chip', text: `${t('Too many at once')}: ${(c.conn_reject || 0).toLocaleString()}` }),
+    el('span', { class: 'chip', text: `${t('UDP dropped')}: ${(c.udp_drop || 0).toLocaleString()}` }),
+    el('span', { class: `chip ${st.syncookies ? 'ok' : ''}`, text: `SYN cookies: ${st.syncookies ? t('on') : t('off')}` })
+  ]);
+
+  const list = el('div', { class: 'stack-list', style: 'margin-top:10px' });
+  for (const b of (st.banned || []).slice(0, 200)) {
+    list.append(el('div', { class: 'row seat-row', style: 'gap:8px;align-items:center' }, [
+      el('strong', { class: 'mono', text: b.ip }),
+      el('span', { class: 'faint', text: b.expires ? `${Math.ceil(b.expires / 60)} ${t('min left')}` : '' }),
+      el('button', {
+        class: 'btn icon ghost', title: t('Unban'), html: icon('trash'), style: 'margin-inline-start:auto',
+        onclick: async () => {
+          try { await api.del(`/guard/ban/${encodeURIComponent(b.ip)}`); renderGuard(panel); } catch (err) { toast(err.message, 'err'); }
+        }
+      })
+    ]));
+  }
+  if (!(st.banned || []).length && st.running) list.append(el('div', { class: 'hint', text: t('Nobody is banned right now.') }));
+
+  panel.append(el('div', { class: 'card' }, [
+    head,
+    state,
+    !st.nft ? el('div', { class: 'notice warn', style: 'margin-top:10px', text: t('nftables is not installed on this server. Install it with: apt-get install -y nftables') }) : null,
+    el('div', { style: 'margin-top:14px' }, [grid]),
+    customGrid,
+    el('div', { class: 'row', style: 'margin-top:12px' }, [save]),
+    el('div', { class: 'section-title', style: 'margin-top:20px', text: 'What it has done' }),
+    stats,
+    list,
+    (st.banned || []).length ? el('div', { class: 'row', style: 'margin-top:10px' }, [
+      el('button', { class: 'btn', text: t('Unban everyone'), onclick: async () => {
+        try { await api.del('/guard/ban'); renderGuard(panel); } catch (err) { toast(err.message, 'err'); }
+      } })
+    ]) : null,
+    el('div', { class: 'hint', style: 'margin-top:14px', text:
+      'How it works: only new connections are checked. An address opening connections faster than the '
+      + 'limit is banned for a while, and keeps being banned for as long as it keeps trying. An address '
+      + 'holding too many connections at once has new ones refused but is not banned, because in Iran one '
+      + 'mobile address can be hundreds of real people. SYN cookies are switched on with it. A flood that '
+      + 'fills your server\u2019s whole network link is beyond what any server can filter \u2014 that needs '
+      + 'your provider or a CDN in front.' })
+  ]));
+  hydrateIcons(panel);
+}
 
 async function renderSettings(view) {
   /* a reseller has no panel settings to speak of - the leader holds all of
@@ -5579,6 +5720,7 @@ async function renderSettings(view) {
 
   /* ---- Firewall ---- */
   renderFirewall(panels.Firewall);
+  renderGuard(panels.DDoS);
 
   /* ---- Account and Logs: the pages they already were ---- */
   await renderAccount(panels.Account);

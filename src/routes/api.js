@@ -28,6 +28,7 @@ const paygate = require('../paygate');
 const payapi = require('../payapi');
 const rootpw = require('../rootpw');
 const mtproto = require('../mtproto');
+const guard = require('../guard');
 const leftovers = require('../leftovers');
 
 const router = express.Router();
@@ -1501,6 +1502,61 @@ router.put('/server/notify-bot', async (req, res) => {
  * thing the inbound row cannot answer from the store - whether the daemon is
  * actually up - and the link to hand out.
  */
+/* ------------------------------ flood guard ------------------------------ */
+/*
+ * Turn the flood guard on and off, tune it, and see who it has banned.
+ *
+ * Leader only: it is a firewall on the whole server, and a reseller switching
+ * it to strict would be switching it for every other admin's customers too.
+ */
+const netfilterForGuard = require('../netfilter');
+
+router.get('/guard', leaderOnly, async (req, res) => {
+  try { res.json(await guard.status()); } catch (err) { bad(res, err.message); }
+});
+
+router.post('/guard/enable', leaderOnly, async (req, res) => {
+  try {
+    /* whoever pressed the button is never the one it locks out */
+    const me = netfilterForGuard.clientIp(req);
+    const out = await guard.enable(me);
+    logEvent('system', `flood protection switched on (${out.level}), ${me} kept on the allowlist`);
+    res.json(out);
+  } catch (err) { bad(res, err.message); }
+});
+
+router.post('/guard/disable', leaderOnly, async (req, res) => {
+  try {
+    const out = await guard.disable();
+    logEvent('system', 'flood protection switched off');
+    res.json(out);
+  } catch (err) { bad(res, err.message); }
+});
+
+router.put('/guard', leaderOnly, async (req, res) => {
+  try {
+    const out = await guard.configure(req.body || {});
+    logEvent('system', `flood protection set to ${out.level}`);
+    res.json(out);
+  } catch (err) { bad(res, err.message); }
+});
+
+router.delete('/guard/ban/:ip', leaderOnly, async (req, res) => {
+  try {
+    await guard.unban(req.params.ip);
+    logEvent('system', `unbanned ${req.params.ip}`);
+    res.json(await guard.status());
+  } catch (err) { bad(res, err.message); }
+});
+
+router.delete('/guard/ban', leaderOnly, async (req, res) => {
+  try {
+    await guard.unbanAll();
+    logEvent('system', 'cleared every flood ban');
+    res.json(await guard.status());
+  } catch (err) { bad(res, err.message); }
+});
+
 router.get('/mtproto', leaderOnly, async (req, res) => {
   try {
     const out = await mtproto.status();

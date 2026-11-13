@@ -822,6 +822,69 @@ act_url() {
   return 0
 }
 
+# The flood guard, from the terminal.
+#
+# The panel has the full controls; this is for when the panel itself cannot
+# be reached because the server is being flooded. Turning it on adds the
+# address this SSH session comes from to the allowlist first, so the guard can
+# never lock out the person switching it on. Turning it off deletes the
+# nftables table straight away, even if the panel is not running.
+guard_is_on() {
+  command -v nft >/dev/null 2>&1 && nft list table inet nexv_guard >/dev/null 2>&1
+}
+
+act_guard() {
+  need_root
+  local want="${1:-}"
+  if [[ -z $want ]]; then
+    if guard_is_on; then
+      echo "  Flood protection is ${GREEN}ON${RESET}."
+      local n
+      n="$(nft -j list set inet nexv_guard ban4 2>/dev/null | grep -o '"val"' | wc -l)"
+      echo "  Addresses banned right now: ${n:-0}"
+      read -rp "  Turn it off? [y/N]: " want
+      [[ $want =~ ^[Yy]$ ]] && want=off || return 0
+    else
+      echo "  Flood protection is ${RED}OFF${RESET}."
+      read -rp "  Turn it on? [Y/n]: " want
+      [[ $want =~ ^[Nn]$ ]] && return 0
+      want=on
+    fi
+  fi
+  if [[ $want == on ]] && ! command -v nft >/dev/null 2>&1; then
+    err "nftables is not installed. Install it with: apt-get install -y nftables"
+    return 1
+  fi
+  local me="${SSH_CLIENT%% *}"
+  WANT="$want" ME="$me" DATA_DIR="$DATA_DIR" node -e '
+    const fs = require("fs"), path = require("path");
+    const file = path.join(process.env.DATA_DIR, "db.json");
+    const db = JSON.parse(fs.readFileSync(file, "utf8"));
+    db.settings = db.settings || {};
+    const g = db.settings.guard = Object.assign({ level: "normal", allow: "" }, db.settings.guard || {});
+    g.enable = process.env.WANT === "on";
+    const me = process.env.ME || "";
+    if (g.enable && me && !String(g.allow).split(/\s+/).includes(me)) g.allow = (String(g.allow).trim() + "\n" + me).trim();
+    if (g.enable) g.enabledAt = Date.now();
+    fs.writeFileSync(file, JSON.stringify(db, null, 2), { mode: 0o600 });
+  ' || return 1
+  if [[ $want == off ]]; then
+    nft delete table inet nexv_guard 2>/dev/null || true
+    systemctl restart "$SERVICE"
+    ok "Flood protection is off"
+  else
+    systemctl restart "$SERVICE"
+    local i
+    for i in $(seq 1 15); do guard_is_on && break; sleep 1; done
+    if guard_is_on; then
+      ok "Flood protection is on${me:+ - your address $me is on the allowlist}"
+    else
+      err "It did not come up. Check: journalctl -u $SERVICE -n 30 --no-pager | grep guard"
+      return 1
+    fi
+  fi
+}
+
 act_port() {
   need_root
   local port="${1:-}"
@@ -2253,6 +2316,7 @@ show_menu() {
   menu_row 25 "Change the panel port"
   menu_rule
   menu_row 26 "Lock the panel files (anti-delete)"
+  menu_row 27 "DDoS / flood protection on-off"
   menu_end
   echo
   printf "  Panel state        : %s\n" "$(state_of "$SERVICE")"
@@ -2263,6 +2327,11 @@ show_menu() {
   else
     printf "  Files locked       : %s\n" "${RED}No${RESET}"
   fi
+  if guard_is_on; then
+    printf "  Flood protection   : %s\n" "${GREEN}On${RESET}"
+  else
+    printf "  Flood protection   : %s\n" "${RED}Off${RESET}"
+  fi
   echo
 }
 
@@ -2270,7 +2339,7 @@ run_menu() {
   while true; do
     show_menu
     local choice domain file port name repeat
-    read -rp "  Please enter your selection [0-26]: " choice
+    read -rp "  Please enter your selection [0-27]: " choice
     echo
     case "$choice" in
       0) exit 0 ;;
@@ -2311,7 +2380,8 @@ run_menu() {
       25) read -rp "  New panel port (empty = just report): " port
           act_fix "$port"; pause ;;
       26) act_protect; pause ;;
-      *) err "Please choose a number between 0 and 26"; pause ;;
+      27) act_guard; pause ;;
+      *) err "Please choose a number between 0 and 27"; pause ;;
     esac
   done
 }
@@ -2362,6 +2432,7 @@ case "${1:-menu}" in
   port)            act_port "${2:-}" ;;
   settings)        act_settings ;;
   cert)            act_cert "${2:-}" ;;
+  guard)           act_guard "${2:-}" ;;
   # what the renewal cron calls around certbot, so a renewal at three in the
   # morning clears port 80 the same way the first issue did
   free80)          need_root; free_port_80 "${2:-80}" ;;

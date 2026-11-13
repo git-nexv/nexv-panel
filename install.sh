@@ -270,6 +270,9 @@ missing_tools() {
 missing_optional() {
   local want=()
   command -v unzip >/dev/null 2>&1 || want+=(unzip)
+  # the flood guard is built on nftables; nearly every current image has it,
+  # and one that does not simply cannot switch the guard on until it does
+  command -v nft >/dev/null 2>&1 || want+=(nftables)
   printf '%s\n' ${want[@]+"${want[@]}"}
 }
 

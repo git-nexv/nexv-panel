@@ -655,6 +655,13 @@ async function bootstrap() {
   /* MTProto inbounds: their own units should have brought them back, and this
      covers the ones that did not - and moves an install made before MTProto
      was a protocol onto an inbound of its own */
+  /* the flood guard goes back up before anything starts listening, and is
+     watched from here on in case something else flushes nftables */
+  require('./guard').resume()
+    .then((r) => { if (r && r.running) console.log('[guard] flood protection is on'); else if (r && r.error) console.error('[guard]', r.error); })
+    .catch((err) => console.error('[guard] could not start:', err.message));
+  require('./guard').watch();
+
   require('./mtproto').resume()
     .then((r) => { if (r && r.started) console.log(`[mtproto] started ${r.started} Telegram proxy(s)`); })
     .catch((err) => console.error('[mtproto] could not start the Telegram proxies:', err.message));
