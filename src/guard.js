@@ -32,6 +32,12 @@
  *     Hysteria are UDP and legitimately busy
  *   - ping is rate limited per address
  *
+ * The ban moment is written to the kernel log with the packet's TTL, window
+ * and TCP options, and packets from banned addresses are sampled there at
+ * ten a second across the whole server; src/evidence.js reads those lines
+ * and keeps them as the record of who attacked. Logging every dropped
+ * packet would let a flood fill the log, so it never does.
+ *
  * And the kernel's own defences go up with it: SYN cookies on, a deeper SYN
  * backlog and fewer SYN-ACK retries, so a SYN flood that gets past the per-
  * address limits from a thousand addresses still cannot fill the table. The
@@ -150,6 +156,10 @@ function ruleset(extraAllow) {
   set allow6 { type ipv6_addr; flags interval;${set6} }
   set ban4 { type ipv4_addr; flags dynamic, timeout; timeout ${ban}; size 65535; }
   set ban6 { type ipv6_addr; flags dynamic, timeout; timeout ${ban}; size 65535; }
+  set udp4 { type ipv4_addr; flags dynamic, timeout; timeout 1h; size 65535; }
+  set udp6 { type ipv6_addr; flags dynamic, timeout; timeout 1h; size 65535; }
+  set conn4 { type ipv4_addr; flags dynamic, timeout; timeout 1h; size 65535; }
+  set conn6 { type ipv6_addr; flags dynamic, timeout; timeout 1h; size 65535; }
 
   counter banned_drop {}
   counter flood_ban {}
@@ -166,20 +176,22 @@ function ruleset(extraAllow) {
     ip saddr @allow4 accept
     ip6 saddr @allow6 accept
 
+    ip saddr @ban4 limit rate 10/second log prefix "nexv-guard hit " flags tcp options
+    ip6 saddr @ban6 limit rate 10/second log prefix "nexv-guard hit " flags tcp options
     ip saddr @ban4 update @ban4 { ip saddr } counter name "banned_drop" drop
     ip6 saddr @ban6 update @ban6 { ip6 saddr } counter name "banned_drop" drop
 
     ct state invalid counter name "bad_drop" drop
     tcp flags & (fin|syn|rst|ack) != syn ct state new counter name "bad_drop" drop
 
-    tcp flags syn ct state new meter guard_conn4 { ip saddr ct count over ${l.maxConn} } counter name "conn_reject" reject with tcp reset
-    tcp flags syn ct state new meter guard_conn6 { ip6 saddr ct count over ${l.maxConn} } counter name "conn_reject" reject with tcp reset
+    tcp flags syn ct state new meter guard_conn4 { ip saddr ct count over ${l.maxConn} } add @conn4 { ip saddr } counter name "conn_reject" reject with tcp reset
+    tcp flags syn ct state new meter guard_conn6 { ip6 saddr ct count over ${l.maxConn} } add @conn6 { ip6 saddr } counter name "conn_reject" reject with tcp reset
 
-    tcp flags syn ct state new meter guard_rate4 { ip saddr limit rate over ${l.rate}/second burst ${l.burst} packets } add @ban4 { ip saddr } counter name "flood_ban" drop
-    tcp flags syn ct state new meter guard_rate6 { ip6 saddr limit rate over ${l.rate}/second burst ${l.burst} packets } add @ban6 { ip6 saddr } counter name "flood_ban" drop
+    tcp flags syn ct state new meter guard_rate4 { ip saddr limit rate over ${l.rate}/second burst ${l.burst} packets } add @ban4 { ip saddr } counter name "flood_ban" log prefix "nexv-guard ban " flags tcp options drop
+    tcp flags syn ct state new meter guard_rate6 { ip6 saddr limit rate over ${l.rate}/second burst ${l.burst} packets } add @ban6 { ip6 saddr } counter name "flood_ban" log prefix "nexv-guard ban " flags tcp options drop
 
-    meta l4proto udp ct state new meter guard_udp4 { ip saddr limit rate over ${l.udpRate}/second burst ${l.udpRate * 2} packets } counter name "udp_drop" drop
-    meta l4proto udp ct state new meter guard_udp6 { ip6 saddr limit rate over ${l.udpRate}/second burst ${l.udpRate * 2} packets } counter name "udp_drop" drop
+    meta l4proto udp ct state new meter guard_udp4 { ip saddr limit rate over ${l.udpRate}/second burst ${l.udpRate * 2} packets } add @udp4 { ip saddr } counter name "udp_drop" drop
+    meta l4proto udp ct state new meter guard_udp6 { ip6 saddr limit rate over ${l.udpRate}/second burst ${l.udpRate * 2} packets } add @udp6 { ip6 saddr } counter name "udp_drop" drop
 
     icmp type echo-request meter guard_ping4 { ip saddr limit rate over 5/second burst 10 packets } drop
     icmpv6 type echo-request meter guard_ping6 { ip6 saddr limit rate over 5/second burst 10 packets } drop

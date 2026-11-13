@@ -5216,6 +5216,77 @@ const SETTINGS_TABS = ['General', 'Access', 'Limits', 'Config names', 'TLS', 'Fi
  * names rather than numbers, and the banned list says how long each address
  * has left and can let one go.
  */
+/**
+ * Everything recorded about one attacking address, with who owns it.
+ *
+ * Says plainly which parts are the server's own observations, which come
+ * from the internet registry, and which are an estimate - because this is
+ * what somebody will hand to the police, and an overstated report is worse
+ * than a short one.
+ */
+async function showAttacker(ip) {
+  const dlg = modal({ title: ip, subtitle: t('Looking up who owns this address\u2026'),
+    body: el('div', { class: 'skeleton', style: 'height:200px' }), width: 620 });
+  let a;
+  try { a = await api.get(`/guard/evidence/${encodeURIComponent(ip)}`); } catch (err) {
+    dlg.close(); return toast(err.message, 'err');
+  }
+  dlg.close();
+  const who = a.who || {};
+  const reg = who.registry || {};
+  const when = (x) => (x ? `${fmtDate(x)} \u00b7 ${new Date(x).toISOString().replace('T', ' ').slice(0, 19)} UTC` : '-');
+  const row = (label, value, mono) => el('div', { class: 'kv-row' }, [
+    el('div', { class: 'faint', text: t(label) }),
+    el('div', { class: mono ? 'mono' : '', text: value || '-' })
+  ]);
+  const body = el('div', { class: 'kv-list' }, [
+    el('div', { class: `notice ${a.verified ? 'ok' : 'warn'}`, style: 'margin-bottom:10px', text: a.verified
+      ? `${t('Verified real address')}: ${a.verifiedBy || ''}`
+      : t('Not verified: this address never completed a connection, so the attacker may have forged it. Report it, but say so.') }),
+    el('div', { class: 'section-title', text: 'What the server saw' }),
+    row('First seen', when(a.firstSeen)),
+    row('Last seen', when(a.lastSeen)),
+    row('Banned for flooding', String(a.events.ban || 0)),
+    row('Packets while banned (sampled)', String(a.events.hit || 0)),
+    row('UDP flood', a.events.udp ? t('yes') : t('no')),
+    row('Too many connections at once', a.events.conn ? t('yes') : t('no')),
+    row('Ports targeted', (a.topPorts || []).map((p) => `${p.port} (${p.n})`).join(', ')),
+    row('Source ports', (a.srcPorts || []).join(', '), true),
+    el('div', { class: 'section-title', text: 'Who owns the address' }),
+    row('Internet provider / owner', reg.org || reg.network),
+    row('Network name', reg.network),
+    row('Address block', reg.cidr || reg.range || (who.asn && who.asn.prefix), true),
+    row('Country', reg.country || (who.asn && who.asn.country)),
+    row('AS number', who.asn ? `${who.asn.asn} ${who.asn.name}` : ''),
+    row('Abuse contact', [reg.abuseEmail, reg.abusePhone].filter(Boolean).join('  \u00b7  '), true),
+    row('Domain (reverse DNS)', (who.reverseDns || []).map((r) => `${r.name}${r.confirmed ? ' \u2713' : ''}`).join(', '), true),
+    el('div', { class: 'section-title', text: 'Device and system' }),
+    row('Operating system (estimate)', `${a.os.family}${a.os.hops ? ` \u00b7 ~${a.os.hops} ${t('hops away')}` : ''}`),
+    row('Based on', a.os.basis),
+    a.tcp ? row('TCP fingerprint', `window ${a.tcp.window}, MSS ${a.tcp.mss || '-'}, WS ${a.tcp.ws >= 0 ? a.tcp.ws : '-'}, ${a.tcp.order}`, true) : null,
+    a.web ? row('Device', (a.ua && a.ua.device) || '') : null,
+    a.web ? row('Operating system (stated)', a.ua ? `${a.ua.os} ${a.ua.osVersion}`.trim() : '') : null,
+    a.web ? row('Browser / program', (a.ua && a.ua.browser) || '') : null,
+    a.web ? row('User-Agent', a.web.ua, true) : null,
+    a.web ? row('Requests to the panel', String(a.web.requests)) : null,
+    !a.web ? el('div', { class: 'hint', text: t('No device model, OS version or session: this address only sent raw connection attempts and never a web request, so its software never said what it was. A flood carries none of that.') }) : null,
+    el('div', { class: 'hint', style: 'margin-top:12px', text: t('To find the person: give the police this report. The provider above can identify which customer used this address at the UTC times shown - only it can, and normally only for the police.') })
+  ]);
+  return modal({
+    title: ip,
+    subtitle: reg.org || reg.network || '',
+    body,
+    width: 620,
+    actions: [
+      { label: t('Look up again'), onClick: (close) => { close(); api.get(`/guard/evidence/${encodeURIComponent(ip)}?refresh=1`).then(() => showAttacker(ip)).catch((e) => toast(e.message, 'err')); } },
+      { label: t('Download report'), kind: 'primary', onClick: () => {
+        const link = el('a', { href: `${BASE}api/guard/report?ip=${encodeURIComponent(ip)}`, download: '' });
+        document.body.append(link); link.click(); link.remove();
+      } }
+    ]
+  });
+}
+
 async function renderGuard(panel) {
   panel.innerHTML = '';
   let st;
@@ -5323,6 +5394,58 @@ async function renderGuard(panel) {
   }
   if (!(st.banned || []).length && st.running) list.append(el('div', { class: 'hint', text: t('Nobody is banned right now.') }));
 
+  /*
+   * Who attacked, kept as evidence.
+   *
+   * The bans above expire in minutes; this does not. Each address the guard
+   * caught is listed with what the server saw of it, and can be opened for
+   * who owns it and downloaded as a signed-off text report for the ISP's
+   * abuse desk or the police.
+   */
+  const attackersBox = el('div', { style: 'margin-top:22px' });
+  const drawAttackers = async () => {
+    attackersBox.innerHTML = '';
+    attackersBox.append(
+      el('div', { class: 'between' }, [
+        el('div', { class: 'section-title', text: 'Attackers - evidence' }),
+        el('div', { class: 'row', style: 'gap:8px' }, [
+          el('a', { class: 'btn', href: `${BASE}api/guard/report`, download: '', html: `${icon('download')} ${t('Download full report')}` })
+        ])
+      ]),
+      el('div', { class: 'hint', style: 'margin-bottom:10px', text:
+        'Every address the guard has caught, kept after its ban runs out. Open one to see who owns it '
+        + '(the internet provider, its country and its abuse contact) and download it as a report.' })
+    );
+    let ev;
+    try { ev = await api.get('/guard/evidence'); } catch (err) {
+      attackersBox.append(el('div', { class: 'notice warn', text: err.message }));
+      return;
+    }
+    const rows = el('div', { class: 'stack-list' });
+    for (const a of (ev.attackers || []).slice(0, 300)) {
+      rows.append(el('div', { class: 'row seat-row', style: 'gap:8px;align-items:center;flex-wrap:wrap' }, [
+        el('strong', { class: 'mono', text: a.ip }),
+        el('span', { class: `chip ${a.verified ? 'danger' : ''}`, text: a.verified ? t('verified') : t('may be forged') }),
+        a.events.ban ? el('span', { class: 'chip', text: `${t('banned')} ×${a.events.ban}` }) : null,
+        a.events.udp ? el('span', { class: 'chip', text: 'UDP' }) : null,
+        a.events.conn ? el('span', { class: 'chip', text: t('too many at once') }) : null,
+        el('span', { class: 'faint', text: ago(a.lastSeen) }),
+        el('button', { class: 'btn', style: 'margin-inline-start:auto', text: t('Details'), onclick: () => showAttacker(a.ip) })
+      ]));
+    }
+    if (!(ev.attackers || []).length) rows.append(el('div', { class: 'hint', text: t('No attacker recorded yet.') }));
+    attackersBox.append(rows);
+    if ((ev.attackers || []).length) {
+      attackersBox.append(el('div', { class: 'row', style: 'margin-top:10px' }, [
+        el('button', { class: 'btn ghost', text: t('Clear the record'), onclick: () => confirmDialog(
+          t('This deletes every recorded attacker. Download the report first if you need it.'),
+          async () => { await api.del('/guard/evidence'); drawAttackers(); }) })
+      ]));
+    }
+    hydrateIcons(attackersBox);
+  };
+  drawAttackers();
+
   panel.append(el('div', { class: 'card' }, [
     head,
     state,
@@ -5338,6 +5461,7 @@ async function renderGuard(panel) {
         try { await api.del('/guard/ban'); renderGuard(panel); } catch (err) { toast(err.message, 'err'); }
       } })
     ]) : null,
+    attackersBox,
     el('div', { class: 'hint', style: 'margin-top:14px', text:
       'How it works: only new connections are checked. An address opening connections faster than the '
       + 'limit is banned for a while, and keeps being banned for as long as it keeps trying. An address '

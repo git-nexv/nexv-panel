@@ -1549,6 +1549,56 @@ router.delete('/guard/ban/:ip', leaderOnly, async (req, res) => {
   } catch (err) { bad(res, err.message); }
 });
 
+/*
+ * The record of who attacked: a list, one address in full with who owns it,
+ * and a plain-text report with a hash, to hand to an ISP or the police.
+ */
+const evidence = require('../evidence');
+
+router.get('/guard/evidence', leaderOnly, async (req, res) => {
+  try {
+    await evidence.collect();
+    res.json({ attackers: evidence.list().slice(0, 500) });
+  } catch (err) { bad(res, err.message); }
+});
+
+router.get('/guard/evidence/:ip', leaderOnly, async (req, res) => {
+  try {
+    await evidence.collect();
+    const got = await evidence.enrich(req.params.ip, req.query.refresh === '1');
+    if (!got) return bad(res, 'nothing is recorded for that address', 404);
+    res.json(evidence.one(req.params.ip));
+  } catch (err) { bad(res, err.message); }
+});
+
+/* ?ip=1.2.3.4 for one, or every recorded address without it */
+router.get('/guard/report', leaderOnly, async (req, res) => {
+  try {
+    await evidence.collect();
+    const ips = req.query.ip ? [String(req.query.ip)] : evidence.list().slice(0, 200).map((e) => e.ip);
+    /* who owns each address goes into the report, looked up now if not yet */
+    for (const ip of ips) { try { await evidence.enrich(ip); } catch (_) { /* reported as unknown */ } }
+    const text = evidence.report(ips);
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const name = req.query.ip ? `attack-${String(req.query.ip).replace(/[^\w.-]/g, '_')}-${stamp}.txt` : `attack-report-${stamp}.txt`;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    logEvent('system', `downloaded an attack report (${ips.length} address(es))`);
+    res.send(text);
+  } catch (err) { bad(res, err.message); }
+});
+
+router.delete('/guard/evidence/:ip', leaderOnly, (req, res) => {
+  evidence.forget(req.params.ip);
+  res.json({ ok: true });
+});
+
+router.delete('/guard/evidence', leaderOnly, (req, res) => {
+  evidence.forget();
+  logEvent('system', 'cleared the attack record');
+  res.json({ ok: true });
+});
+
 router.delete('/guard/ban', leaderOnly, async (req, res) => {
   try {
     await guard.unbanAll();

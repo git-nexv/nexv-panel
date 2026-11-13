@@ -87,6 +87,21 @@ function escapeHtml(value) {
 app.use(express.json({ limit: '8mb' }));
 app.use(express.urlencoded({ extended: false }));
 
+/*
+ * Remember what each address's software says it is.
+ *
+ * Kept in memory and bounded, and only ever written down for an address the
+ * flood guard has caught - where it is the one piece of evidence that names
+ * a device and an operating system version, because the sender completed a
+ * real connection to send it.
+ */
+app.use((req, res, next) => {
+  try {
+    require('./evidence').noteWeb(require('./netfilter').clientIp(req), req.headers['user-agent'], req.path);
+  } catch (_) { /* never in the way of a request */ }
+  next();
+});
+
 /**
  * Compress buffered responses. The panel is mostly text - 74 KB of HTML, CSS
  * and JS uncompressed, under 20 KB gzipped - and it is usually reached over a
@@ -661,6 +676,7 @@ async function bootstrap() {
     .then((r) => { if (r && r.running) console.log('[guard] flood protection is on'); else if (r && r.error) console.error('[guard]', r.error); })
     .catch((err) => console.error('[guard] could not start:', err.message));
   require('./guard').watch();
+  require('./evidence').watch();
 
   require('./mtproto').resume()
     .then((r) => { if (r && r.started) console.log(`[mtproto] started ${r.started} Telegram proxy(s)`); })

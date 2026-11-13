@@ -2282,3 +2282,9 @@ td .row-actions { display: inline-flex; width: auto; }
 /* an address being refused, in the lists that show seats */
 .ip-row.is-blocked { opacity: .72; }
 .seat-row { padding: 8px 10px; border-radius: 10px; background: var(--glass-2); }
+
+/* label / value pairs in the attacker evidence view */
+.kv-list { display: flex; flex-direction: column; gap: 2px; }
+.kv-row { display: grid; grid-template-columns: minmax(140px, 38%) 1fr; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--glass-edge, rgba(255,255,255,.08)); }
+.kv-row > div:last-child { word-break: break-word; }
+@media (max-width: 560px) { .kv-row { grid-template-columns: 1fr; gap: 2px; } }
