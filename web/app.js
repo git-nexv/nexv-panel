@@ -7078,6 +7078,27 @@ async function renderBot(view) {
         }
       }),
       startBtn,
+      /*
+       * Refresh: drop whatever the bot is holding from before the latest
+       * change, re-read it from Telegram, and send the admin a fresh menu -
+       * old messages keep the buttons they were sent with, so a new one is
+       * how the change is seen in Telegram. A light version of this already
+       * runs after every save; this is the manual, complete one.
+       */
+      el('button', {
+        class: 'btn', html: `${icon('refresh')} ${t('Refresh the bot')}`,
+        title: t('Applies every change now and sends you the fresh menu in Telegram'),
+        onclick: async (event) => {
+          const key = event.currentTarget;
+          key.disabled = true;
+          try {
+            const out = await api.post('/bot/refresh', {});
+            toast(out.preview ? t('Refreshed - the new menu is in your Telegram') : t('Refreshed'), 'ok');
+            if (out.status) { paintStatus(out.status); }
+          } catch (err) { toast(err.message, 'err'); }
+          key.disabled = false;
+        }
+      }),
     ]),
     /*
      * Not linked is not a hint, it is a fault: every support message a

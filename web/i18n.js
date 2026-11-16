@@ -387,6 +387,13 @@ const FA = {
   'One post, which everybody in the channel sees — including people who have never opened the bot. Who reads it is who is in the channel, so the groups on the other side do not apply to it and are not asked for here.':
     'یک پست، که همه‌ی اعضای کانال می‌بینند — حتی کسانی که هیچ‌وقت ربات را باز نکرده‌اند. خواننده‌اش هرکسی است که در کانال باشد، پس آن گزینه‌های طرف دیگر اینجا اعمال نمی‌شوند و اصلاً پرسیده نمی‌شوند.',
 
+  /* refreshing the bot */
+  'Refresh the bot': 'رفرش ربات',
+  'Applies every change now and sends you the fresh menu in Telegram': 'همه‌ی تغییرات را همین حالا اعمال می‌کند و منوی تازه را در تلگرام برایتان می‌فرستد',
+  'Refreshed - the new menu is in your Telegram': 'رفرش شد — منوی تازه در تلگرامتان است',
+  'Refreshed': 'رفرش شد',
+  'Telegram does not accept this bot token - check it on the Setup tab (BotFather can show it again)': 'تلگرام این توکن ربات را قبول نمی‌کند — آن را در تب راه‌اندازی بررسی کنید (BotFather دوباره نشانش می‌دهد)',
+
   /* moving a plan up and down the list */
   'Move to the top': 'انتقال به بالای لیست',
   'Move up': 'یکی بالاتر',

@@ -4668,15 +4668,31 @@ async function handle(update) {
 
 /* --------------------------------- polling ------------------------------- */
 
+/*
+ * Which polling loop is the live one.
+ *
+ * A loop only notices it should stop when its getUpdates returns, which can
+ * be twenty-five seconds later. Stop-then-start inside that window used to
+ * clear the stopping flag before the old loop ever saw it, so both loops
+ * carried on - two getUpdates at once, which Telegram answers with 409
+ * Conflict, and updates handled by whichever happened to win. Each loop now
+ * carries the generation it was started under and leaves as soon as a newer
+ * one exists, without touching the updates it was holding: the offset is not
+ * advanced, so the live loop fetches them again.
+ */
+let generation = 0;
+
 async function loop() {
+  const mine = ++generation;
   let backoff = 1000;
-  while (!runtime.stopping) {
+  while (!runtime.stopping && mine === generation) {
     try {
       const updates = await call('getUpdates', {
         offset: runtime.offset,
         timeout: 25,
         allowed_updates: ['message', 'callback_query']
       });
+      if (mine !== generation) break;
       backoff = 1000;
       runtime.error = '';
       for (const update of updates) {
@@ -4684,14 +4700,22 @@ async function loop() {
         try { await handle(update); } catch (err) { runtime.error = err.message; if (process.env.NEXV_TG_DEBUG) console.error("[bot]", err); }
       }
     } catch (err) {
-      if (runtime.stopping) break;
+      if (runtime.stopping || mine !== generation) break;
+      /* the old loop's last poll overlapping the new one's first: expected
+         for a moment after a restart, and not an error worth showing */
+      if (/terminated by other getUpdates|409/i.test(String(err.message))) {
+        await new Promise((r) => setTimeout(r, 1000));
+        continue;
+      }
       runtime.error = err.message;
       // a wrong token or a blocked network must not spin the CPU
       await new Promise((r) => setTimeout(r, backoff));
       backoff = Math.min(backoff * 2, 60000);
     }
   }
-  runtime.running = false;
+  /* only the live loop speaks for the bot: an old one leaving must not mark
+     the new one as stopped */
+  if (mine === generation) runtime.running = false;
 }
 
 async function start() {
@@ -4716,6 +4740,72 @@ async function start() {
   // and an online payment nobody confirmed still gets delivered
   watchGateway();
   return status();
+}
+
+/*
+ * Make the bot show the panel's latest settings now.
+ *
+ * The bot builds every message from the settings as they are at that moment,
+ * so what it sends next is already current. What is not current is what it
+ * is holding: someone half-way through typing a number of gigabytes under the
+ * old price, a Back button pointing at a screen that has since changed, a
+ * channel membership remembered from before the channel was changed. This
+ * drops all of that, re-reads the bot from Telegram, re-registers its
+ * commands, and starts the polling again if it should be running and is not.
+ *
+ * `light` is what runs after every save: just the held state, no network.
+ * The button on the Bot page asks for the whole thing, and also sends the
+ * admin a fresh start menu - messages already in a chat keep the buttons they
+ * were sent with, so a new one is the only way to see the change in Telegram.
+ */
+async function refresh(opts) {
+  const o = opts || {};
+  const b = bot();
+  const cleared = { waiting: pending.size, backTrail: trail.size, membership: members.size };
+  pending.clear();
+  trail.clear();
+  members.clear();
+  migrateUsageButton();
+  migrateHelp();
+  migratePlanDiscounts();
+  if (o.light) return { ok: true, light: true, cleared };
+
+  const out = { ok: true, cleared, commands: false, preview: false, restarted: false };
+  if (!b.token) throw new Error('set the bot token first');
+  try {
+    runtime.me = await whoAmI(b.token);
+  } catch (err) {
+    if (/unauthorized|401/i.test(String(err.message))) {
+      throw new Error('Telegram does not accept this bot token - check it on the Setup tab (BotFather can show it again)');
+    }
+    throw new Error(`could not reach Telegram: ${err.message}`);
+  }
+  try {
+    await call('setMyCommands', { commands: [{ command: 'start', description: 'منوی اصلی' }] });
+    out.commands = true;
+  } catch (_) { /* a nicety; the bot works without it */ }
+
+  if (b.enabled && !runtime.running) {
+    runtime.stopping = false;
+    runtime.running = true;
+    runtime.startedAt = Date.now();
+    runtime.error = '';
+    loop();
+    out.restarted = true;
+  }
+
+  const admin = adminChat();
+  if (o.preview !== false && admin) {
+    try {
+      await send(admin, '🔄 <b>ربات به‌روز شد.</b>\nمنوی زیر همان چیزی است که کاربران از الان می‌بینند. '
+        + 'دکمه‌های پیام‌های قبلی همان‌طور که فرستاده شده بودند می‌مانند.');
+      /* the real start screen, built exactly as a customer would get it */
+      await showScreen({ chatId: admin, userId: admin, name: '', username: '' }, 'start');
+      out.preview = true;
+    } catch (err) { out.previewError = err.message; }
+  }
+  runtime.refreshedAt = Date.now();
+  return out;
 }
 
 function stop() {
@@ -5265,5 +5355,6 @@ module.exports = {
   payLabel, customLabel, picksTerm, deliverOrder, topUp, settleGateway, sweepGateway, watchGateway, orderByToken,
   /* the entry point for one update: what the polling loop feeds, and what a
      webhook would feed if this ever grows one */
+  refresh,
   handle
 };

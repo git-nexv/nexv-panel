@@ -675,6 +675,9 @@ router.put('/bot', async (req, res) => {
     }
   }
   logEvent('bot', 'bot settings saved');
+  /* whatever the bot was holding from before this change goes, so the next
+     tap in Telegram is built from what was just saved */
+  try { await telegram.refresh({ light: true }); } catch (_) { /* never fails a save */ }
   res.json(botView());
 });
 
@@ -897,6 +900,20 @@ router.post('/bot/start', async (req, res) => {
     logEvent('bot', `bot started (@${status.username || 'unknown'})`);
     res.json(status);
   } catch (err) { bad(res, err.message); }
+});
+
+/*
+ * Refresh: make the bot show the latest settings now, and send the admin a
+ * fresh menu so the change can be seen in Telegram itself.
+ */
+router.post('/bot/refresh', async (req, res) => {
+  try {
+    const out = await telegram.refresh({ preview: (req.body || {}).preview !== false });
+    logEvent('bot', 'refreshed the bot');
+    res.json(Object.assign(out, { status: telegram.status() }));
+  } catch (err) {
+    bad(res, err.message);
+  }
 });
 
 router.post('/bot/stop', (req, res) => {
