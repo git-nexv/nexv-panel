@@ -7180,11 +7180,42 @@ async function renderBot(view) {
          when an inbound is replaced */
       plansBox.append(el('div', { class: 'card' }, [
         el('div', { class: 'between', style: 'margin-bottom:12px' }, [
-          el('strong', { class: 'user-text', text: plan.name || 'Plan' }),
-          el('button', {
-            class: 'btn icon danger', title: 'Remove', html: icon('trash'),
-            onclick: () => { draft.plans.splice(index, 1); drawPlans(); }
-          })
+          el('strong', { class: 'user-text', text: `${index + 1}. ${plan.name || 'Plan'}` }),
+          /*
+           * The order here is the order of the buttons in the bot: the list
+           * is saved as it stands and the bot reads it top to bottom. So
+           * moving a plan is moving it in the array - to the top, one up or
+           * one down - and Save carries it to the bot.
+           */
+          el('div', { class: 'row', style: 'gap:6px' }, [
+            el('button', {
+              class: 'btn icon ghost', title: 'Move to the top', text: '⤒',
+              disabled: index === 0,
+              onclick: () => { draft.plans.unshift(draft.plans.splice(index, 1)[0]); drawPlans(); }
+            }),
+            el('button', {
+              class: 'btn icon ghost', title: 'Move up', html: icon('up'),
+              disabled: index === 0,
+              onclick: () => {
+                const [p] = draft.plans.splice(index, 1);
+                draft.plans.splice(index - 1, 0, p);
+                drawPlans();
+              }
+            }),
+            el('button', {
+              class: 'btn icon ghost', title: 'Move down', html: icon('down'),
+              disabled: index === draft.plans.length - 1,
+              onclick: () => {
+                const [p] = draft.plans.splice(index, 1);
+                draft.plans.splice(index + 1, 0, p);
+                drawPlans();
+              }
+            }),
+            el('button', {
+              class: 'btn icon danger', title: 'Remove', html: icon('trash'),
+              onclick: () => { draft.plans.splice(index, 1); drawPlans(); }
+            })
+          ])
         ]),
         grid
       ]));

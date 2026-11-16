@@ -387,6 +387,11 @@ const FA = {
   'One post, which everybody in the channel sees — including people who have never opened the bot. Who reads it is who is in the channel, so the groups on the other side do not apply to it and are not asked for here.':
     'یک پست، که همه‌ی اعضای کانال می‌بینند — حتی کسانی که هیچ‌وقت ربات را باز نکرده‌اند. خواننده‌اش هرکسی است که در کانال باشد، پس آن گزینه‌های طرف دیگر اینجا اعمال نمی‌شوند و اصلاً پرسیده نمی‌شوند.',
 
+  /* moving a plan up and down the list */
+  'Move to the top': 'انتقال به بالای لیست',
+  'Move up': 'یکی بالاتر',
+  'Move down': 'یکی پایین‌تر',
+
   /* a plan's own discount and colour */
   'Discount (%)': 'تخفیف (٪)',
   'This plan’s button colour': 'رنگ دکمه‌ی این پلن',
