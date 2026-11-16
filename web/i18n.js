@@ -391,6 +391,7 @@ const FA = {
   'Move to the top': 'انتقال به بالای لیست',
   'Move up': 'یکی بالاتر',
   'Move down': 'یکی پایین‌تر',
+  'Order saved - the bot shows it now': 'ترتیب ذخیره شد — ربات از همین حالا همین را نشان می‌دهد',
 
   /* a plan's own discount and colour */
   'Discount (%)': 'تخفیف (٪)',

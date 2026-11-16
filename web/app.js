@@ -7107,6 +7107,37 @@ async function renderBot(view) {
      div and sat flush against each other, so four plans read as one long
      form and it took a moment to see where one ended */
   const plansBox = el('div', { class: 'stack-list' });
+
+  /*
+   * Move a plan, and save the new order at once.
+   *
+   * The arrows used to change only the page: the bot kept its old order
+   * until "Save plans" was pressed, and nothing said so - so the panel
+   * showed one order and the bot another. A move is a deliberate act with
+   * nothing to type, so it is saved the moment it happens.
+   *
+   * A plan added on this page has no id until the server gives it one, and
+   * the server gives a new one on every save. Saving after each move would
+   * then hand that plan a different id each time, so it gets one here first.
+   */
+  const ensureIds = () => {
+    for (const p of draft.plans) {
+      if (!p.id) p.id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+        : `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    }
+  };
+  const movePlan = async (from, to) => {
+    if (to < 0 || to >= draft.plans.length || from === to) return;
+    const [p] = draft.plans.splice(from, 1);
+    draft.plans.splice(to, 0, p);
+    ensureIds();
+    drawPlans();
+    try {
+      await api.put('/bot', { plans: draft.plans });
+      toast(t('Order saved - the bot shows it now'), 'ok');
+    } catch (err) { toast(err.message, 'err'); }
+  };
+
   const drawPlans = () => {
     plansBox.innerHTML = '';
     draft.plans.forEach((plan, index) => {
@@ -7191,25 +7222,17 @@ async function renderBot(view) {
             el('button', {
               class: 'btn icon ghost', title: 'Move to the top', text: '⤒',
               disabled: index === 0,
-              onclick: () => { draft.plans.unshift(draft.plans.splice(index, 1)[0]); drawPlans(); }
+              onclick: () => movePlan(index, 0)
             }),
             el('button', {
               class: 'btn icon ghost', title: 'Move up', html: icon('up'),
               disabled: index === 0,
-              onclick: () => {
-                const [p] = draft.plans.splice(index, 1);
-                draft.plans.splice(index - 1, 0, p);
-                drawPlans();
-              }
+              onclick: () => movePlan(index, index - 1)
             }),
             el('button', {
               class: 'btn icon ghost', title: 'Move down', html: icon('down'),
               disabled: index === draft.plans.length - 1,
-              onclick: () => {
-                const [p] = draft.plans.splice(index, 1);
-                draft.plans.splice(index + 1, 0, p);
-                drawPlans();
-              }
+              onclick: () => movePlan(index, index + 1)
             }),
             el('button', {
               class: 'btn icon danger', title: 'Remove', html: icon('trash'),
