@@ -384,7 +384,14 @@ async function startOne(inb) {
   const on = await run('systemctl', ['enable', '--now', serviceOf(inb)], 30000);
   if (!on.ok) throw new Error((on.stderr || on.error || 'systemd would not start it').slice(0, 200));
   await run('systemctl', ['restart', serviceOf(inb)], 30000);
-  return { ok: true };
+  /* "started" is not "running": mtg can take a moment to bind, or exit on a
+     bad setting a second later. Wait until it is really up - or say it is
+     not - so whatever asks next gets the truth rather than a race. */
+  for (let i = 0; i < 12; i++) {
+    if (await isRunning(inb)) return { ok: true };
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error('the proxy was started but did not stay up - open "Check it / why is it down" on its row');
 }
 
 /** Take one down, and forget it ever existed when it is really gone. */
@@ -425,7 +432,22 @@ function fingerprint() {
 
 let lastSynced = null;
 
-async function sync(force) {
+/*
+ * One sync at a time.
+ *
+ * Two quick presses used to start two syncs side by side - one switching the
+ * service on while the other switched it off - and which won was down to
+ * timing. They now queue: each waits for the one before it, then reads the
+ * inbound list as it is by then.
+ */
+let syncQueue = Promise.resolve();
+function sync(force) {
+  const next = syncQueue.then(() => syncNow(force), () => syncNow(force));
+  syncQueue = next.catch(() => {});
+  return next;
+}
+
+async function syncNow(force) {
   /*
    * Applying the configuration happens on every client change too, and this
    * one shells out to systemctl - so when nothing about the MTProto inbounds
@@ -566,7 +588,12 @@ async function diagnose(inb) {
 /** Everything the page shows about one MTProto inbound. */
 async function statusOf(inb) {
   const bin = await installed();
-  const host = String(db.settings.domain || db.settings.serverIP || '').trim();
+  /*
+   * The address in the link is what Telegram shows as the proxy's server, so
+   * it is the inbound's own "connect address" when one is set - any name or
+   * IP that reaches this server - and the panel's domain otherwise.
+   */
+  const host = String(inb.address || db.settings.domain || db.settings.serverIP || '').trim();
   const secret = inb.mtSecret || '';
   const links = secret && host ? linksFor(host, Number(inb.port), secret) : { tg: '', https: '' };
   return {

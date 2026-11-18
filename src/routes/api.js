@@ -2335,6 +2335,14 @@ router.post('/inbounds/:id/toggle', async (req, res) => {
   db.saveNow();
   await xray.apply();
   if (inb.enable !== false) await firewall.sync(db).catch(() => null);
+  /* a Telegram proxy that was switched on and did not come up says why,
+     here, rather than leaving the admin to press the switch again */
+  if (inb.protocol === 'mtproto' && inb.enable !== false) {
+    try {
+      const why = await mtproto.diagnose(inb);
+      if (!why.running) return res.json(Object.assign({}, inb, { proxyDown: why.reason || 'it did not start' }));
+    } catch (_) { /* the row will show it */ }
+  }
   res.json(inb);
 });
 

@@ -1237,13 +1237,17 @@ async function apply() {
    * all when none of them has moved, and it never fails this: a Telegram
    * proxy that would not start is not a reason to refuse an Xray config.
    */
-  require('./mtproto').sync()
-    .then((out) => {
-      for (const bad of (out.failed || [])) {
-        console.error(`[mtproto] ${bad.id}: ${bad.reason}`);
-      }
-    })
-    .catch((err) => console.error('[mtproto] could not apply:', err.message));
+  /*
+   * Awaited, not fired and forgotten. It used to run behind the answer, so
+   * switching a Telegram proxy on returned before its service had started -
+   * the page redrew, asked, and was told "not running". The admin pressed
+   * again, which switched it off, and only the third press stuck. It is
+   * cheap to wait for: when no MTProto inbound has moved it returns at once.
+   */
+  try {
+    const out = await require('./mtproto').sync();
+    for (const bad of (out.failed || [])) console.error(`[mtproto] ${bad.id}: ${bad.reason}`);
+  } catch (err) { console.error('[mtproto] could not apply:', err.message); }
   let previous = null;
   if (fs.existsSync(XRAY_CONFIG)) previous = fs.readFileSync(XRAY_CONFIG, 'utf8');
 

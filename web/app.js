@@ -2545,7 +2545,11 @@ async function renderInbounds(view) {
         el('button', { class: 'btn icon ghost', title: 'Edit', html: icon('edit'), onclick: () => inboundForm(inb) }),
         el('button', {
           class: 'btn icon ghost', title: 'Enable / disable', html: icon('power'),
-          onclick: async () => { await api.post(`/inbounds/${inb.id}/toggle`); render(); }
+          onclick: async () => {
+            const out = await api.post(`/inbounds/${inb.id}/toggle`);
+            if (out && out.proxyDown) toast(`${t('The Telegram proxy did not start')}: ${out.proxyDown}`, 'err');
+            render();
+          }
         }),
         /* a proxy has no clients to attach, no URLs to export and no traffic
            to reset - every one of those is an Xray idea */
@@ -3212,7 +3216,7 @@ function inboundForm(existing) {
     showTab('Sniffing', !isMt);
     /* an inbound cap and an expiry date are Xray counting bytes for a tag it
        owns; nothing counts for a daemon that is not Xray */
-    show([fieldOf(totalGB), fieldOf(expiryDays), fieldOf(address)], !isMt);
+    show([fieldOf(totalGB), fieldOf(expiryDays)], !isMt);
     if (isMt) {
       mtNote.textContent = existing
         ? 'Saved. The link and its QR are on the inbound\u2019s row in the list.'
