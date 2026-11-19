@@ -389,6 +389,23 @@ const FA = {
 
   'The Telegram proxy did not start': 'پروکسی تلگرام راه نیفتاد',
 
+  /* when a paid order is handed over */
+  '\u26a1 Send the config as soon as the receipt arrives': '\u26a1 ارسال کانفیگ به محض رسیدن رسید',
+  'On: the buyer is connected in seconds and you check the receipt afterwards - rejecting it deletes the config. Off: nothing is sent until you approve.':
+    'روشن: خریدار در چند ثانیه وصل می‌شود و شما بعداً رسید را بررسی می‌کنید — اگر رد کنید کانفیگ حذف می‌شود. خاموش: تا تایید نکنید چیزی ارسال نمی‌شود.',
+  'Buyers are told their receipt arrived and to wait. The config is made and sent when you press Approve on the receipt.':
+    'به خریدار گفته می‌شود رسیدش رسید و منتظر بماند. کانفیگ وقتی ساخته و ارسال می‌شود که شما روی رسید «تایید» بزنید.',
+  'Instant-delivery code': 'کد تحویل فوری',
+  'Optional. Give it only to buyers you trust. It is cut off the name, so it never shows in the config.':
+    'اختیاری. فقط به خریدارهای مورد اعتماد بدهید. از اول اسم حذف می‌شود و هیچ‌وقت در کانفیگ دیده نمی‌شود.',
+  'A buyer who types': 'خریداری که',
+  'Ali phone': 'گوشی علی',
+  'as the config name gets it at once; the config is called': 'را به‌عنوان اسم کانفیگ بنویسد، فوراً کانفیگ می‌گیرد؛ اسم کانفیگ می‌شود',
+  'Leave it empty and every order waits for your approval.': 'خالی بگذارید تا همه‌ی سفارش‌ها منتظر تایید شما بمانند.',
+  'Online gateway payments are checked automatically and are always delivered at once.':
+    'پرداخت‌های درگاه آنلاین خودکار بررسی می‌شوند و همیشه فوراً تحویل داده می‌شوند.',
+  'the instant-delivery code cannot contain a space': 'کد تحویل فوری نمی‌تواند فاصله داشته باشد',
+
   /* refreshing the bot */
   'Refresh the bot': 'رفرش ربات',
   'Applies every change now and sends you the fresh menu in Telegram': 'همه‌ی تغییرات را همین حالا اعمال می‌کند و منوی تازه را در تلگرام برایتان می‌فرستد',

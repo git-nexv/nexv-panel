@@ -1956,6 +1956,42 @@ function uniqueName(wanted, exceptId) {
  * panel has that switched off, or when they are topping up a config that
  * already has a name, this falls straight through to the order.
  */
+/*
+ * When a paid order is handed over: the moment the receipt arrives, or only
+ * once the admin has approved it.
+ *
+ * `instant` on is how it has always worked - the buyer is connected in
+ * seconds and a rejected receipt cuts the config off afterwards. Off, the
+ * buyer is told to wait and nothing is made until the admin presses approve.
+ *
+ * `code` is the way round that for the times the admin is away from the
+ * phone: a buyer who starts the config's name with it, then a space, gets the
+ * config at once even with instant off. The admin chooses the code and gives
+ * it only to people they trust. It is cut off the name before the config is
+ * made, so it never appears in a config, a message or the panel.
+ */
+function deliverySettings() {
+  const d = bot().delivery || {};
+  return {
+    instant: d.instant !== false,
+    code: String(d.code || '').trim().slice(0, 16)
+  };
+}
+
+/** Split the code off a typed name: { name, coded }. */
+function readCode(raw) {
+  const text = String(raw || '').trim();
+  const { code } = deliverySettings();
+  if (!code) return { name: text, coded: false };
+  /* the code, then at least one space, then a name - "!vip ali", not
+     "!vipali", so a name that merely happens to begin with the same
+     letters is never mistaken for it */
+  if (text.length > code.length && text.startsWith(code) && /\s/.test(text[code.length])) {
+    return { name: text.slice(code.length).trim(), coded: true };
+  }
+  return { name: text, coded: false };
+}
+
 async function askName(ctx, planId, renewId) {
   if (renewId || !accessSettings().chooseName) return placeOrder(ctx, planId, '', renewId);
   const plan = bot().plans.find((p) => p.id === planId);
@@ -1971,10 +2007,11 @@ async function askName(ctx, planId, renewId) {
 
 async function takeOrderName(ctx, raw, waiting) {
   const planId = waiting && waiting.data && waiting.data.planId;
-  const name = uniqueName(cleanName(raw));
+  const read = readCode(raw);
+  const name = uniqueName(cleanName(read.name));
   if (!name) return send(ctx.chatId, 'یک اسم بفرستید.');
   forget(ctx.userId);
-  return placeOrder(ctx, planId, name, '');
+  return placeOrder(ctx, planId, name, '', { instant: read.coded });
 }
 
 async function takeTrialName(ctx, raw) {
@@ -3320,7 +3357,7 @@ function payLabel(way) {
 }
 
 /** A purchase starts here: pick how to pay, or go straight there if only one way. */
-async function placeOrder(ctx, planId, clientName, renewId) {
+async function placeOrder(ctx, planId, clientName, renewId, opts) {
   const b = bot();
   const plan = b.plans.find((p) => p.id === planId);
   if (!plan) return reply(ctx, 'این اشتراک دیگر موجود نیست.', backRow());
@@ -3347,6 +3384,9 @@ async function placeOrder(ctx, planId, clientName, renewId) {
        config this is being added to rather than cut fresh */
     clientName: clientName || '',
     renewClientId: renewId || '',
+    /* the buyer gave the admin's code: hand over on receipt whatever the
+       setting says */
+    instant: !!(opts && opts.instant),
     method: '',
     status: 'awaiting'
   };
@@ -3925,15 +3965,21 @@ async function takeReceipt(ctx, message) {
   db.saveNow();
 
   /*
-   * Hand the config over now, check the receipt afterwards.
-   *
-   * A buyer who has paid should be connected in the next few seconds, not
-   * whenever the admin next looks at their phone - and the admin loses nothing
-   * by it, because rejecting a receipt later cuts the config off and tells the
-   * buyer why. Waiting only ever cost the honest customer.
+   * Hand the config over now, check the receipt afterwards - unless the admin
+   * has chosen to approve first, in which case the buyer is told to wait and
+   * the config is made when approve is pressed. The admin's code overrides
+   * that for one order.
    */
-  const handed = await deliverOrder(order);
-  if (handed.ok) {
+  const instant = deliverySettings().instant || order.instant;
+  const handed = instant ? await deliverOrder(order) : { ok: false, held: true };
+  if (handed.held) {
+    order.status = 'pending';
+    db.saveNow();
+    await send(ctx.chatId, [
+      'رسید شما دریافت شد ✅',
+      'پس از بررسی و تایید، کانفیگ همینجا برایتان ارسال می‌شود. لطفاً کمی صبر کنید 🙏'
+    ].join('\n'));
+  } else if (handed.ok) {
     order.status = 'delivered';
     order.clientId = handed.client.id;
     db.saveNow();
@@ -3956,9 +4002,11 @@ async function takeReceipt(ctx, message) {
     `روش: ${order.method === 'crypto' ? 'ارز دیجیتال' : order.method === 'card' ? 'کارت به کارت' : '-'}`,
     ...buyerLines(order),
     '',
-    handed.ok
-      ? `کانفیگ همین حالا تحویل داده شد: <code>${escapeHtml(handed.client.email)}</code>\nاگر رسید درست نبود، «رد» بزنید تا قطع شود.`
-      : `تحویل خودکار انجام نشد: ${escapeHtml(handed.error || 'نامشخص')}`
+    handed.held
+      ? '⏳ <b>منتظر تایید شماست.</b> با «تایید» کانفیگ ساخته و برای خریدار ارسال می‌شود.'
+      : handed.ok
+        ? `کانفیگ همین حالا تحویل داده شد: <code>${escapeHtml(handed.client.email)}</code>${order.instant && !deliverySettings().instant ? ' (با کد تحویل فوری)' : ''}\nاگر رسید درست نبود، «رد» بزنید تا قطع شود.`
+        : `تحویل خودکار انجام نشد: ${escapeHtml(handed.error || 'نامشخص')}`
   ].join('\n');
   const keys = [[
     { text: '✅ تایید', callback_data: `b:ok:${order.id}` },
@@ -5355,6 +5403,6 @@ module.exports = {
   payLabel, customLabel, picksTerm, deliverOrder, topUp, settleGateway, sweepGateway, watchGateway, orderByToken,
   /* the entry point for one update: what the polling loop feeds, and what a
      webhook would feed if this ever grows one */
-  refresh,
+  refresh, deliverySettings, readCode,
   handle
 };

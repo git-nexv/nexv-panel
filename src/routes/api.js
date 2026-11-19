@@ -402,6 +402,9 @@ function botView() {
     /* the keys the last message went out with, so the Message tab can offer
        them back rather than make the admin type the same three again */
     lastKeys: telegram.lastKeys(),
+    /* hand over on receipt, or wait for approve - and the code that skips
+       the wait for one order */
+    delivery: telegram.deliverySettings(),
     ai: {
       hasKey: !!(b.ai && b.ai.apiKey),
       provider: (b.ai && b.ai.provider) || 'anthropic',
@@ -458,6 +461,13 @@ router.put('/bot', async (req, res) => {
     b.buttonStyle = ['success', 'primary', 'danger'].includes(want) ? want : '';
   }
   if (Array.isArray(body.screens)) b.screens = botai.sanitise({ screens: body.screens });
+  if (body.delivery && typeof body.delivery === 'object') {
+    const code = String(body.delivery.code || '').trim();
+    /* no spaces inside it: the code is recognised as "code, space, name",
+       so a code with a space in it could never be told apart from a name */
+    if (/\s/.test(code)) return bad(res, 'the instant-delivery code cannot contain a space');
+    b.delivery = { instant: body.delivery.instant !== false, code: code.slice(0, 16) };
+  }
   if (Array.isArray(body.plans)) {
     /*
      * A custom-volume purchase invents a plan for one buyer and live orders

@@ -6894,7 +6894,8 @@ async function renderBot(view) {
       pricePerGB: draft.pricePerGB, trial: draft.trial, custom: draft.custom,
       reward: draft.reward, offer: draft.offer,
       access: draft.access, startOnFirstUse: draft.startOnFirstUse,
-      buttonStyle: draft.buttonStyle, viaOutbound: draft.viaOutbound, backup: draft.backup
+      buttonStyle: draft.buttonStyle, viaOutbound: draft.viaOutbound, backup: draft.backup,
+      delivery: draft.delivery
     }, extra || {});
     try {
       await api.put('/bot', payload);
@@ -8121,8 +8122,56 @@ async function renderBot(view) {
 
   /* ---- Payment ---- */
   const payBox = el('div', { class: 'stack' });
+  draft.delivery = Object.assign({ instant: true, code: '' }, data.delivery || {});
   const drawPay = () => {
     payBox.innerHTML = '';
+
+    /*
+     * When a paid order is handed over - the first thing on this tab, because
+     * it decides what every buyer experiences after paying.
+     *
+     * On: the config goes out the moment the receipt arrives and a rejected
+     * receipt cuts it off afterwards. Off: the buyer is told to wait, and the
+     * config is made when approve is pressed. The code is for the times the
+     * admin is away from the phone - a buyer who starts the config's name
+     * with it is served at once anyway.
+     */
+    const dv = draft.delivery;
+    const instantBox = el('input', { type: 'checkbox' });
+    instantBox.checked = dv.instant !== false;
+    const codeRow = el('div');
+    const codeInput = el('input', { value: dv.code || '', placeholder: '!vip', maxLength: 16 });
+    codeInput.addEventListener('input', () => { dv.code = codeInput.value.replace(/\s+/g, ''); });
+    const example = el('div', { class: 'hint' });
+    const sayExample = () => {
+      const c = (dv.code || '').trim();
+      example.textContent = c
+        ? `${t('A buyer who types')} "${c} ${t('Ali phone')}" ${t('as the config name gets it at once; the config is called')} "${t('Ali phone')}".`
+        : t('Leave it empty and every order waits for your approval.');
+    };
+    codeInput.addEventListener('input', sayExample);
+    sayExample();
+    const grid = el('div', { class: 'form-grid' });
+    formField(grid, 'Instant-delivery code', codeInput, {
+      hint: 'Optional. Give it only to buyers you trust. It is cut off the name, so it never shows in the config.'
+    });
+    grid.append(el('div', { class: 'field full' }, [example]));
+    codeRow.append(
+      el('div', { class: 'notice', style: 'margin:10px 0', text: t('Buyers are told their receipt arrived and to wait. The config is made and sent when you press Approve on the receipt.') }),
+      grid
+    );
+    const paint = () => codeRow.classList.toggle('hidden', instantBox.checked);
+    instantBox.addEventListener('change', () => { dv.instant = instantBox.checked; paint(); });
+    paint();
+    payBox.append(el('div', { class: 'card' }, [
+      el('div', { class: 'between', style: 'margin-bottom:8px' }, [
+        el('strong', { text: '\u26a1 Send the config as soon as the receipt arrives' }),
+        el('label', { class: 'switch' }, [instantBox, el('span', { class: 'track' })])
+      ]),
+      el('div', { class: 'hint', text: 'On: the buyer is connected in seconds and you check the receipt afterwards - rejecting it deletes the config. Off: nothing is sent until you approve.' }),
+      codeRow,
+      el('div', { class: 'hint', style: 'margin-top:8px', text: 'Online gateway payments are checked automatically and are always delivered at once.' })
+    ]));
     const card = draft.pay.card = draft.pay.card || {};
     const crypto = draft.pay.crypto = draft.pay.crypto || {};
     crypto.wallets = crypto.wallets || [];
