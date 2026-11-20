@@ -810,7 +810,16 @@ ask_config() {
     echo
     echo "${BOLD}-- Panel configuration --${RESET}"
     [[ -n $PANEL_PORT ]] || { read -rp "Panel port [2087]: " PANEL_PORT; }
-    [[ -n $ADMIN_USER ]] || { read -rp "Admin username [admin]: " ADMIN_USER; }
+    # A username is checked as it is typed. A command pasted at this prompt -
+    # easy to do when the install line itself is pasted twice - used to be
+    # taken as the name and written into the service file, where systemd
+    # rejected it line by line with "Invalid environment assignment".
+    while :; do
+      [[ -n $ADMIN_USER ]] || { read -rp "Admin username [admin]: " ADMIN_USER; }
+      [[ -z $ADMIN_USER || $ADMIN_USER =~ ^[A-Za-z0-9._-]{3,32}$ ]] && break
+      warn "A username is 3-32 letters, digits, dots, dashes or underscores - no spaces."
+      ADMIN_USER=""
+    done
     # asked again rather than refused: aborting an install that is already
     # minutes in, over a password somebody can simply retype, is a bad trade
     while [[ -z $ADMIN_PASS ]]; do
@@ -834,6 +843,9 @@ ask_config() {
   PANEL_PORT="${PANEL_PORT:-2087}"
   settle_panel_port
   ADMIN_USER="${ADMIN_USER:-admin}"
+  [[ $ADMIN_USER =~ ^[A-Za-z0-9._-]{3,32}$ ]] || fail "NEXV_USER must be 3-32 letters, digits, dots, dashes or underscores"
+  # nor a password that could break the service file it is written into
+  [[ $ADMIN_PASS != *$'\n'* ]] || fail "The admin password cannot contain a line break"
   if [[ -z $ADMIN_PASS ]]; then
     ADMIN_PASS="$(gen_password 24)" || fail "Could not generate an admin password"
   elif [[ ${#ADMIN_PASS} -lt 8 ]]; then
