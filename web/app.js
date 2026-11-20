@@ -9330,9 +9330,27 @@ function bootFailure(message) {
   ]));
 }
 
+/*
+ * Nothing drawn yet means the error is the page's only chance to say what
+ * went wrong. "Nothing drawn" used to be an empty view - and then the view
+ * started out holding a loading line, so it was never empty again, and every
+ * error during start-up was swallowed: the loading line simply stayed up for
+ * ever. The loading line counts as nothing drawn now, and the message says
+ * where the error was, so a phone with no console can still report it.
+ */
+const stillBooting = (view) => !view.children.length || !!document.getElementById('bootWait');
+const whereOf = (event) => {
+  const file = String((event && event.filename) || '').split('/').pop().split('?')[0];
+  return file ? ` (${file}:${event.lineno || 0}:${event.colno || 0})` : '';
+};
 window.addEventListener('error', (event) => {
   const view = document.getElementById('view');
-  if (view && !view.children.length) bootFailure(event.message || 'unexpected script error');
+  if (view && stillBooting(view)) bootFailure(`${event.message || 'unexpected script error'}${whereOf(event)}`);
+});
+window.addEventListener('unhandledrejection', (event) => {
+  const view = document.getElementById('view');
+  const why = event && event.reason;
+  if (view && stillBooting(view)) bootFailure(`${(why && (why.stack || why.message)) || why || 'a promise failed'}`.slice(0, 500));
 });
 
 /*

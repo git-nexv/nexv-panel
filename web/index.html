@@ -93,10 +93,31 @@
 /* If the panel's script has not started after 15 seconds, say so and offer a
    way out, rather than leaving the loading line up for ever. app.js sets
    window.__nexvBooted the moment it runs. */
+/* and any error before the panel's own handler exists, kept to be shown */
+window.__nexvErrors = [];
+window.addEventListener('error', function (e) {
+  var f = String(e.filename || '').split('/').pop().split('?')[0];
+  window.__nexvErrors.push((e.message || 'error') + (f ? ' (' + f + ':' + e.lineno + ':' + e.colno + ')' : ''));
+});
 setTimeout(function () {
-  if (window.__nexvBooted) return;
   var m = document.getElementById('bootMsg');
+  /* the script ran but never drew the page: say what it hit, if anything */
+  if (window.__nexvBooted && m && document.getElementById('bootWait')) {
+    m.innerHTML = 'The panel started but stopped before drawing.<br>پنل شروع شد ولی پیش از نمایش متوقف شد.<br><br>'
+      + '<code style="direction:ltr;display:block;white-space:pre-wrap;text-align:left">'
+      + (window.__nexvErrors.join('\n') || 'no error was reported').replace(/</g, '&lt;') + '</code><br>'
+      + '<button class="btn primary" onclick="location.reload()">Try again / دوباره</button>';
+    return;
+  }
+  if (window.__nexvBooted) return;
   if (!m) return;
+  if (window.__nexvErrors.length) {
+    m.innerHTML = 'This browser could not run the panel script.<br>این مرورگر نتوانست اسکریپت پنل را اجرا کند — مرورگر را به‌روز کنید یا مرورگر دیگری امتحان کنید.<br><br>'
+      + '<code style="direction:ltr;display:block;white-space:pre-wrap;text-align:left">'
+      + window.__nexvErrors.join('\n').replace(/</g, '&lt;') + '</code><br>'
+      + '<button class="btn primary" onclick="location.reload()">Try again / دوباره</button>';
+    return;
+  }
   m.innerHTML = 'The server is answering slowly - it may be busy or under attack.<br>'
     + 'سرور کند جواب می‌دهد — ممکن است مشغول یا زیر حمله باشد.<br><br>'
     + '<button class="btn primary" onclick="location.reload()">Try again / دوباره</button>';
