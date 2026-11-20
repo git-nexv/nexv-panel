@@ -44,6 +44,11 @@ const db = require('./db');
 const PREFIX = 'nexv-guard ';
 const MAX_IPS = 3000;
 const ENRICH_TTL = 24 * 60 * 60 * 1000;
+const KMSG_PER_PASS = 3000;
+/* the connection table is read at most this often, and only this much of it */
+const CT_EVERY = 60 * 1000;
+const CT_MAX_BYTES = 8 * 1024 * 1024;
+let ctReadAt = 0;
 
 function file() {
   return path.join(process.env.NEXV_DATA_DIR || '/etc/nexv/data', 'evidence.json');
@@ -95,7 +100,9 @@ function entry(ip) {
       web: null,
       verified: false
     };
-    prune();
+    /* pruned once per pass in collect(), not here: under a flood thousands
+       of new addresses arrive at once, and re-sorting the whole record for
+       each one blocked the panel for seconds */
   }
   return s.ips[ip];
 }
@@ -128,7 +135,10 @@ function readKmsg() {
   } catch (_) { return out; }
   const buf = Buffer.alloc(8192);
   try {
-    for (let i = 0; i < 200000; i++) {
+    /* bounded per pass: the rest is read on the next one, ten seconds
+       later, rather than in one long stretch with the panel unable to
+       answer anybody */
+    for (let i = 0; i < KMSG_PER_PASS; i++) {
       let n;
       try { n = fs.readSync(fd, buf, 0, buf.length, null); } catch (err) {
         if (err.code === 'EAGAIN') break;
@@ -350,19 +360,20 @@ async function collect() {
    * report draws between an address worth reporting and one that may be a
    * decoy.
    */
-  let ct = '';
-  try { ct = fs.readFileSync('/proc/net/nf_conntrack', 'utf8'); } catch (_) {
-    ct = await run('conntrack', ['-L'], 8000);
-  }
-  if (ct) {
-    const assured = new Set();
-    for (const line of ct.split('\n')) {
-      if (!line.includes('[ASSURED]')) continue;
-      const m = /\bsrc=(\S+)/.exec(line);
-      if (m) assured.add(m[1]);
-    }
-    for (const e of Object.values(s.ips)) {
-      if (!e.verified && assured.has(e.ip)) {
+  /*
+   * Read in pieces, at most once a minute, at most 8 MB, and only while some
+   * recorded address is still unverified. Under a flood this table holds
+   * hundreds of thousands of entries; reading and splitting all of it every
+   * ten seconds in one go is what stopped the panel answering at all - the
+   * very moment the admin most needs it.
+   */
+  const unverified = new Set(Object.values(s.ips).filter((e) => !e.verified).map((e) => e.ip));
+  if (unverified.size && Date.now() - ctReadAt > CT_EVERY) {
+    ctReadAt = Date.now();
+    const assured = await assuredFrom(unverified);
+    for (const ip of assured) {
+      const e = s.ips[ip];
+      if (e && !e.verified) {
         e.verified = true;
         e.verifiedBy = 'completed a TCP handshake (kernel connection tracking: ASSURED)';
         dirty = true;
@@ -370,30 +381,73 @@ async function collect() {
     }
   }
 
-  /* an address Xray has served completed a handshake, so it is not forged */
+  /* an address Xray has served completed a handshake, so it is not forged.
+     One set of every address any client has used, built once per pass -
+     not every attacker checked against every client's list in turn */
   try {
     const online = require('./online');
+    let served = null;
     for (const e of Object.values(s.ips)) {
       if (e.verified) continue;
-      for (const c of (db.data.clients || [])) {
-        const tag = `${c.email}#${String(c.id || '').slice(0, 8)}`;
-        if (online.forTag(tag).ips.some((x) => x.ip === e.ip)) {
-          e.verified = true; e.client = c.email; e.verifiedBy = 'connected through Xray as a client'; dirty = true; break;
+      if (!served) {
+        served = new Map();
+        for (const c of (db.data.clients || [])) {
+          const tag = `${c.email}#${String(c.id || '').slice(0, 8)}`;
+          for (const x of online.forTag(tag).ips) if (!served.has(x.ip)) served.set(x.ip, c.email);
         }
+      }
+      if (served.has(e.ip)) {
+        e.verified = true; e.client = served.get(e.ip); e.verifiedBy = 'connected through Xray as a client'; dirty = true;
       }
     }
   } catch (_) { /* the Xray side is optional */ }
 
+  prune();
   save();
   return Object.keys(s.ips).length;
 }
 
+/*
+ * Which of these addresses have an ASSURED connection, read from the kernel's
+ * connection table a chunk at a time so nothing else waits on it.
+ */
+function assuredFrom(wanted) {
+  return new Promise((resolve) => {
+    const found = new Set();
+    let stream;
+    try {
+      stream = fs.createReadStream('/proc/net/nf_conntrack', { encoding: 'utf8', highWaterMark: 256 * 1024 });
+    } catch (_) { return resolve(found); }
+    let read = 0;
+    let rest = '';
+    const finish = () => { try { stream.destroy(); } catch (_) { /* closing */ } resolve(found); };
+    stream.on('data', (chunk) => {
+      read += chunk.length;
+      const lines = (rest + chunk).split('\n');
+      rest = lines.pop();
+      for (const line of lines) {
+        if (!line.includes('[ASSURED]')) continue;
+        const m = /\bsrc=(\S+)/.exec(line);
+        if (m && wanted.has(m[1])) found.add(m[1]);
+      }
+      if (read > CT_MAX_BYTES || found.size === wanted.size) finish();
+    });
+    stream.on('end', finish);
+    stream.on('error', finish);
+  });
+}
+
 let timer = null;
+/* never two passes at once: a slow one is not stacked on by the next */
+let busy = false;
 function watch() {
   if (timer) return;
   timer = setInterval(() => {
-    if (db.settings.guard && db.settings.guard.enable) collect().catch(() => {});
-  }, 10000);
+    if (busy) return;
+    if (!(db.settings.guard && db.settings.guard.enable)) return;
+    busy = true;
+    collect().catch(() => {}).finally(() => { busy = false; });
+  }, 15000);
   timer.unref?.();
 }
 

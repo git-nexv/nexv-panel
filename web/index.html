@@ -72,13 +72,36 @@
       </button>
       <button class="btn icon ghost desk-only" id="logoutBtn" title="Sign out"><span data-icon="logout"></span></button>
     </header>
-    <div class="content" id="view"></div>
+    <div class="content" id="view">
+      <!-- Shown from the first byte of the page, before any script has
+           arrived, and replaced the moment the panel draws. On a slow or
+           overloaded server the scripts can take a while, and an empty frame
+           with no word of explanation is indistinguishable from a broken
+           panel. -->
+      <div class="card" id="bootWait" style="text-align:center;padding:28px 18px">
+        <div class="skeleton" style="height:14px;width:60%;margin:0 auto 14px"></div>
+        <div class="muted" id="bootMsg">Loading the panel… / در حال بارگذاری پنل…</div>
+      </div>
+    </div>
   </main>
 </div>
 
 <div class="toasts" id="toasts"></div>
 <div id="modalRoot"></div>
 
+<script>
+/* If the panel's script has not started after 15 seconds, say so and offer a
+   way out, rather than leaving the loading line up for ever. app.js sets
+   window.__nexvBooted the moment it runs. */
+setTimeout(function () {
+  if (window.__nexvBooted) return;
+  var m = document.getElementById('bootMsg');
+  if (!m) return;
+  m.innerHTML = 'The server is answering slowly - it may be busy or under attack.<br>'
+    + 'سرور کند جواب می‌دهد — ممکن است مشغول یا زیر حمله باشد.<br><br>'
+    + '<button class="btn primary" onclick="location.reload()">Try again / دوباره</button>';
+}, 15000);
+</script>
 <script src="i18n-core.js"></script>
 <script src="i18n.js"></script>
 <script src="app.js"></script>

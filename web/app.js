@@ -1,4 +1,5 @@
 'use strict';
+window.__nexvBooted = true;
 /* NexV Panel — single-page frontend, no build step. */
 
 /* The panel can live under a secret base path; the server injects it here.
