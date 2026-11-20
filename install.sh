@@ -732,6 +732,70 @@ gen_password() {
   printf '%s' "$out"
 }
 
+# Something already listening on the panel's port - most often another panel
+# left on a second-hand server, 3x-ui on 2053 above all - used to surface as a
+# panel that would not start, with the reason buried in the journal. It is
+# found here, before anything is written: the management script says what the
+# program is and offers to stop it, and if the port is still taken the
+# install asks for another one, or picks a free one when nobody is there.
+port_taken() {
+  local p="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnH 2>/dev/null | awk -v p=":${p}$" '$4 ~ p { f = 1 } END { exit !f }'
+    return
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1
+    return
+  fi
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -lnt 2>/dev/null | awk -v p=":${p}$" '$4 ~ p { f = 1 } END { exit !f }'
+    return
+  fi
+  # last resort, with no tools at all: can something be reached on it
+  (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null
+}
+
+settle_panel_port() {
+  port_taken "$PANEL_PORT" || return 0
+  warn "Port $PANEL_PORT is already in use on this server."
+  if [[ $INTERACTIVE -eq 1 ]]; then
+    bash "$INSTALL_DIR/scripts/nexv" freeport "$PANEL_PORT" || true
+    while port_taken "$PANEL_PORT"; do
+      read -rp "Pick another panel port (for example 2083, 2087, 8443): " PANEL_PORT
+      [[ $PANEL_PORT =~ ^[0-9]+$ ]] && (( PANEL_PORT >= 1 && PANEL_PORT <= 65535 )) || PANEL_PORT=2087
+    done
+  else
+    local p
+    for p in 2087 2083 8443 2096 8880 20870; do
+      port_taken "$p" || { PANEL_PORT="$p"; break; }
+    done
+  fi
+  ok "The panel will use port $PANEL_PORT"
+}
+
+# Another Xray panel on the same server fights this one over Xray's config
+# and service, and undoes every change either makes. Said up front, with the
+# offer to take it off, rather than discovered as configs that keep vanishing.
+other_panels() {
+  if [[ -d /usr/local/x-ui || -f /etc/systemd/system/x-ui.service || -d /etc/x-ui ]]; then
+    warn "3x-ui (x-ui) is installed on this server. It manages Xray too, and the"
+    warn "two panels would keep overwriting each other's configuration."
+    if [[ $INTERACTIVE -eq 1 ]]; then
+      local yn
+      read -rp "Remove 3x-ui from this server now? [Y/n]: " yn
+      if [[ ! $yn =~ ^[Nn]$ ]]; then
+        systemctl stop x-ui 2>/dev/null; systemctl disable x-ui 2>/dev/null
+        rm -rf /usr/local/x-ui /etc/x-ui /usr/local/bin/x-ui /usr/bin/x-ui /etc/systemd/system/x-ui.service
+        systemctl daemon-reload
+        ok "3x-ui removed"
+      fi
+    else
+      warn "Remove it with:  x-ui uninstall   (or run this installer from a terminal to be asked)"
+    fi
+  fi
+}
+
 ask_config() {
   PANEL_PORT="${NEXV_PORT:-}"
   ADMIN_USER="${NEXV_USER:-}"
@@ -768,6 +832,7 @@ ask_config() {
   fi
 
   PANEL_PORT="${PANEL_PORT:-2087}"
+  settle_panel_port
   ADMIN_USER="${ADMIN_USER:-admin}"
   if [[ -z $ADMIN_PASS ]]; then
     ADMIN_PASS="$(gen_password 24)" || fail "Could not generate an admin password"
@@ -1136,6 +1201,7 @@ main() {
   install_xray
   migrate_legacy_dir
   fetch_panel
+  other_panels
   ask_config
   # the ports first: the certificate step needs 80 open to the world
   open_firewall

@@ -885,13 +885,91 @@ act_guard() {
   fi
 }
 
+# Free a port: say exactly what holds it, and clear it when that is safe.
+#
+# "Port 2053 is used by xray" does not tell anybody whether that is this
+# panel's own Xray serving one of its inbounds - which must be moved in the
+# panel, not killed - or a copy of Xray that another panel (3x-ui, Marzban...)
+# left running on a second-hand server. This looks at the process's binary
+# and its systemd unit and tells the two apart:
+#   - our own panel or our own Xray: nothing is stopped; it says which inbound
+#     to move
+#   - anything else: it names the program, its unit and its binary, asks, then
+#     stops it and disables it so it does not come back at the next boot - and
+#     for a known panel (3x-ui / x-ui) offers to remove it completely
+act_freeport() {
+  need_root
+  local port="${1:-}"
+  [[ $port =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )) || { err "Give a port number"; return 1; }
+  local pids
+  pids="$(port_pids "$port")"
+  if [[ -z $pids ]]; then
+    ok "Port $port is free"
+    return 0
+  fi
+  local pid unit exe name freed=0
+  for pid in $pids; do
+    unit="$(unit_of_pid "$pid")"
+    exe="$(readlink -f /proc/"$pid"/exe 2>/dev/null)"
+    name="$(name_of_pid "$pid")"
+    echo
+    echo "  Port $port is held by:"
+    echo "    program : ${name:-?}  (pid $pid)"
+    echo "    binary  : ${exe:-?}"
+    echo "    service : ${unit:-none}"
+    if [[ $unit == "$SERVICE.service" ]]; then
+      warn "That is this panel itself. Choose another port for whatever needs $port."
+      continue
+    fi
+    if [[ $unit == xray.service && $exe == "$(readlink -f /usr/local/bin/xray 2>/dev/null)" ]]; then
+      warn "That is this panel's own Xray, so one of your inbounds is on port $port:"
+      DATA_DIR="$DATA_DIR" PORT="$port" node -e '
+        const db = JSON.parse(require("fs").readFileSync(require("path").join(process.env.DATA_DIR, "db.json"), "utf8"));
+        for (const i of db.inbounds || []) if (Number(i.port) === Number(process.env.PORT))
+          console.log("      - \"" + (i.remark || i.id) + "\" (" + i.protocol + ")");
+      ' 2>/dev/null
+      echo "    Change that inbound's port in the panel (Inbounds -> Edit), then try again."
+      continue
+    fi
+    if ! confirm "  Stop ${unit:-this program} and keep it from starting again?"; then
+      echo "  Left as it is."
+      continue
+    fi
+    if [[ -n $unit ]]; then
+      systemctl stop "$unit" 2>/dev/null
+      systemctl disable "$unit" 2>/dev/null
+      systemctl mask "$unit" >/dev/null 2>&1 || true
+    fi
+    kill "$pid" 2>/dev/null; sleep 1
+    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+    freed=1
+    # 3x-ui and its relatives: offer to take the whole thing off, not just stop it
+    if [[ $unit == x-ui.service || $exe == /usr/local/x-ui/* ]]; then
+      if confirm "  That was 3x-ui. Remove it from the server completely (its files and service)?"; then
+        systemctl unmask x-ui >/dev/null 2>&1
+        rm -rf /usr/local/x-ui /etc/x-ui /usr/local/bin/x-ui /usr/bin/x-ui /etc/systemd/system/x-ui.service
+        systemctl daemon-reload
+        ok "3x-ui removed"
+      fi
+    fi
+  done
+  sleep 1
+  if [[ -z "$(port_pids "$port")" ]]; then
+    ok "Port $port is free now"
+    return 0
+  fi
+  [[ $freed == 1 ]] && err "Port $port is still in use - something restarted it. Run: ss -ltnp | grep :$port"
+  return 1
+}
+
 act_port() {
   need_root
   local port="${1:-}"
   [[ $port =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )) || { err "Give a port number between 1 and 65535"; return 1; }
   if [[ $port != "$(panel_port)" ]] && is_port_in_use "$port"; then
     err "Port $port is already used by: $(port_owner "$port" || echo 'another process')"
-    return 1
+    # find out what it is and offer to clear it, instead of ending here
+    act_freeport "$port" || return 1
   fi
   PORT="$port" DATA_DIR="$DATA_DIR" node -e '
     const fs = require("fs"), path = require("path");
@@ -2433,6 +2511,7 @@ case "${1:-menu}" in
   settings)        act_settings ;;
   cert)            act_cert "${2:-}" ;;
   guard)           act_guard "${2:-}" ;;
+  freeport)        act_freeport "${2:-}" ;;
   # what the renewal cron calls around certbot, so a renewal at three in the
   # morning clears port 80 the same way the first issue did
   free80)          need_root; free_port_80 "${2:-80}" ;;
