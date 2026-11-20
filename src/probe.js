@@ -55,7 +55,7 @@ const TARGETS = process.env.NEXV_PROBE_HOST
  * short one each, because by then the question is only whether some site
  * answers at all. Worst case is about half a minute rather than a full one.
  */
-const BOOT_TIMEOUT = 10000;
+const BOOT_TIMEOUT = 20000;
 const TEST_TIMEOUT = 8000;
 const RETRY_TIMEOUT = 5000;
 
@@ -68,7 +68,10 @@ const RETRY_TIMEOUT = 5000;
 function complaint(output) {
   return (String(output).split('\n')
     .filter((line) => !/insufficient header/i.test(line))
-    .find((line) => /fail|error|invalid|rejected|refused/i.test(line)) || '').trim();
+    /* a [Warning] such as "WebSocket is deprecated" names common/errors and
+       was being shown as the reason, hiding the line that really was one */
+    .filter((line) => !/\[(Warning|Info|Debug)\]/.test(line))
+    .find((line) => /fail|error|invalid|rejected|refused|panic|denied|bind|address/i.test(line)) || '').trim();
 }
 
 /** A loopback port nobody is listening on. */
@@ -235,9 +238,18 @@ async function testOutbound(outbound, peer) {
     child.stdout.on('data', (d) => { stderr += d.toString(); });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
 
+    let exited = null;
+    child.on('exit', (code, signal) => { exited = signal || `exit code ${code}`; });
     const up = await waitForPort(port, Date.now() + BOOT_TIMEOUT);
     if (!up) {
-      return { ok: false, error: complaint(stderr) || 'xray would not start with this outbound' };
+      const why = complaint(stderr);
+      const tailLines = String(stderr).trim().split('\n').slice(-3).join(' | ');
+      return {
+        ok: false,
+        error: exited
+          ? `the test copy of xray stopped (${exited})${why ? ` - ${why}` : tailLines ? ` - ${tailLines}` : ''}`
+          : `the test copy of xray did not open its local port within ${BOOT_TIMEOUT / 1000}s - the server may be overloaded${why ? ` - ${why}` : ''}`
+      };
     }
 
     /*
