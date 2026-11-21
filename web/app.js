@@ -6989,6 +6989,7 @@ async function renderBot(view) {
     { value: 'success', label: t('Green') },
     { value: 'primary', label: t('Blue') },
     { value: 'danger', label: t('Red') },
+    { value: 'neutral', label: t('Grey') },
     { value: '', label: t('Whatever the app uses') }
   ], draft.buttonStyle);
   btnStyle.addEventListener('change', () => { draft.buttonStyle = btnStyle.value; });
@@ -7225,7 +7226,8 @@ async function renderBot(view) {
         { value: '', label: 'Default' },
         { value: 'success', label: '🟢 Green' },
         { value: 'primary', label: '🔵 Blue' },
-        { value: 'danger', label: '🔴 Red' }
+        { value: 'danger', label: '🔴 Red' },
+        { value: 'neutral', label: '⚪ Grey' }
       ], plan.style || ''), {
         hint: 'The colour of this plan\u2019s button in the bot. Colour one, not all of them — '
           + 'when every key is green none of them stands out.'
@@ -7669,7 +7671,8 @@ async function renderBot(view) {
         { value: '', label: 'Default' },
         { value: 'success', label: '\ud83d\udfe2 Green' },
         { value: 'primary', label: '\ud83d\udd35 Blue' },
-        { value: 'danger', label: '\ud83d\udd34 Red' }
+        { value: 'danger', label: '\ud83d\udd34 Red' },
+        { value: 'neutral', label: '\u26aa Grey' }
       ], key.style || '');
       colour.addEventListener('change', () => { key.style = colour.value; });
       formField(grid, 'Button text', text);

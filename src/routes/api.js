@@ -458,7 +458,7 @@ router.put('/bot', async (req, res) => {
   if (body.buttonStyle !== undefined) {
     // Telegram's own three, or nothing at all for the app's own colours
     const want = String(body.buttonStyle);
-    b.buttonStyle = ['success', 'primary', 'danger'].includes(want) ? want : '';
+    b.buttonStyle = ['success', 'primary', 'danger', 'neutral'].includes(want) ? want : '';
   }
   if (Array.isArray(body.screens)) b.screens = botai.sanitise({ screens: body.screens });
   if (body.delivery && typeof body.delivery === 'object') {
@@ -488,7 +488,7 @@ router.put('/bot', async (req, res) => {
       discount: Math.min(95, Math.max(0, Math.round(num(p.discount)))),
       /* and the colour of its key in the bot. Telegram takes exactly these
          three and refuses the rest, so anything else means the app's own. */
-      style: ['success', 'primary', 'danger'].includes(String(p.style)) ? String(p.style) : '',
+      style: ['success', 'primary', 'danger', 'neutral'].includes(String(p.style)) ? String(p.style) : '',
       /* no inboundId: a sale goes out on every inbound that is switched on */
       enable: p.enable !== false
     })).concat(oneOffs);

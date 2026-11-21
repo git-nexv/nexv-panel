@@ -426,6 +426,7 @@ const FA = {
   '🟢 Green': '🟢 سبز',
   '🔵 Blue': '🔵 آبی',
   '🔴 Red': '🔴 قرمز',
+  '⚪ Grey': '⚪ خاکستری',
   'They pay': 'پرداختی:',
   'was': 'قبلاً',
   'Set a price first': 'اول یک قیمت بگذارید',
@@ -1200,6 +1201,7 @@ const FA = {
   'Green': 'سبز',
   'Blue': 'آبی',
   'Red': 'قرمز',
+  'Grey': 'خاکستری',
   'Whatever the app uses': 'هرچه خود برنامه استفاده می‌کند',
   'The colour of the keys inside the bot. Delete and Cancel stay red whatever this says. Telegram apps older than February 2026 draw them their own way and ignore this.': 'رنگ دکمه‌های داخل ربات. حذف و انصراف هرچه اینجا باشد قرمز می‌مانند. تلگرام‌های قدیمی‌تر از بهمن ۱۴۰۴ این را نادیده می‌گیرند و دکمه را به شکل خودشان می‌کشند.',
 

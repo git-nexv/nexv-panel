@@ -731,12 +731,17 @@ function styled(keyboard) {
   const want = bot().buttonStyle;
   if (!Array.isArray(keyboard)) return keyboard;
   return keyboard.map((row) => (Array.isArray(row) ? row.map((button) => {
+    if (button && button.style === 'neutral') {
+      const plain = Object.assign({}, button);
+      delete plain.style;
+      return plain;
+    }
     if (!button || button.style) return button;
     const data = String(button.callback_data || '');
 
     // anything that undoes or refuses is red whatever the shop chose
     if (DESTRUCTIVE.test(data)) return Object.assign({}, button, { style: 'danger' });
-    if (!want) return button;
+    if (!want || want === 'neutral') return button;
 
     /* back is matched on the arrow rather than the action: every back key
        carries it, and the same action behind a different label - the guide's
@@ -1134,7 +1139,9 @@ function planLine(plan) {
  * discovered as a rejected message. Empty means the app's own colour, which
  * is what every key that is not singled out gets.
  */
-const PLAN_STYLES = ['success', 'primary', 'danger'];
+/* 'neutral' is Telegram's own grey: sent as no style at all, but chosen on
+   purpose, so the shop-wide colour and the automatic red leave it alone */
+const PLAN_STYLES = ['success', 'primary', 'danger', 'neutral'];
 
 function planStyle(plan) {
   const want = String((plan && plan.style) || '');
@@ -2230,7 +2237,7 @@ const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
  * opened the bot, and a callback key would answer them with nothing. A link
  * to the bot is what carries them in.
  */
-const KEY_STYLES = ['success', 'primary', 'danger'];
+const KEY_STYLES = ['success', 'primary', 'danger', 'neutral'];
 const MAX_KEYS = 6;
 
 function messageKeys(list) {
@@ -2340,7 +2347,7 @@ async function postToChannel(text, opts) {
       text: body,
       parse_mode: 'HTML',
       disable_web_page_preview: true,
-      reply_markup: keyboard ? { inline_keyboard: keyboard } : undefined
+      reply_markup: keyboard ? { inline_keyboard: styled(keyboard) } : undefined
     });
     runtime.sent += 1;
     const link = messageLink(id, sent && sent.message_id);
@@ -2434,7 +2441,7 @@ async function startBroadcast(text, which, opts) {
               text: body,
               parse_mode: 'HTML',
               disable_web_page_preview: true,
-              reply_markup: keyboard ? { inline_keyboard: keyboard } : undefined
+              reply_markup: keyboard ? { inline_keyboard: styled(keyboard) } : undefined
             });
             broadcast.sent += 1;
             continue;
