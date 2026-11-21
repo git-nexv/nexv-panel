@@ -1202,6 +1202,13 @@ const FA = {
   'Blue': 'آبی',
   'Red': 'قرمز',
   'Grey': 'خاکستری',
+  '🖼 Add a picture': '🖼 افزودن عکس',
+  'Picture (optional)': 'عکس (اختیاری)',
+  'JPG, PNG or WebP, up to 5 MB. The message above becomes its caption (at most 1024 characters).': 'JPG، PNG یا WebP تا ۵ مگابایت. متن بالا زیر عکس (کپشن) می‌آید — حداکثر ۱۰۲۴ کاراکتر.',
+  'The picture must be JPG, PNG or WebP': 'عکس باید JPG، PNG یا WebP باشد',
+  'The picture is over 5 MB': 'عکس بیشتر از ۵ مگابایت است',
+  'Write the message or add a picture first': 'اول متن پیام را بنویسید یا عکس اضافه کنید',
+  'With a picture the text can be at most 1024 characters': 'همراه عکس، متن حداکثر ۱۰۲۴ کاراکتر می‌تواند باشد',
   'Whatever the app uses': 'هرچه خود برنامه استفاده می‌کند',
   'The colour of the keys inside the bot. Delete and Cancel stay red whatever this says. Telegram apps older than February 2026 draw them their own way and ignore this.': 'رنگ دکمه‌های داخل ربات. حذف و انصراف هرچه اینجا باشد قرمز می‌مانند. تلگرام‌های قدیمی‌تر از بهمن ۱۴۰۴ این را نادیده می‌گیرند و دکمه را به شکل خودشان می‌کشند.',
 

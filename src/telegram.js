@@ -811,9 +811,61 @@ function uploadDocument(chatId, filename, content, caption) {
  * A QR code has never been anywhere near Telegram, so like a backup it has to
  * be uploaded rather than named by file_id.
  */
-function uploadPhoto(chatId, filename, content, caption, keyboard) {
-  return upload('sendPhoto', 'photo', 'image/png',
+function uploadPhoto(chatId, filename, content, caption, keyboard, type) {
+  return upload('sendPhoto', 'photo', type || 'image/png',
     chatId, filename, content, caption, keyboard);
+}
+
+/*
+ * A picture the admin attached to a post or a broadcast.
+ *
+ * Arrives from the panel as base64. Checked here - kind and size - so a
+ * refusal is a sentence rather than Telegram's error, and a caption over
+ * Telegram's 1024-character limit is refused before anything is sent.
+ */
+const PHOTO_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+const PHOTO_MAX = 5 * 1024 * 1024;
+const CAPTION_MAX = 1024;
+
+function photoFrom(opts) {
+  const p = (opts || {}).photo;
+  if (!p || !p.data) return null;
+  const type = String(p.type || '').toLowerCase();
+  if (!PHOTO_TYPES[type]) throw new Error('the picture must be JPG, PNG or WebP');
+  const content = Buffer.from(String(p.data).replace(/^data:[^,]*,/, ''), 'base64');
+  if (!content.length) throw new Error('the picture is empty');
+  if (content.length > PHOTO_MAX) throw new Error('the picture is over 5 MB - make it smaller');
+  return { content, type, name: `post.${PHOTO_TYPES[type]}`, fileId: '' };
+}
+
+/*
+ * One message - a photo with the text as its caption, or plain text.
+ * The picture is uploaded once; every later send names it by file_id, so a
+ * broadcast to a thousand people uploads it one time, not a thousand.
+ */
+async function sendPost(chatId, text, keyboard, photo) {
+  const markup = keyboard ? { inline_keyboard: styled(keyboard) } : undefined;
+  if (!photo) {
+    return call('sendMessage', {
+      chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: markup
+    });
+  }
+  if (photo.fileId) {
+    return call('sendPhoto', {
+      chat_id: chatId, photo: photo.fileId, caption: text, parse_mode: 'HTML', reply_markup: markup
+    });
+  }
+  const sent = await uploadPhoto(chatId, photo.name, photo.content, text, keyboard, photo.type);
+  const sizes = (sent && sent.photo) || [];
+  if (sizes.length) photo.fileId = sizes[sizes.length - 1].file_id;
+  return sent;
+}
+
+function checkPost(body, photo) {
+  if (!body && !photo) throw new Error('write the message or add a picture first');
+  if (photo && body.length > CAPTION_MAX) {
+    throw new Error(`with a picture the text can be at most ${CAPTION_MAX} characters (Telegram's limit) - this is ${body.length}`);
+  }
 }
 
 /** The one multipart request in a module where everything else is JSON. */
@@ -2335,21 +2387,16 @@ function keysFrom(opts) {
  */
 async function postToChannel(text, opts) {
   const body = String(text || '').trim();
-  if (!body) throw new Error('write the message first');
+  const photo = photoFrom(opts);
+  checkPost(body, photo);
   if (!bot().token) throw new Error('the bot has no token');
   const id = String(channel().id || '').trim();
   if (!id) throw new Error('no channel is set - put its @name or id on the Channel tab first');
 
   const keyboard = keysFrom(opts);
   try {
-    const sent = await call('sendMessage', {
-      chat_id: id,
-      text: body,
-      parse_mode: 'HTML',
-      disable_web_page_preview: true,
-      reply_markup: keyboard ? { inline_keyboard: styled(keyboard) } : undefined
-    });
-    runtime.sent += 1;
+    const sent = await sendPost(id, body, keyboard, photo);
+    if (!photo) runtime.sent += 1;
     const link = messageLink(id, sent && sent.message_id);
     /* only once it has really gone: a post Telegram refused is not a set of
        keys worth offering back next time */
@@ -2382,7 +2429,8 @@ function messageLink(id, messageId) {
 
 async function startBroadcast(text, which, opts) {
   const body = String(text || '').trim();
-  if (!body) throw new Error('write the message first');
+  const photo = photoFrom(opts);
+  checkPost(body, photo);
   if (!bot().token) throw new Error('the bot has no token');
   if (broadcast.running) throw new Error('a broadcast is already going out');
 
@@ -2412,13 +2460,7 @@ async function startBroadcast(text, which, opts) {
     for (const id of ids) {
       if (!broadcast.running) break;
       try {
-        await call('sendMessage', {
-          chat_id: id,
-          text: body,
-          parse_mode: 'HTML',
-          disable_web_page_preview: true,
-          reply_markup: keyboard ? { inline_keyboard: styled(keyboard) } : undefined
-        });
+        await sendPost(id, body, keyboard, photo);
         broadcast.sent += 1;
         runtime.sent += 1;
       } catch (err) {
@@ -2436,13 +2478,7 @@ async function startBroadcast(text, which, opts) {
              * broadcast was going too fast for got the message without the
              * button under it - which on a sale post is the whole message.
              */
-            await call('sendMessage', {
-              chat_id: id,
-              text: body,
-              parse_mode: 'HTML',
-              disable_web_page_preview: true,
-              reply_markup: keyboard ? { inline_keyboard: styled(keyboard) } : undefined
-            });
+            await sendPost(id, body, keyboard, photo);
             broadcast.sent += 1;
             continue;
           } catch (second) { err.message = second.message; }

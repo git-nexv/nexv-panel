@@ -7713,6 +7713,46 @@ async function renderBot(view) {
     .map((k) => ({ text: String(k.text || '').trim(), url: String(k.url || '').trim(), style: k.style || '', row: !!k.row }))
     .filter((k) => k.text && k.url);
 
+  /* an optional picture: the text becomes its caption */
+  let msgPhoto = null;
+  const photoInput = el('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', class: 'hidden' });
+  const photoPreview = el('div', { class: 'hint' });
+  const photoBox = el('div', {}, [
+    photoInput,
+    el('div', { class: 'row', style: 'gap:8px;align-items:center;flex-wrap:wrap' }, [
+      el('button', { class: 'btn', type: 'button', text: '🖼 Add a picture', onclick: () => photoInput.click() }),
+      photoPreview
+    ])
+  ]);
+  const drawPhoto = () => {
+    photoPreview.innerHTML = '';
+    if (!msgPhoto) return;
+    photoPreview.append(
+      el('img', { src: msgPhoto.url, style: 'max-height:90px;max-width:160px;border-radius:8px;vertical-align:middle' }),
+      el('span', { text: ` ${msgPhoto.name} ` }),
+      el('button', { class: 'btn', type: 'button', text: 'Remove', onclick: () => { msgPhoto = null; photoInput.value = ''; drawPhoto(); } })
+    );
+  };
+  photoInput.addEventListener('change', () => {
+    const file = photoInput.files && photoInput.files[0];
+    if (!file) return;
+    if (!/^image\/(jpeg|png|webp)$/.test(file.type)) { photoInput.value = ''; return toast(t('The picture must be JPG, PNG or WebP'), 'err'); }
+    if (file.size > 5 * 1024 * 1024) { photoInput.value = ''; return toast(t('The picture is over 5 MB'), 'err'); }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result || '');
+      msgPhoto = { url, name: file.name, type: file.type, data: url.split(',')[1] || '' };
+      drawPhoto();
+    };
+    reader.readAsDataURL(file);
+  });
+  const photoPayload = () => (msgPhoto ? { type: msgPhoto.type, data: msgPhoto.data } : undefined);
+  const textCheck = (text) => {
+    if (!text && !msgPhoto) { toast(t('Write the message or add a picture first'), 'err'); return false; }
+    if (msgPhoto && text.length > 1024) { toast(t('With a picture the text can be at most 1024 characters'), 'err'); return false; }
+    return true;
+  };
+
   const msgState = el('div', { class: 'hint', style: 'margin-top:10px' });
   const sendBtn = el('button', { class: 'btn primary', text: 'Send in the bot' });
   const channelBtn = el('button', { class: 'btn', text: 'Send to the channel' });
@@ -7759,7 +7799,7 @@ async function renderBot(view) {
 
   sendBtn.onclick = () => {
     const text = msgText.value.trim();
-    if (!text) return toast(t('Write the message first'), 'err');
+    if (!textCheck(text)) return;
     const count = audience[picked] || 0;
     if (!count) return toast(t('There is nobody in that group yet'), 'err');
     return confirmDialog(
@@ -7767,7 +7807,7 @@ async function renderBot(view) {
       async () => {
         try {
           const keys = keysPayload();
-          paintBroadcast(await api.post('/bot/broadcast', { text, audience: picked, buttons: keys }));
+          paintBroadcast(await api.post('/bot/broadcast', { text, audience: picked, buttons: keys, photo: photoPayload() }));
           /* the server has just written these down; keep the suggestion in
              step so it offers these rather than the set before them */
           if (keys.length) lastKeys.splice(0, lastKeys.length, ...keys);
@@ -7800,14 +7840,14 @@ async function renderBot(view) {
     : t('Set the channel on the Channel tab first');
   channelBtn.onclick = () => {
     const text = msgText.value.trim();
-    if (!text) return toast(t('Write the message first'), 'err');
+    if (!textCheck(text)) return;
     return confirmDialog(
       `${t('This posts once in')} ${channelId}. ${t('Everybody in the channel sees it.')}`,
       async () => {
         channelBtn.disabled = true;
         try {
           const keys = keysPayload();
-          const out = await api.post('/bot/channel-post', { text, buttons: keys });
+          const out = await api.post('/bot/channel-post', { text, buttons: keys, photo: photoPayload() });
           if (keys.length) lastKeys.splice(0, lastKeys.length, ...keys);
           msgState.className = 'notice ok';
           msgState.textContent = `${t('Posted in')} ${out.channel} `;
@@ -7829,6 +7869,10 @@ async function renderBot(view) {
   formField(msgGrid, 'Message', msgText, {
     full: true,
     hint: 'Plain text, or simple HTML: <b>bold</b>, <i>italic</i>, <a href="…">link</a>.'
+  });
+  formField(msgGrid, 'Picture (optional)', photoBox, {
+    full: true,
+    hint: 'JPG, PNG or WebP, up to 5 MB. The message above becomes its caption (at most 1024 characters).'
   });
 
   const whoBox = el('div');

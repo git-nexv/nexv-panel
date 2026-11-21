@@ -974,7 +974,7 @@ router.post('/bot/broadcast', async (req, res) => {
   const body = req.body || {};
   try {
     const out = await telegram.startBroadcast(body.text, body.audience, {
-      buttons: body.buttons, button: body.button
+      buttons: body.buttons, button: body.button, photo: body.photo
     });
     logEvent('bot', `broadcast started to ${out.audience} (${out.total} people)`);
     res.json(out);
@@ -998,7 +998,7 @@ router.post('/bot/broadcast', async (req, res) => {
 router.post('/bot/channel-post', async (req, res) => {
   const body = req.body || {};
   try {
-    const out = await telegram.postToChannel(body.text, { buttons: body.buttons });
+    const out = await telegram.postToChannel(body.text, { buttons: body.buttons, photo: body.photo });
     logEvent('bot', `posted a message in ${out.channel}`);
     res.json(out);
   } catch (err) {
